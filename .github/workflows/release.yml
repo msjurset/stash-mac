@@ -35,7 +35,9 @@ jobs:
       - name: Create GitHub release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "$GITHUB_REF_NAME" dist/* --generate-notes
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* --generate-notes 2>/dev/null \
+            || gh release upload "$GITHUB_REF_NAME" dist/* --clobber
 
       - name: Update Homebrew cask
         env:
