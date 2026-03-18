@@ -1,0 +1,6 @@
+This project uses only the Swift standard library and Apple system frameworks
+(SwiftUI, Foundation, AppKit, UniformTypeIdentifiers). No third-party
+dependencies are included.
+
+Swift is distributed under the Apache License v2.0 with Runtime Library
+Exception. See https://swift.org/LICENSE.txt for details.

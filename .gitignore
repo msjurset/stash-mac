@@ -1,0 +1,11 @@
+.build/
+*.app
+AppIcon.icns
+AppIcon.iconset/
+.DS_Store
+*.xcodeproj
+xcuserdata/
+.swiftpm/
+CLAUDE.md
+.claude/
+test.txt
