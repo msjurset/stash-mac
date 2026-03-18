@@ -9,7 +9,7 @@ Native macOS app for storing, organizing, and retrieving links, files, snippets,
 - **Quick Search** — Press ⌘K for an instant search overlay with real-time results and keyboard navigation
 - **Add Items** — Tabbed sheet for adding URLs, files (with file picker), or text snippets with optional title, tags, note, and collection
 - **Drag and Drop** — Drop files directly onto the window to stash them
-- **Edit Items** — Modify title, notes, and tags; add or remove tags with visual feedback; update collection assignment
+- **Edit Items** — Modify title, notes, extracted text, and tags; add or remove tags with visual feedback; update collection assignment
 - **Tag Management** — View all tags in the sidebar; right-click to rename
 - **Collections** — Create, browse, and delete collections for grouping related items
 - **Type Filtering** — Filter the item list by type, tag, or collection from the sidebar or during search
@@ -55,7 +55,8 @@ The Mac app is a **frontend** — it does not reimplement the stash storage engi
 - `stash list --json` for browsing with type/tag/collection filters
 - `stash search --json <query>` for full-text search
 - `stash add --json` for storing URLs, files, and snippets (stdin)
-- `stash edit --json`, `stash delete --json`, `stash open` for item management
+- `stash edit --json` for updating title, notes, extracted text, tags, and collection
+- `stash delete --json`, `stash open` for item management
 - `stash tag list/rename`, `stash collection list/create/delete` for organization
 
 The shared contract between the app and CLI is:

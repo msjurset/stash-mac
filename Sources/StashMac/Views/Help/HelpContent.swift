@@ -138,7 +138,7 @@ enum HelpTopic: String, CaseIterable, Identifiable {
                 .heading("Actions"),
                 .bullet([
                     "Open — Launch the item in its default app (browser for links, Finder for files)",
-                    "Edit — Modify title, notes, tags, and collection",
+                    "Edit — Modify title, notes, extracted text, tags, and collection",
                     "Delete — Permanently remove the item (with confirmation)",
                 ]),
                 .paragraph("All text fields support selection and copying."),
@@ -166,7 +166,7 @@ enum HelpTopic: String, CaseIterable, Identifiable {
                     ["stash search", "Full-text search"],
                     ["stash show", "Get item details by ID"],
                     ["stash add", "Store URLs, files, or snippets"],
-                    ["stash edit", "Modify item metadata"],
+                    ["stash edit", "Modify item metadata and extracted text"],
                     ["stash delete", "Remove an item"],
                     ["stash open", "Open item in default app"],
                     ["stash tag list/rename", "Manage tags"],

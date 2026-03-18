@@ -7,6 +7,7 @@ struct EditItemSheet: View {
     let item: StashItem
     @State private var title: String
     @State private var note: String
+    @State private var extractedText: String
     @State private var newTag = ""
     @State private var tagsToAdd: [String] = []
     @State private var tagsToRemove: [String] = []
@@ -16,6 +17,7 @@ struct EditItemSheet: View {
         self.item = item
         _title = State(initialValue: item.title)
         _note = State(initialValue: item.notes ?? "")
+        _extractedText = State(initialValue: item.extractedText ?? "")
         _collection = State(initialValue: item.collectionNames.first ?? "")
     }
 
@@ -35,6 +37,14 @@ struct EditItemSheet: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 StashTextEditor(text: $note)
+                    .frame(minHeight: 60)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Extracted Text")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                StashTextEditor(text: $extractedText)
                     .frame(minHeight: 60)
             }
 
@@ -100,7 +110,7 @@ struct EditItemSheet: View {
             }
         }
         .padding()
-        .frame(width: 480, height: 450)
+        .frame(width: 480, height: 550)
     }
 
     private func addTag() {
@@ -113,9 +123,10 @@ struct EditItemSheet: View {
     private func save() {
         let t = title != item.title ? title : nil
         let n = note != (item.notes ?? "") ? note : nil
+        let e = extractedText != (item.extractedText ?? "") ? extractedText : nil
         let c = collection.isEmpty ? nil : collection
 
-        store.editItem(id: item.id, title: t, note: n, addTags: tagsToAdd, removeTags: tagsToRemove, collection: c)
+        store.editItem(id: item.id, title: t, note: n, extractedText: e, addTags: tagsToAdd, removeTags: tagsToRemove, collection: c)
         dismiss()
     }
 }

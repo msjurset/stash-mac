@@ -103,6 +103,7 @@ actor StashCLI {
         id: String,
         title: String? = nil,
         note: String? = nil,
+        extractedText: String? = nil,
         addTags: [String] = [],
         removeTags: [String] = [],
         collection: String? = nil
@@ -110,6 +111,7 @@ actor StashCLI {
         var args = ["edit", "--json", id]
         if let title { args += ["-t", title] }
         if let note { args += ["-n", note] }
+        if let extractedText { args += ["-e", extractedText] }
         for tag in addTags { args += ["--add-tag", tag] }
         for tag in removeTags { args += ["--remove-tag", tag] }
         if let collection { args += ["-c", collection] }

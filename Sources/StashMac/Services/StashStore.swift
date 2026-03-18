@@ -101,10 +101,10 @@ final class StashStore {
         }
     }
 
-    func editItem(id: String, title: String?, note: String?, addTags: [String], removeTags: [String], collection: String?) {
+    func editItem(id: String, title: String?, note: String?, extractedText: String? = nil, addTags: [String], removeTags: [String], collection: String?) {
         Task {
             do {
-                _ = try await cli.editItem(id: id, title: title, note: note, addTags: addTags, removeTags: removeTags, collection: collection)
+                _ = try await cli.editItem(id: id, title: title, note: note, extractedText: extractedText, addTags: addTags, removeTags: removeTags, collection: collection)
                 loadAll()
             } catch {
                 self.error = error.localizedDescription
