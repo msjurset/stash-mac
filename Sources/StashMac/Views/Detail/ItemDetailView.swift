@@ -5,6 +5,7 @@ struct ItemDetailView: View {
     let item: StashItem
     @Binding var showEditSheet: Bool
     @State private var showDeleteConfirm = false
+    @State private var showLinkSheet = false
 
     var body: some View {
         ScrollView {
@@ -28,12 +29,30 @@ struct ItemDetailView: View {
 
                 Divider()
 
+                // Image preview
+                if item.type == .image, let storePath = item.storePath,
+                   let fileURL = FilePathResolver.resolve(storePath: storePath),
+                   let nsImage = NSImage(contentsOf: fileURL) {
+                    DetailSection(title: "Preview") {
+                        Image(nsImage: nsImage)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(maxWidth: 500, maxHeight: 400)
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                    }
+                }
+
                 // URL
-                if let url = item.url, !url.isEmpty {
+                if let urlString = item.url, !urlString.isEmpty {
                     DetailSection(title: "URL") {
-                        Text(url)
-                            .foregroundStyle(.blue)
-                            .textSelection(.enabled)
+                        if let url = URL(string: urlString) {
+                            Link(urlString, destination: url)
+                                .font(.body)
+                        } else {
+                            Text(urlString)
+                                .foregroundStyle(.blue)
+                                .textSelection(.enabled)
+                        }
                     }
                 }
 
@@ -50,13 +69,25 @@ struct ItemDetailView: View {
                     DetailSection(title: "Tags") {
                         FlowLayout(spacing: 6) {
                             ForEach(tags) { tag in
-                                Text("#\(tag.name)")
-                                    .kerning(0.5)
-                                    .font(.callout)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 3)
-                                    .background(.quaternary)
-                                    .clipShape(Capsule())
+                                Button {
+                                    store.filterByTag(tag.name)
+                                } label: {
+                                    Text("#\(tag.name)")
+                                        .kerning(0.5)
+                                        .font(.callout)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 3)
+                                        .background(.quaternary)
+                                        .clipShape(Capsule())
+                                }
+                                .buttonStyle(.plain)
+                                .onHover { hovering in
+                                    if hovering {
+                                        NSCursor.pointingHand.push()
+                                    } else {
+                                        NSCursor.pop()
+                                    }
+                                }
                             }
                         }
                     }
@@ -69,6 +100,41 @@ struct ItemDetailView: View {
                             ForEach(cols) { col in
                                 Label(col.name, systemImage: "folder")
                                     .font(.callout)
+                            }
+                        }
+                    }
+                }
+
+                // Linked Items
+                if let links = item.links, !links.isEmpty {
+                    DetailSection(title: "Linked Items") {
+                        ForEach(links) { link in
+                            HStack {
+                                Text(link.directionArrow)
+                                    .font(.body.monospaced())
+                                    .foregroundStyle(.secondary)
+                                Image(systemName: link.type.icon)
+                                    .foregroundStyle(.secondary)
+                                Button {
+                                    store.selectedItemID = link.itemId
+                                } label: {
+                                    Text(link.title)
+                                        .foregroundStyle(.primary)
+                                }
+                                .buttonStyle(.plain)
+                                if let label = link.label, !label.isEmpty {
+                                    Text("(\(label))")
+                                        .font(.callout)
+                                        .foregroundStyle(.tertiary)
+                                }
+                                Spacer()
+                                Button {
+                                    store.unlinkItems(idA: item.id, idB: link.itemId)
+                                } label: {
+                                    Image(systemName: "xmark.circle")
+                                        .foregroundStyle(.secondary)
+                                }
+                                .buttonStyle(.plain)
                             }
                         }
                     }
@@ -92,8 +158,16 @@ struct ItemDetailView: View {
                     }
                 }
 
-                // Extracted text
-                if let text = item.extractedText, !text.isEmpty {
+                // Archive contents
+                if let mime = item.mimeType, isArchiveMIME(mime),
+                   let storePath = item.storePath,
+                   let fileURL = FilePathResolver.resolve(storePath: storePath) {
+                    ArchiveContentsView(fileURL: fileURL, mimeType: mime)
+                }
+
+                // Extracted text (skip for archives — tree view is shown instead)
+                if let text = item.extractedText, !text.isEmpty,
+                   !(item.mimeType.map(isArchiveMIME) ?? false) {
                     ExtractedTextView(text: text)
                 }
 
@@ -108,16 +182,32 @@ struct ItemDetailView: View {
         .toolbar {
             ToolbarItemGroup {
                 ContextualHelpButton(topic: .itemDetail)
+                Button { showLinkSheet = true } label: {
+                    Label("Link...", systemImage: "link")
+                }
+                .keyboardShortcut("l", modifiers: .command)
+                .help("Link to another item")
                 Button { store.openItem(id: item.id) } label: {
                     Label("Open", systemImage: "arrow.up.forward.square")
                 }
+                .help("Open in default application")
                 Button { showEditSheet = true } label: {
                     Label("Edit", systemImage: "pencil")
                 }
+                .help("Edit item")
                 Button { showDeleteConfirm = true } label: {
                     Label("Delete", systemImage: "trash")
                 }
+                .help("Delete item")
             }
+        }
+        .sheet(isPresented: $showLinkSheet) {
+            LinkItemSheet(sourceItemID: item.id)
+        }
+        .dropDestination(for: String.self) { items, _ in
+            guard let droppedID = items.first, droppedID != item.id else { return false }
+            store.linkItems(from: item.id, to: droppedID)
+            return true
         }
         .confirmationDialog("Delete \"\(item.title)\"?", isPresented: $showDeleteConfirm) {
             Button("Delete", role: .destructive) {
@@ -127,6 +217,10 @@ struct ItemDetailView: View {
             Text("This action cannot be undone.")
         }
     }
+}
+
+func isArchiveMIME(_ mimeType: String) -> Bool {
+    mimeType.contains("gzip") || mimeType.contains("tar") || mimeType.contains("zip")
 }
 
 struct DetailSection<Content: View>: View {

@@ -126,6 +126,19 @@ actor StashCLI {
         _ = try await captureOutput(args: ["open", id])
     }
 
+    // MARK: - Links
+
+    func linkItems(from: String, to: String, label: String? = nil, directed: Bool = false) async throws {
+        var args = ["link", "--json", from, to]
+        if let label, !label.isEmpty { args += ["-l", label] }
+        if directed { args += ["--directed"] }
+        _ = try await captureOutput(args: args)
+    }
+
+    func unlinkItems(idA: String, idB: String) async throws {
+        _ = try await captureOutput(args: ["unlink", "--json", idA, idB])
+    }
+
     // MARK: - Tags
 
     func listTags() async throws -> [StashTag] {

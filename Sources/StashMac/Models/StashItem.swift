@@ -16,6 +16,7 @@ struct StashItem: Codable, Identifiable, Hashable {
     var updatedAt: Date
     var tags: [StashTag]?
     var collections: [StashCollection]?
+    var links: [StashLink]?
 
     var tagNames: [String] {
         tags?.map(\.name) ?? []

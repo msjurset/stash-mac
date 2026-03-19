@@ -25,7 +25,7 @@ import Testing
 
     let item = try decoder.decode(StashItem.self, from: Data(json.utf8))
     #expect(item.id == "01HQ3XYZABC123456789")
-    #expect(item.type == .link)
+    #expect(item.type == .url)
     #expect(item.title == "Example Page")
     #expect(item.url == "https://example.com")
     #expect(item.notes == "A test note")
@@ -76,11 +76,11 @@ import Testing
 }
 
 @Test func testItemTypeProperties() {
-    #expect(ItemType.link.icon == "link")
+    #expect(ItemType.url.icon == "globe")
     #expect(ItemType.snippet.icon == "doc.text")
     #expect(ItemType.file.icon == "doc")
     #expect(ItemType.image.icon == "photo")
-    #expect(ItemType.link.label == "Links")
+    #expect(ItemType.url.label == "URLs")
 }
 
 @Test func testHumanFileSize() throws {

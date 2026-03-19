@@ -81,7 +81,7 @@ enum HelpTopic: String, CaseIterable, Identifiable {
             return [
                 .paragraph("Every stashed item has a type that determines its icon and behavior."),
                 .table(headers: ["Type", "Icon", "Description"], rows: [
-                    ["Link", "🔗", "Web URLs — title and text are extracted from the page"],
+                    ["URL", "🌐", "Web URLs — title and text are extracted from the page"],
                     ["Snippet", "📄", "Text content stored inline"],
                     ["File", "📁", "Any file — copied into the stash store"],
                     ["Image", "🖼️", "Image files with preview support"],
@@ -118,7 +118,7 @@ enum HelpTopic: String, CaseIterable, Identifiable {
                 .heading("List Filter"),
                 .paragraph("The search field at the top of the item list filters items within the current sidebar selection. Press Return to search, or clear the field to show all items."),
                 .heading("Combining Filters"),
-                .paragraph("Select a type, tag, or collection in the sidebar first, then use the list search to narrow further. For example, select Links in the sidebar, then search for \"api\" to find only link items matching that term."),
+                .paragraph("Select a type, tag, or collection in the sidebar first, then use the list search to narrow further. For example, select URLs in the sidebar, then search for \"api\" to find only URL items matching that term."),
             ]
 
         case .itemDetail:
@@ -127,11 +127,12 @@ enum HelpTopic: String, CaseIterable, Identifiable {
                 .heading("Sections"),
                 .table(headers: ["Section", "Description"], rows: [
                     ["Header", "Type icon, title, and short ID"],
-                    ["URL", "Clickable link (for link items)"],
+                    ["URL", "Clickable link (for URL items)"],
                     ["Notes", "Your annotation text"],
                     ["Tags", "Tag capsules with # prefix"],
                     ["Collections", "Folder labels for assigned collections"],
                     ["File Info", "MIME type, file size, and source path"],
+                    ["Archive Contents", "Interactive tree view of tar.gz and zip archive contents"],
                     ["Extracted Text", "Content extracted from links/files (collapsible)"],
                     ["Dates", "Created and last updated timestamps"],
                 ]),

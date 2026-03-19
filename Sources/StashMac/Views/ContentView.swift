@@ -3,7 +3,6 @@ import UniformTypeIdentifiers
 
 struct ContentView: View {
     @Environment(StashStore.self) private var store
-    @State private var selection: NavigationItem? = .allItems
     @State private var showAddSheet = false
     @State private var showAddCollectionSheet = false
     @State private var showEditSheet = false
@@ -11,9 +10,10 @@ struct ContentView: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
     var body: some View {
+        @Bindable var store = store
         NavigationSplitView(columnVisibility: $columnVisibility) {
             SidebarView(
-                selection: $selection,
+                selection: $store.navigation,
                 showAddCollectionSheet: $showAddCollectionSheet
             )
         } content: {
@@ -24,10 +24,8 @@ struct ContentView: View {
         .onAppear {
             store.loadAll()
         }
-        .onChange(of: selection) { _, newValue in
-            if let nav = newValue {
-                store.applyNavigation(nav)
-            }
+        .onChange(of: store.navigation) { _, newValue in
+            store.handleNavigationChange(newValue ?? .allItems)
         }
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             handleDrop(providers)
@@ -55,6 +53,7 @@ struct ContentView: View {
                     Label("Add Item", systemImage: "plus")
                 }
                 .keyboardShortcut("n")
+                .help("Add new item (⌘N)")
             }
         }
         .keyboardShortcut("k", modifiers: .command) {

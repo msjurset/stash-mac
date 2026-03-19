@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum ItemType: String, Codable, CaseIterable, Identifiable {
-    case link
+    case url = "link" // stored as "link" in DB; displayed as "URL"
     case snippet
     case file
     case image
@@ -11,7 +11,7 @@ enum ItemType: String, Codable, CaseIterable, Identifiable {
 
     var label: String {
         switch self {
-        case .link: "Links"
+        case .url: "URLs"
         case .snippet: "Snippets"
         case .file: "Files"
         case .image: "Images"
@@ -21,7 +21,7 @@ enum ItemType: String, Codable, CaseIterable, Identifiable {
 
     var icon: String {
         switch self {
-        case .link: "link"
+        case .url: "globe"
         case .snippet: "doc.text"
         case .file: "doc"
         case .image: "photo"

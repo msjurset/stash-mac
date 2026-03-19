@@ -6,17 +6,21 @@ final class StashStore {
     var items: [StashItem] = []
     var tags: [StashTag] = []
     var collections: [StashCollection] = []
+    var tagCounts: [String: Int] = [:]
 
     var searchQuery = ""
     var filterType: ItemType?
     var filterTag: String?
     var filterCollection: String?
 
+    var navigation: NavigationItem? = .allItems
     var selectedItemID: String?
     var isLoading = false
     var error: String?
 
     private let cli = StashCLI.shared
+    private var searchTask: Task<Void, Never>?
+    private var suppressNavigationChange = false
 
     var selectedItem: StashItem? {
         guard let id = selectedItemID else { return nil }
@@ -34,10 +38,20 @@ final class StashStore {
                 items = try await fetchedItems
                 tags = try await fetchedTags
                 collections = try await fetchedCollections
+                recomputeTagCounts()
             } catch {
                 self.error = error.localizedDescription
             }
             isLoading = false
+        }
+    }
+
+    func debouncedRefresh() {
+        searchTask?.cancel()
+        searchTask = Task {
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else { return }
+            refresh()
         }
     }
 
@@ -136,6 +150,28 @@ final class StashStore {
         }
     }
 
+    func linkItems(from: String, to: String, label: String? = nil, directed: Bool = false) {
+        Task {
+            do {
+                try await cli.linkItems(from: from, to: to, label: label, directed: directed)
+                loadAll()
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
+    }
+
+    func unlinkItems(idA: String, idB: String) {
+        Task {
+            do {
+                try await cli.unlinkItems(idA: idA, idB: idB)
+                loadAll()
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
+    }
+
     func renameTag(old: String, new: String) {
         Task {
             do {
@@ -169,10 +205,41 @@ final class StashStore {
         }
     }
 
+    func filterByTag(_ name: String) {
+        // Toggle: if already filtering by this tag, clear back to all items
+        if filterTag == name {
+            applyNavigation(.allItems)
+            return
+        }
+        // Use the exact StashTag from the tags array for sidebar highlight match;
+        // fall back to a synthetic tag so filtering always works
+        let tag = tags.first(where: { $0.name == name }) ?? StashTag(id: 0, name: name)
+        applyNavigation(.tag(tag))
+    }
+
+    func handleNavigationChange(_ item: NavigationItem) {
+        guard !suppressNavigationChange else { return }
+        applyNavigation(item)
+    }
+
+    private func recomputeTagCounts() {
+        var counts: [String: Int] = [:]
+        for item in items {
+            for tag in item.tags ?? [] {
+                counts[tag.name, default: 0] += 1
+            }
+        }
+        tagCounts = counts
+    }
+
     func applyNavigation(_ item: NavigationItem) {
+        suppressNavigationChange = true
+        defer { suppressNavigationChange = false }
+        navigation = item
         filterType = nil
         filterTag = nil
         filterCollection = nil
+        searchQuery = ""
 
         switch item {
         case .allItems:

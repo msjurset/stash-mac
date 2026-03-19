@@ -5,7 +5,7 @@ Native macOS app for storing, organizing, and retrieving links, files, snippets,
 ## Features
 
 - **Browse Items** — Sidebar navigation with filters for all items, by type (links, snippets, files, images, emails), by tag, or by collection
-- **Item Detail** — View title, URL, notes, tags, collections, file metadata, and extracted text at a glance
+- **Item Detail** — View title, URL, notes, tags, collections, file metadata, archive contents tree, and extracted text at a glance
 - **Quick Search** — Press ⌘K for an instant search overlay with real-time results and keyboard navigation
 - **Add Items** — Tabbed sheet for adding URLs, files (with file picker), or text snippets with optional title, tags, note, and collection
 - **Drag and Drop** — Drop files directly onto the window to stash them
@@ -74,7 +74,7 @@ Sources/StashMac/
   Views/
     Sidebar/        Navigation sidebar with type/tag/collection filters
     List/           Item list with search, context menus, loading states
-    Detail/         Item detail view with metadata and extracted text
+    Detail/         Item detail view with metadata, archive tree, and extracted text
     Sheets/         Add item, edit item, add collection sheets
     Search/         Quick search overlay (⌘K)
     Help/           Help system with structured content

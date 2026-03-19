@@ -32,56 +32,61 @@ struct AddItemSheet: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Picker("Type", selection: $selectedTab) {
-                ForEach(Tab.allCases, id: \.self) { tab in
-                    Text(tab.rawValue).tag(tab)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
+        VStack(alignment: .leading, spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Picker("Type", selection: $selectedTab) {
+                        ForEach(Tab.allCases, id: \.self) { tab in
+                            Text(tab.rawValue).tag(tab)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
 
-            switch selectedTab {
-            case .url:
-                StashField("URL", text: $urlString, prompt: "https://example.com")
-            case .file:
-                HStack {
-                    StashField("File Path", text: $filePath)
-                    Button("Browse...") { browseFile() }
-                        .padding(.top, 18)
+                    switch selectedTab {
+                    case .url:
+                        StashField("URL", text: $urlString, prompt: "https://example.com")
+                    case .file:
+                        HStack {
+                            StashField("File Path", text: $filePath)
+                            Button("Browse...") { browseFile() }
+                                .padding(.top, 18)
+                        }
+                    case .snippet:
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Snippet")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            StashTextEditor(text: $snippetText)
+                                .frame(minHeight: 80)
+                        }
+                    }
+
+                    Divider()
+
+                    StashField("Title", text: $title, prompt: "Optional")
+                    StashField("Tags", text: $tagsString, prompt: "Comma-separated")
+                    StashField("Note", text: $note, prompt: "Optional")
+
+                    HStack {
+                        Text("Collection")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Picker("", selection: $collection) {
+                            Text("None").tag("")
+                            ForEach(store.collections) { col in
+                                Text(col.name).tag(col.name)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(maxWidth: 200)
+                    }
                 }
-            case .snippet:
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Snippet")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    StashTextEditor(text: $snippetText)
-                        .frame(minHeight: 80)
-                }
+                .padding()
             }
 
             Divider()
-
-            StashField("Title", text: $title, prompt: "Optional")
-            StashField("Tags", text: $tagsString, prompt: "Comma-separated")
-            StashField("Note", text: $note, prompt: "Optional")
-
-            HStack {
-                Text("Collection")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Picker("", selection: $collection) {
-                    Text("None").tag("")
-                    ForEach(store.collections) { col in
-                        Text(col.name).tag(col.name)
-                    }
-                }
-                .labelsHidden()
-                .frame(maxWidth: 200)
-            }
-
-            Spacer()
 
             HStack {
                 Button("Cancel") { dismiss() }
@@ -92,9 +97,10 @@ struct AddItemSheet: View {
                     .keyboardShortcut(.defaultAction)
                     .disabled(!canSubmit)
             }
+            .padding()
         }
-        .padding()
-        .frame(width: 480, height: 420)
+        .frame(width: 480)
+        .frame(minHeight: 400, maxHeight: 520)
     }
 
     private func submit() {

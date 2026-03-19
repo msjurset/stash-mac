@@ -8,54 +8,70 @@ struct SidebarView: View {
     @State private var newTagName = ""
 
     var body: some View {
-        List(selection: $selection) {
-            Section("Library") {
-                Label("All Items", systemImage: "tray.full")
-                    .tag(NavigationItem.allItems)
-                ForEach(ItemType.allCases) { type in
-                    Label(type.label, systemImage: type.icon)
-                        .tag(NavigationItem.type(type))
+        ScrollViewReader { proxy in
+            List(selection: $selection) {
+                Section("Library") {
+                    Label("All Items", systemImage: "tray.full")
+                        .tag(NavigationItem.allItems)
+                    ForEach(ItemType.allCases) { type in
+                        Label(type.label, systemImage: type.icon)
+                            .tag(NavigationItem.type(type))
+                    }
                 }
-            }
 
-            Section("Tags") {
-                ForEach(store.tags) { tag in
-                    Label(tag.name, systemImage: "tag")
+                Section("Tags") {
+                    ForEach(store.tags) { tag in
+                        HStack {
+                            Label(tag.name, systemImage: "tag")
+                            Spacer()
+                            Text("\(tagCount(tag.name))")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        }
                         .tag(NavigationItem.tag(tag))
+                        .id(tag.name)
                         .contextMenu {
                             Button("Rename...") {
                                 renamingTag = tag
                                 newTagName = tag.name
                             }
                         }
+                    }
+                    if store.tags.isEmpty {
+                        Text("No tags yet")
+                            .foregroundStyle(.secondary)
+                    }
                 }
-                if store.tags.isEmpty {
-                    Text("No tags yet")
-                        .foregroundStyle(.secondary)
+
+                Section("Collections") {
+                    ForEach(store.collections) { col in
+                        Label(col.name, systemImage: "folder")
+                            .tag(NavigationItem.collection(col))
+                            .contextMenu {
+                                Button("Delete", role: .destructive) {
+                                    store.deleteCollection(name: col.name)
+                                }
+                            }
+                    }
+                    Button {
+                        showAddCollectionSheet = true
+                    } label: {
+                        Label("New Collection", systemImage: "plus")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
                 }
             }
-
-            Section("Collections") {
-                ForEach(store.collections) { col in
-                    Label(col.name, systemImage: "folder")
-                        .tag(NavigationItem.collection(col))
-                        .contextMenu {
-                            Button("Delete", role: .destructive) {
-                                store.deleteCollection(name: col.name)
-                            }
-                        }
+            .listStyle(.sidebar)
+            .navigationTitle("Stash")
+            .onChange(of: store.filterTag) { _, tagName in
+                if let tagName {
+                    withAnimation {
+                        proxy.scrollTo(tagName, anchor: .center)
+                    }
                 }
-                Button {
-                    showAddCollectionSheet = true
-                } label: {
-                    Label("New Collection", systemImage: "plus")
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
             }
         }
-        .listStyle(.sidebar)
-        .navigationTitle("Stash")
         .alert("Rename Tag", isPresented: .init(
             get: { renamingTag != nil },
             set: { if !$0 { renamingTag = nil } }
@@ -71,5 +87,9 @@ struct SidebarView: View {
                 renamingTag = nil
             }
         }
+    }
+
+    private func tagCount(_ name: String) -> Int {
+        store.tagCounts[name] ?? 0
     }
 }

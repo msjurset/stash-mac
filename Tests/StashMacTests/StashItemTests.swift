@@ -163,7 +163,7 @@ private func decodeItem(_ json: String) throws -> StashItem {
 }
 
 @Test func testItemTypeRawValues() {
-    #expect(ItemType.link.rawValue == "link")
+    #expect(ItemType.url.rawValue == "link")
     #expect(ItemType.snippet.rawValue == "snippet")
     #expect(ItemType.file.rawValue == "file")
     #expect(ItemType.image.rawValue == "image")

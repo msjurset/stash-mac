@@ -24,14 +24,12 @@ struct ItemListView: View {
             }
         }
         .listStyle(.inset(alternatesRowBackgrounds: true))
-        .searchable(text: $store.searchQuery, prompt: "Filter items...")
+        .searchable(text: $store.searchQuery, prompt: "Search items...")
         .onSubmit(of: .search) {
             store.refresh()
         }
-        .onChange(of: store.searchQuery) { _, query in
-            if query.isEmpty {
-                store.refresh()
-            }
+        .onChange(of: store.searchQuery) { _, _ in
+            store.debouncedRefresh()
         }
         .overlay {
             if store.items.isEmpty && !store.isLoading {
