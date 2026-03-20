@@ -48,10 +48,14 @@ struct ItemDetailView: View {
                         if let url = URL(string: urlString) {
                             Link(urlString, destination: url)
                                 .font(.body)
+                                .multilineTextAlignment(.leading)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                         } else {
                             Text(urlString)
                                 .foregroundStyle(.blue)
                                 .textSelection(.enabled)
+                                .multilineTextAlignment(.leading)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
                 }

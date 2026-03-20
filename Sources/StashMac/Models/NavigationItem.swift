@@ -5,4 +5,5 @@ enum NavigationItem: Hashable {
     case type(ItemType)
     case tag(StashTag)
     case collection(StashCollection)
+    case tagGraph
 }

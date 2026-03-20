@@ -145,6 +145,10 @@ actor StashCLI {
         try await captureJSON(args: ["tag", "list", "--json"])
     }
 
+    func tagGraph() async throws -> TagGraphData {
+        try await captureJSON(args: ["tag", "graph", "--json"])
+    }
+
     func renameTag(old: String, new: String) async throws {
         _ = try await captureOutput(args: ["tag", "rename", "--json", old, new])
     }

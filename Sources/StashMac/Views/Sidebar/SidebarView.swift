@@ -17,14 +17,18 @@ struct SidebarView: View {
                         Label(type.label, systemImage: type.icon)
                             .tag(NavigationItem.type(type))
                     }
+                    Label("Tag Graph", systemImage: "chart.dots.scatter")
+                        .tag(NavigationItem.tagGraph)
                 }
 
                 Section("Tags") {
                     ForEach(store.tags) { tag in
                         HStack {
                             Label(tag.name, systemImage: "tag")
+                                .fontWeight(isActiveGraphTag(tag.name) ? .bold : .regular)
+                                .foregroundStyle(isActiveGraphTag(tag.name) ? .orange : .primary)
                             Spacer()
-                            Text("\(tagCount(tag.name))")
+                            Text("\(tag.count ?? 0)")
                                 .font(.caption)
                                 .foregroundStyle(.tertiary)
                         }
@@ -89,7 +93,7 @@ struct SidebarView: View {
         }
     }
 
-    private func tagCount(_ name: String) -> Int {
-        store.tagCounts[name] ?? 0
+    private func isActiveGraphTag(_ name: String) -> Bool {
+        store.navigation == .tagGraph && store.filterTag == name
     }
 }

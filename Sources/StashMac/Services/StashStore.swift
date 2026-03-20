@@ -6,13 +6,13 @@ final class StashStore {
     var items: [StashItem] = []
     var tags: [StashTag] = []
     var collections: [StashCollection] = []
-    var tagCounts: [String: Int] = [:]
 
     var searchQuery = ""
     var filterType: ItemType?
     var filterTag: String?
     var filterCollection: String?
 
+    var tagGraphData: TagGraphData?
     var navigation: NavigationItem? = .allItems
     var selectedItemID: String?
     var isLoading = false
@@ -32,13 +32,10 @@ final class StashStore {
             isLoading = true
             error = nil
             do {
-                async let fetchedItems = cli.listItems(limit: 200)
-                async let fetchedTags = cli.listTags()
-                async let fetchedCollections = cli.listCollections()
-                items = try await fetchedItems
-                tags = try await fetchedTags
-                collections = try await fetchedCollections
-                recomputeTagCounts()
+                items = try await cli.listItems(limit: 100)
+                tags = try await cli.listTags()
+                collections = try await cli.listCollections()
+                tagGraphData = try await cli.tagGraph()
             } catch {
                 self.error = error.localizedDescription
             }
@@ -65,14 +62,14 @@ final class StashStore {
                         type: filterType,
                         tag: filterTag,
                         collection: filterCollection,
-                        limit: 200
+                        limit: 100
                     )
                 } else {
                     items = try await cli.searchItems(
                         query: searchQuery,
                         type: filterType,
                         tag: filterTag,
-                        limit: 200
+                        limit: 100
                     )
                 }
             } catch {
@@ -206,15 +203,30 @@ final class StashStore {
     }
 
     func filterByTag(_ name: String) {
-        // Toggle: if already filtering by this tag, clear back to all items
+        // Toggle: if already filtering by this tag, clear the filter
         if filterTag == name {
-            applyNavigation(.allItems)
+            if navigation == .tagGraph {
+                // Stay on graph, just clear the filter
+                filterTag = nil
+                searchQuery = ""
+                refresh()
+            } else {
+                applyNavigation(.allItems)
+            }
             return
         }
-        // Use the exact StashTag from the tags array for sidebar highlight match;
-        // fall back to a synthetic tag so filtering always works
-        let tag = tags.first(where: { $0.name == name }) ?? StashTag(id: 0, name: name)
-        applyNavigation(.tag(tag))
+
+        if navigation == .tagGraph {
+            // Stay on graph view, just update the filter and refresh the list
+            filterType = nil
+            filterTag = name
+            filterCollection = nil
+            searchQuery = ""
+            refresh()
+        } else {
+            let tag = tags.first(where: { $0.name == name }) ?? StashTag(id: 0, name: name)
+            applyNavigation(.tag(tag))
+        }
     }
 
     func handleNavigationChange(_ item: NavigationItem) {
@@ -222,24 +234,21 @@ final class StashStore {
         applyNavigation(item)
     }
 
-    private func recomputeTagCounts() {
-        var counts: [String: Int] = [:]
-        for item in items {
-            for tag in item.tags ?? [] {
-                counts[tag.name, default: 0] += 1
-            }
-        }
-        tagCounts = counts
-    }
-
     func applyNavigation(_ item: NavigationItem) {
         suppressNavigationChange = true
         defer { suppressNavigationChange = false }
         navigation = item
-        filterType = nil
-        filterTag = nil
-        filterCollection = nil
-        searchQuery = ""
+
+        switch item {
+        case .tagGraph:
+            // Keep current filter state — the graph view manages its own filtering
+            return
+        default:
+            filterType = nil
+            filterTag = nil
+            filterCollection = nil
+            searchQuery = ""
+        }
 
         switch item {
         case .allItems:
@@ -250,6 +259,8 @@ final class StashStore {
             filterTag = t.name
         case .collection(let c):
             filterCollection = c.name
+        case .tagGraph:
+            break
         }
         refresh()
     }

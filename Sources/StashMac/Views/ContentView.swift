@@ -17,9 +17,22 @@ struct ContentView: View {
                 showAddCollectionSheet: $showAddCollectionSheet
             )
         } content: {
-            ItemListView(showEditSheet: $showEditSheet)
+            if store.navigation == .tagGraph {
+                TagGraphView()
+            } else {
+                ItemListView(showEditSheet: $showEditSheet)
+            }
         } detail: {
-            DetailRouter(showEditSheet: $showEditSheet)
+            if store.navigation == .tagGraph {
+                VSplitView {
+                    ItemListView(showEditSheet: $showEditSheet)
+                        .frame(minHeight: 150)
+                    DetailRouter(showEditSheet: $showEditSheet)
+                        .frame(minHeight: 200)
+                }
+            } else {
+                DetailRouter(showEditSheet: $showEditSheet)
+            }
         }
         .onAppear {
             store.loadAll()
