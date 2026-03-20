@@ -14,7 +14,7 @@ enum HelpTopic: String, CaseIterable, Identifiable {
     case gettingStarted = "Getting Started"
     case addingItems = "Adding Items"
     case itemTypes = "Item Types"
-    case organizing = "Tags & Collections"
+    case organizing = "Tags, Collections & Links"
     case searching = "Searching"
     case itemDetail = "Item Detail"
     case dragAndDrop = "Drag & Drop"
@@ -92,21 +92,34 @@ enum HelpTopic: String, CaseIterable, Identifiable {
 
         case .organizing:
             return [
-                .paragraph("Tags and collections help you categorize and retrieve items."),
-                .heading("Tags"),
+                .paragraph("Stash offers three ways to organize items, each serving a different purpose."),
+                .heading("Tags — What is it about?"),
+                .paragraph("Flat labels describing the content's topic or nature. An item can have many tags. Use tags for filtering, searching, and cross-cutting categories. Tags answer \"show me everything about X.\""),
                 .bullet([
                     "Add tags when creating or editing an item (comma-separated)",
                     "Browse all tags in the sidebar Tags section",
+                    "Click a tag in the item detail view to filter by it",
                     "Right-click a tag in the sidebar to rename it",
                     "Tags are shared across all items — renaming updates every item with that tag",
                 ]),
-                .heading("Collections"),
+                .heading("Collections — Where does it belong?"),
+                .paragraph("Named groups, like folders or projects. An item belongs to one collection (or none). Use collections for grouping items by purpose, project, or workflow. Collections answer \"show me everything for project Y.\""),
                 .bullet([
-                    "Collections group related items together (e.g., \"Project Alpha\", \"Research\")",
+                    "Collections group related items together (e.g., \"Job Search\", \"Home Renovation\")",
                     "Create a collection from the sidebar or when adding/editing an item",
                     "Each item can belong to one collection",
                     "Right-click a collection in the sidebar to delete it",
                 ]),
+                .heading("Links — How does it relate to other items?"),
+                .paragraph("Direct relationships between specific items. Bidirectional or directed, with optional labels. Use links for connecting a source to its reference, or grouping related items that aren't topically similar. Links answer \"what's connected to this specific item?\""),
+                .bullet([
+                    "Link items from the detail view toolbar (link icon or ⌘L)",
+                    "Search for the target item by name, then add an optional label",
+                    "Linked items appear in the detail view with directional arrows",
+                    "Example: link a PDF resume to the job posting URL it was submitted for",
+                ]),
+                .heading("Tag Graph — How do topics cluster?"),
+                .paragraph("The Tag Graph (in the Library section of the sidebar) reveals how your topics overlap. Tags that frequently co-occur on the same items form strong connections. Click a node to filter items by that tag. The graph helps you discover relationships between topics you might not have noticed."),
                 .heading("Managing Tags on an Item"),
                 .paragraph("Open the Edit sheet (pencil icon or context menu) to add or remove individual tags. Existing tags are shown as removable capsules, and you can type new ones in the text field."),
             ]
