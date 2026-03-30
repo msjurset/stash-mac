@@ -6,6 +6,7 @@ struct ItemDetailView: View {
     @Binding var showEditSheet: Bool
     @State private var showDeleteConfirm = false
     @State private var showLinkSheet = false
+    @State private var isFetchingContent = false
 
     var body: some View {
         ScrollView {
@@ -45,18 +46,24 @@ struct ItemDetailView: View {
                 // URL
                 if let urlString = item.url, !urlString.isEmpty {
                     DetailSection(title: "URL") {
-                        if let url = URL(string: urlString) {
-                            Link(urlString, destination: url)
-                                .font(.body)
-                                .multilineTextAlignment(.leading)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        } else {
-                            Text(urlString)
-                                .foregroundStyle(.blue)
-                                .textSelection(.enabled)
-                                .multilineTextAlignment(.leading)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
+                        Text(urlString)
+                            .foregroundStyle(.blue)
+                            .textSelection(.enabled)
+                            .font(.body.monospaced())
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .onTapGesture {
+                                if let url = URL(string: urlString) {
+                                    NSWorkspace.shared.open(url)
+                                }
+                            }
+                            .onHover { hovering in
+                                if hovering {
+                                    NSCursor.pointingHand.push()
+                                } else {
+                                    NSCursor.pop()
+                                }
+                            }
                     }
                 }
 
@@ -172,7 +179,48 @@ struct ItemDetailView: View {
                 // Extracted text (skip for archives — tree view is shown instead)
                 if let text = item.extractedText, !text.isEmpty,
                    !(item.mimeType.map(isArchiveMIME) ?? false) {
-                    ExtractedTextView(text: text)
+                    VStack(alignment: .leading, spacing: 0) {
+                        if item.type == .url {
+                            HStack {
+                                Spacer()
+                                Button {
+                                    refetchContent()
+                                } label: {
+                                    Image(systemName: "arrow.clockwise")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .buttonStyle(.plain)
+                                .help("Re-fetch page content")
+                                .disabled(isFetchingContent)
+                            }
+                        }
+                        ExtractedTextView(text: text)
+                    }
+                } else if item.type == .url {
+                    // URL with no extracted text — offer to fetch
+                    DetailSection(title: "Extracted Text") {
+                        HStack {
+                            Text("No content extracted")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Button {
+                                refetchContent()
+                            } label: {
+                                if isFetchingContent {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                } else {
+                                    Label("Fetch", systemImage: "arrow.clockwise")
+                                        .font(.caption)
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(isFetchingContent)
+                        }
+                    }
                 }
 
                 // Dates
@@ -190,19 +238,26 @@ struct ItemDetailView: View {
                     Label("Link...", systemImage: "link")
                 }
                 .keyboardShortcut("l", modifiers: .command)
-                .help("Link to another item")
-                Button { store.openItem(id: item.id) } label: {
+                .help("Link to another item (⌘L)")
+                Button {
+                    if let current = store.selectedItem {
+                        store.openItem(id: current.id)
+                    }
+                } label: {
                     Label("Open", systemImage: "arrow.up.forward.square")
                 }
-                .help("Open in default application")
+                .keyboardShortcut("o", modifiers: .command)
+                .help("Open in default application (⌘O)")
                 Button { showEditSheet = true } label: {
                     Label("Edit", systemImage: "pencil")
                 }
-                .help("Edit item")
+                .keyboardShortcut("e", modifiers: .command)
+                .help("Edit item (⌘E)")
                 Button { showDeleteConfirm = true } label: {
                     Label("Delete", systemImage: "trash")
                 }
-                .help("Delete item")
+                .keyboardShortcut(.delete, modifiers: .command)
+                .help("Delete item (⌘⌫)")
             }
         }
         .sheet(isPresented: $showLinkSheet) {
@@ -219,6 +274,16 @@ struct ItemDetailView: View {
             }
         } message: {
             Text("This action cannot be undone.")
+        }
+    }
+
+    private func refetchContent() {
+        isFetchingContent = true
+        store.refetchURLContent(id: item.id)
+        // Reset after a delay to allow the store to reload
+        Task {
+            try? await Task.sleep(for: .seconds(3))
+            isFetchingContent = false
         }
     }
 }

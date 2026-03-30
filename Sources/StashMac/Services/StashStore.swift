@@ -11,6 +11,29 @@ final class StashStore {
     var filterType: ItemType?
     var filterTag: String?
     var filterCollection: String?
+    enum SortMode: String, CaseIterable {
+        case newestFirst = "Newest"
+        case oldestFirst = "Oldest"
+        case titleAZ = "Title A-Z"
+        case titleZA = "Title Z-A"
+
+        var next: SortMode {
+            let all = SortMode.allCases
+            let idx = all.firstIndex(of: self)!
+            return all[(idx + 1) % all.count]
+        }
+
+        var icon: String {
+            switch self {
+            case .newestFirst: return "chevron.down"
+            case .oldestFirst: return "chevron.up"
+            case .titleAZ: return "textformat.abc"
+            case .titleZA: return "textformat.abc"
+            }
+        }
+    }
+
+    var sortMode: SortMode = .newestFirst
 
     var tagGraphData: TagGraphData?
     var navigation: NavigationItem? = .allItems
@@ -28,6 +51,7 @@ final class StashStore {
     }
 
     func loadAll() {
+        guard !isLoading else { return }
         Task {
             isLoading = true
             error = nil
@@ -53,6 +77,7 @@ final class StashStore {
     }
 
     func refresh() {
+        guard !isLoading else { return }
         Task {
             isLoading = true
             error = nil
@@ -72,11 +97,30 @@ final class StashStore {
                         limit: 100
                     )
                 }
+                applySortMode()
             } catch {
                 self.error = error.localizedDescription
             }
             isLoading = false
         }
+    }
+
+    private func applySortMode() {
+        switch sortMode {
+        case .newestFirst:
+            break // CLI returns newest first by default
+        case .oldestFirst:
+            items.reverse()
+        case .titleAZ:
+            items.sort { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+        case .titleZA:
+            items.sort { $0.title.localizedStandardCompare($1.title) == .orderedDescending }
+        }
+    }
+
+    func cycleSortMode() {
+        sortMode = sortMode.next
+        refresh()
     }
 
     func addURL(url: String, title: String?, tags: [String], note: String?, collection: String?) {
@@ -126,10 +170,28 @@ final class StashStore {
     func deleteItem(id: String) {
         Task {
             do {
-                try await cli.deleteItem(id: id)
-                if selectedItemID == id {
-                    selectedItemID = nil
+                // Find the next item before deleting
+                var nextID: String?
+                if selectedItemID == id, let idx = items.firstIndex(where: { $0.id == id }) {
+                    if idx + 1 < items.count {
+                        nextID = items[idx + 1].id
+                    } else if idx > 0 {
+                        nextID = items[idx - 1].id
+                    }
                 }
+                try await cli.deleteItem(id: id)
+                selectedItemID = nextID
+                loadAll()
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
+    }
+
+    func refetchURLContent(id: String) {
+        Task {
+            do {
+                _ = try await cli.refreshItem(id: id)
                 loadAll()
             } catch {
                 self.error = error.localizedDescription

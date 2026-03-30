@@ -145,6 +145,10 @@ actor StashCLI {
         try await captureJSON(args: ["tag", "list", "--json"])
     }
 
+    func refreshItem(id: String) async throws -> StashItem {
+        try await captureJSON(args: ["refresh", "--json", id])
+    }
+
     func tagGraph() async throws -> TagGraphData {
         try await captureJSON(args: ["tag", "graph", "--json"])
     }
@@ -188,61 +192,86 @@ actor StashCLI {
     }
 
     private func captureOutput(args: [String]) async throws -> String {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: binaryPath)
-        process.arguments = args
+        let binary = binaryPath
+        return try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    let process = Process()
+                    process.executableURL = URL(fileURLWithPath: binary)
+                    process.arguments = args
 
-        let stdout = Pipe()
-        let stderr = Pipe()
-        process.standardOutput = stdout
-        process.standardError = stderr
+                    let stdout = Pipe()
+                    let stderr = Pipe()
+                    process.standardOutput = stdout
+                    process.standardError = stderr
 
-        try process.run()
-        process.waitUntilExit()
+                    try process.run()
 
-        let outData = stdout.fileHandleForReading.readDataToEndOfFile()
-        let output = String(data: outData, encoding: .utf8) ?? ""
+                    // Read pipe data BEFORE waitUntilExit to prevent deadlock
+                    // when output exceeds the pipe buffer (64KB)
+                    let outData = stdout.fileHandleForReading.readDataToEndOfFile()
+                    let errData = stderr.fileHandleForReading.readDataToEndOfFile()
 
-        if process.terminationStatus != 0 {
-            let errData = stderr.fileHandleForReading.readDataToEndOfFile()
-            let errOutput = String(data: errData, encoding: .utf8) ?? ""
-            let message = errOutput.isEmpty ? output : errOutput
-            throw CLIError.failed(message.trimmingCharacters(in: .whitespacesAndNewlines))
+                    process.waitUntilExit()
+
+                    let output = String(data: outData, encoding: .utf8) ?? ""
+
+                    if process.terminationStatus != 0 {
+                        let errOutput = String(data: errData, encoding: .utf8) ?? ""
+                        let message = errOutput.isEmpty ? output : errOutput
+                        continuation.resume(throwing: CLIError.failed(message.trimmingCharacters(in: .whitespacesAndNewlines)))
+                    } else {
+                        continuation.resume(returning: output.trimmingCharacters(in: .whitespacesAndNewlines))
+                    }
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
         }
-        return output.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func executeWithStdin(args: [String], input: String) async throws -> String {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: binaryPath)
-        process.arguments = args
+        let binary = binaryPath
+        return try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    let process = Process()
+                    process.executableURL = URL(fileURLWithPath: binary)
+                    process.arguments = args
 
-        let stdin = Pipe()
-        let stdout = Pipe()
-        let stderr = Pipe()
-        process.standardInput = stdin
-        process.standardOutput = stdout
-        process.standardError = stderr
+                    let stdin = Pipe()
+                    let stdout = Pipe()
+                    let stderr = Pipe()
+                    process.standardInput = stdin
+                    process.standardOutput = stdout
+                    process.standardError = stderr
 
-        try process.run()
+                    try process.run()
 
-        if let data = input.data(using: .utf8) {
-            stdin.fileHandleForWriting.write(data)
+                    if let data = input.data(using: .utf8) {
+                        stdin.fileHandleForWriting.write(data)
+                    }
+                    stdin.fileHandleForWriting.closeFile()
+
+                    let outData = stdout.fileHandleForReading.readDataToEndOfFile()
+                    let errData = stderr.fileHandleForReading.readDataToEndOfFile()
+
+                    process.waitUntilExit()
+
+                    let output = String(data: outData, encoding: .utf8) ?? ""
+
+                    if process.terminationStatus != 0 {
+                        let errOutput = String(data: errData, encoding: .utf8) ?? ""
+                        let message = errOutput.isEmpty ? output : errOutput
+                        continuation.resume(throwing: CLIError.failed(message.trimmingCharacters(in: .whitespacesAndNewlines)))
+                    } else {
+                        continuation.resume(returning: output.trimmingCharacters(in: .whitespacesAndNewlines))
+                    }
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
         }
-        stdin.fileHandleForWriting.closeFile()
-
-        process.waitUntilExit()
-
-        let outData = stdout.fileHandleForReading.readDataToEndOfFile()
-        let output = String(data: outData, encoding: .utf8) ?? ""
-
-        if process.terminationStatus != 0 {
-            let errData = stderr.fileHandleForReading.readDataToEndOfFile()
-            let errOutput = String(data: errData, encoding: .utf8) ?? ""
-            let message = errOutput.isEmpty ? output : errOutput
-            throw CLIError.failed(message.trimmingCharacters(in: .whitespacesAndNewlines))
-        }
-        return output.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 

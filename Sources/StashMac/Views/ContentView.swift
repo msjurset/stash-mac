@@ -26,10 +26,11 @@ struct ContentView: View {
             if store.navigation == .tagGraph {
                 VSplitView {
                     ItemListView(showEditSheet: $showEditSheet)
-                        .frame(minHeight: 150)
+                        .frame(maxWidth: .infinity, minHeight: 150)
                     DetailRouter(showEditSheet: $showEditSheet)
-                        .frame(minHeight: 200)
+                        .frame(maxWidth: .infinity, minHeight: 200)
                 }
+                .frame(maxWidth: .infinity)
             } else {
                 DetailRouter(showEditSheet: $showEditSheet)
             }

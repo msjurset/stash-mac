@@ -31,5 +31,6 @@ struct ItemRow: View {
                 .foregroundStyle(.tertiary)
         }
         .padding(.vertical, 2)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

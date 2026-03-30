@@ -7,6 +7,24 @@ struct ItemListView: View {
     var body: some View {
         @Bindable var store = store
         List(selection: $store.selectedItemID) {
+            HStack {
+                Spacer()
+                Button {
+                    store.cycleSortMode()
+                } label: {
+                    HStack(spacing: 2) {
+                        Text(store.sortMode.rawValue)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Image(systemName: store.sortMode.icon)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .buttonStyle(.plain)
+                .help("Sort: \(store.sortMode.rawValue)")
+            }
+            .listRowSeparator(.hidden)
             ForEach(store.items) { item in
                 ItemRow(item: item)
                     .tag(item.id)
@@ -24,6 +42,7 @@ struct ItemListView: View {
             }
         }
         .listStyle(.inset(alternatesRowBackgrounds: true))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .searchable(text: $store.searchQuery, prompt: "Search items...")
         .onSubmit(of: .search) {
             store.refresh()
@@ -37,7 +56,7 @@ struct ItemListView: View {
             }
         }
         .overlay {
-            if store.isLoading {
+            if store.isLoading && store.items.isEmpty {
                 ProgressView()
             }
         }
