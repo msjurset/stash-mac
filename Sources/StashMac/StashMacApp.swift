@@ -3,10 +3,12 @@ import SwiftUI
 @main
 struct StashMacApp: App {
     @State private var store = StashStore()
+    @State private var clipboardMonitor = ClipboardMonitor()
+    @State private var selectionGrabber = SelectionGrabber()
     @Environment(\.openWindow) private var openWindow
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup(id: "main") {
             ContentView()
                 .environment(store)
         }
@@ -24,5 +26,12 @@ struct StashMacApp: App {
             HelpView()
         }
         .defaultSize(width: 800, height: 550)
+
+        MenuBarExtra("Stash", systemImage: clipboardMonitor.isWatching ? "tray.full.fill" : "tray") {
+            ClipboardMenuView()
+                .environment(clipboardMonitor)
+                .environment(selectionGrabber)
+        }
+        .menuBarExtraStyle(.menu)
     }
 }

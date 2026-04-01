@@ -11,31 +11,15 @@ struct ExtractedTextView: View {
         return text
     }
 
-    private var isMarkdown: Bool {
-        // Detect if text contains Markdown formatting
-        text.contains("## ") || text.contains("**") || text.contains("- [") ||
-        text.contains("](") || text.contains("```") || text.contains("# ")
-    }
-
     var body: some View {
         DetailSection(title: "Extracted Text") {
             VStack(alignment: .leading, spacing: 8) {
-                if isMarkdown {
-                    Text(markdownAttributed)
-                        .textSelection(.enabled)
-                        .padding(10)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(.quaternary)
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                } else {
-                    Text(displayText)
-                        .font(.callout.monospaced())
-                        .textSelection(.enabled)
-                        .padding(10)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(.quaternary)
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                }
+                Text(rendered)
+                    .textSelection(.enabled)
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.quaternary)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
 
                 if text.count > 500 {
                     Button(isExpanded ? "Show Less" : "Show More") {
@@ -47,7 +31,10 @@ struct ExtractedTextView: View {
         }
     }
 
-    private var markdownAttributed: AttributedString {
-        (try? AttributedString(markdown: displayText, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(displayText)
+    private var rendered: AttributedString {
+        if let md = try? AttributedString(markdown: displayText, options: .init(interpretedSyntax: .full)) {
+            return md
+        }
+        return AttributedString(displayText)
     }
 }

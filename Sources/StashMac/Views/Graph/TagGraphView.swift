@@ -36,7 +36,7 @@ struct TagGraphView: View {
                     let r = node.radius * canvasScale
 
                     let rect = CGRect(x: pos.x - r, y: pos.y - r, width: r * 2, height: r * 2)
-                    let color: Color = node.tag.name == store.filterTag ? .orange : .accentColor
+                    let color: Color = store.filterTags.contains(node.tag.name) ? .orange : .accentColor
                     context.fill(Circle().path(in: rect), with: .color(color.opacity(0.8)))
                     context.stroke(Circle().path(in: rect), with: .color(color), lineWidth: 1.5)
 
@@ -122,7 +122,7 @@ struct TagGraphView: View {
     private func handleTap(at location: CGPoint, in size: CGSize) {
         if let idx = hitTest(at: location, in: size) {
             let tagName = simulation.nodes[idx].tag.name
-            store.filterByTag(tagName)
+            store.filterByTag(tagName, additive: NSEvent.modifierFlags.contains(.command))
         }
     }
 

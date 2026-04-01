@@ -17,13 +17,21 @@ struct ContentView: View {
                 showAddCollectionSheet: $showAddCollectionSheet
             )
         } content: {
-            if store.navigation == .tagGraph {
+            switch store.navigation {
+            case .tagGraph:
                 TagGraphView()
-            } else {
+            case .stats:
+                StatsView()
+            case .check:
+                CheckView()
+            case .dupes:
+                DupesView()
+            default:
                 ItemListView(showEditSheet: $showEditSheet)
             }
         } detail: {
-            if store.navigation == .tagGraph {
+            switch store.navigation {
+            case .tagGraph:
                 VSplitView {
                     ItemListView(showEditSheet: $showEditSheet)
                         .frame(maxWidth: .infinity, minHeight: 150)
@@ -31,7 +39,13 @@ struct ContentView: View {
                         .frame(maxWidth: .infinity, minHeight: 200)
                 }
                 .frame(maxWidth: .infinity)
-            } else {
+            case .stats, .check:
+                EmptyView()
+            case .dupes:
+                DetailRouter(showEditSheet: $showEditSheet)
+            case .savedSearch:
+                DetailRouter(showEditSheet: $showEditSheet)
+            default:
                 DetailRouter(showEditSheet: $showEditSheet)
             }
         }
@@ -70,6 +84,9 @@ struct ContentView: View {
                 .help("Add new item (⌘N)")
             }
         }
+        .background(SearchKeyMonitor {
+            showQuickSearch = true
+        })
         .keyboardShortcut("k", modifiers: .command) {
             showQuickSearch = true
         }
@@ -96,5 +113,61 @@ private extension View {
                 .keyboardShortcut(key, modifiers: modifiers)
                 .hidden()
         )
+    }
+}
+
+/// Monitors for "/" and Cmd+F key presses when no text field is active,
+/// and triggers the search action.
+struct SearchKeyMonitor: NSViewRepresentable {
+    let onSearch: () -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let view = KeyMonitorView()
+        view.onSearch = onSearch
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
+
+    class KeyMonitorView: NSView {
+        var onSearch: (() -> Void)?
+        private var monitor: Any?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard monitor == nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self, let onSearch = self.onSearch else { return event }
+
+                // "/" without modifiers (and not in a text field)
+                if event.charactersIgnoringModifiers == "/" && event.modifierFlags.intersection(.deviceIndependentFlagsMask) == [] {
+                    if !self.isTextFieldActive {
+                        DispatchQueue.main.async { onSearch() }
+                        return nil // consume the event
+                    }
+                }
+
+                // Cmd+F
+                if event.charactersIgnoringModifiers == "f" && event.modifierFlags.contains(.command) {
+                    DispatchQueue.main.async { onSearch() }
+                    return nil
+                }
+
+                return event
+            }
+        }
+
+        override func removeFromSuperview() {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+            }
+            monitor = nil
+            super.removeFromSuperview()
+        }
+
+        private var isTextFieldActive: Bool {
+            guard let responder = window?.firstResponder else { return false }
+            return responder is NSTextView || responder is NSTextField
+        }
     }
 }

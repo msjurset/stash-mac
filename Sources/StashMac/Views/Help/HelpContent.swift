@@ -19,6 +19,10 @@ enum HelpTopic: String, CaseIterable, Identifiable {
     case itemDetail = "Item Detail"
     case dragAndDrop = "Drag & Drop"
     case cliIntegration = "CLI Integration"
+    case savedSearches = "Saved Searches"
+    case duplicates = "Duplicates"
+    case statsAndCheck = "Stats & Health Check"
+    case clipboard = "Clipboard Quick-Stash"
     case keyboard = "Keyboard Shortcuts"
 
     var id: String { rawValue }
@@ -33,6 +37,10 @@ enum HelpTopic: String, CaseIterable, Identifiable {
         case .itemDetail: return "doc.text"
         case .dragAndDrop: return "arrow.down.doc"
         case .cliIntegration: return "terminal"
+        case .savedSearches: return "magnifyingglass.circle"
+        case .duplicates: return "doc.on.doc"
+        case .statsAndCheck: return "chart.bar"
+        case .clipboard: return "doc.on.clipboard"
         case .keyboard: return "keyboard"
         }
     }
@@ -185,6 +193,11 @@ enum HelpTopic: String, CaseIterable, Identifiable {
                     ["stash open", "Open item in default app"],
                     ["stash tag list/rename", "Manage tags"],
                     ["stash collection list/create/delete", "Manage collections"],
+                    ["stash stats", "Stash statistics and storage usage"],
+                    ["stash check", "Data hygiene — find broken URLs, orphaned files, duplicates"],
+                    ["stash bulk tag/delete/collect", "Bulk operations on multiple items"],
+                    ["stash search save/list/run/delete", "Saved searches"],
+                    ["stash dupes", "Find duplicate items"],
                 ]),
                 .heading("Binary Location"),
                 .paragraph("The app searches for the stash binary in these locations, using the first one found:"),
@@ -196,6 +209,81 @@ enum HelpTopic: String, CaseIterable, Identifiable {
                 ]),
                 .heading("Data Format"),
                 .paragraph("All communication uses JSON output mode (--json flag). The CLI manages its own storage — the app never reads or writes data files directly."),
+            ]
+
+        case .savedSearches:
+            return [
+                .paragraph("Save frequently used searches and run them later from the sidebar."),
+                .heading("Saving a Search"),
+                .paragraph("Use the CLI to save a search with filters:"),
+                .code("stash search save my-search --type url --tag go"),
+                .paragraph("Saved searches appear in the Saved Searches section of the sidebar."),
+                .heading("Running a Saved Search"),
+                .paragraph("Click a saved search in the sidebar to run it. The item list updates with the results."),
+                .heading("Managing Saved Searches"),
+                .bullet([
+                    "Right-click a saved search in the sidebar to delete it",
+                    "Saved searches persist across app restarts",
+                    "Each search stores its query text and all filter parameters",
+                ]),
+            ]
+
+        case .duplicates:
+            return [
+                .paragraph("The Duplicates view finds items that may be duplicates of each other."),
+                .heading("Detection Methods"),
+                .bullet([
+                    "Same Content — items with identical file content (matching content hash)",
+                    "Same URL — multiple bookmark items pointing to the same web address",
+                    "Similar Title — items with titles that are very similar but not identical",
+                ]),
+                .heading("Using the View"),
+                .paragraph("Select Duplicates in the sidebar, then click Find Duplicates to scan. Results are grouped by detection method with color coding. Click an item title to navigate to it."),
+            ]
+
+        case .statsAndCheck:
+            return [
+                .paragraph("The Stats and Health Check views help you understand and maintain your stash."),
+                .heading("Stats"),
+                .paragraph("Select Stats in the sidebar to see a dashboard with:"),
+                .bullet([
+                    "Total item count and breakdown by type (URL, snippet, file, image, email)",
+                    "Tag, collection, and link counts",
+                    "Disk storage usage (database + content files)",
+                    "Top 10 most-used tags with visual bar chart",
+                    "Monthly growth chart showing items added over time",
+                    "Oldest and newest item dates",
+                ]),
+                .heading("Health Check"),
+                .paragraph("Select Health Check in the sidebar, then click Run Check to scan for:"),
+                .bullet([
+                    "Broken URLs — links that return HTTP errors or fail to connect",
+                    "Missing files — items referencing content that no longer exists on disk",
+                    "Orphaned files — files on disk not referenced by any item",
+                    "Duplicate content — multiple items sharing identical file content",
+                ]),
+                .paragraph("Results are color-coded by severity. URL checks may take a moment as each link is tested."),
+            ]
+
+        case .clipboard:
+            return [
+                .paragraph("A low-friction way to capture URLs without switching to the app — copy a link, click the menubar, stash it."),
+                .heading("How It Works"),
+                .numbered([
+                    "Click the tray icon in the menubar and toggle \"Watch Clipboard\" on — the icon fills in when active",
+                    "Copy any URL from a browser, email, document, or anywhere else",
+                    "Within 2 seconds, the URL appears in the menubar dropdown with a \"Stash It\" button",
+                    "Click \"Stash It\" to save it to your stash instantly",
+                ]),
+                .heading("Menubar Features"),
+                .bullet([
+                    "Watch Clipboard — toggle clipboard monitoring on or off",
+                    "Stash It — one-click save when a URL is detected",
+                    "Recent — your last 5 quick-stashes for reference",
+                    "Open Stash — bring up the main app window",
+                    "Quit — exit the app entirely (not just close the window)",
+                ]),
+                .paragraph("The menubar icon changes to a filled tray when clipboard watching is active. Only HTTP and HTTPS URLs are detected — other clipboard content is ignored."),
             ]
 
         case .keyboard:

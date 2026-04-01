@@ -76,12 +76,18 @@ struct EditItemSheet: View {
                         .clipShape(Capsule())
                     }
                 }
-                HStack {
-                    StashField("Add tag", text: $newTag, onSubmit: addTag)
-                    Button("Add") { addTag() }
-                        .disabled(newTag.isEmpty)
-                        .padding(.top, 18)
-                }
+                EditTagInput(
+                    text: $newTag,
+                    allTags: store.tags,
+                    existingTags: currentTags,
+                    onCommit: { tag in
+                        let trimmed = tag.trimmingCharacters(in: .whitespaces)
+                        if !trimmed.isEmpty, !currentTags.contains(trimmed) {
+                            tagsToAdd.append(trimmed)
+                        }
+                        newTag = ""
+                    }
+                )
             }
 
             HStack {

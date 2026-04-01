@@ -12,6 +12,7 @@ struct StashItem: Codable, Identifiable, Hashable {
     var extractedText: String?
     var mimeType: String?
     var fileSize: Int64?
+    var metadata: [String: String]?
     var createdAt: Date
     var updatedAt: Date
     var tags: [StashTag]?
@@ -31,6 +32,10 @@ struct StashItem: Codable, Identifiable, Hashable {
             return String(id.prefix(10))
         }
         return id
+    }
+
+    var language: String? {
+        metadata?["language"]
     }
 
     var humanFileSize: String? {

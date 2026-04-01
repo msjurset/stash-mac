@@ -16,7 +16,7 @@ import Testing
 }
 
 @Test func testTopicCount() {
-    #expect(HelpTopic.allCases.count == 9)
+    #expect(HelpTopic.allCases.count == 13)
 }
 
 @Test func testTopicIdentifiers() {

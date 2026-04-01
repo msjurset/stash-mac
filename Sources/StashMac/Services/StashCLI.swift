@@ -27,13 +27,13 @@ actor StashCLI {
 
     func listItems(
         type: ItemType? = nil,
-        tag: String? = nil,
+        tags: [String] = [],
         collection: String? = nil,
         limit: Int = 50
     ) async throws -> [StashItem] {
         var args = ["list", "--json", "-l", "\(limit)"]
         if let type { args += ["--type", type.rawValue] }
-        if let tag { args += ["--tag", tag] }
+        for tag in tags { args += ["--tag", tag] }
         if let collection { args += ["--collection", collection] }
         return try await captureJSON(args: args)
     }
@@ -41,12 +41,12 @@ actor StashCLI {
     func searchItems(
         query: String,
         type: ItemType? = nil,
-        tag: String? = nil,
+        tags: [String] = [],
         limit: Int = 50
     ) async throws -> [StashItem] {
         var args = ["search", "--json", query, "-l", "\(limit)"]
         if let type { args += ["--type", type.rawValue] }
-        if let tag { args += ["--tag", tag] }
+        for tag in tags { args += ["--tag", tag] }
         return try await captureJSON(args: args)
     }
 
@@ -171,6 +171,73 @@ actor StashCLI {
 
     func deleteCollection(name: String) async throws {
         _ = try await captureOutput(args: ["collection", "delete", "--json", name])
+    }
+
+    // MARK: - Saved Searches
+
+    func listSavedSearches() async throws -> [SavedSearch] {
+        try await captureJSON(args: ["search", "list", "--json"])
+    }
+
+    func runSavedSearch(name: String) async throws -> [StashItem] {
+        try await captureJSON(args: ["search", "run", "--json", name])
+    }
+
+    func deleteSavedSearch(name: String) async throws {
+        _ = try await captureOutput(args: ["search", "delete", "--json", name])
+    }
+
+    // MARK: - Duplicates
+
+    func dupes(type: ItemType? = nil, threshold: Double = 0.7) async throws -> [DupeResult] {
+        var args = ["dupes", "--json", "--threshold", "\(threshold)"]
+        if let type { args += ["--type", type.rawValue] }
+        return try await captureJSON(args: args)
+    }
+
+    // MARK: - Duplicate Dismissal
+
+    func dismissDupePair(idA: String, idB: String) async throws {
+        _ = try await captureOutput(args: ["dupes", "dismiss", idA, idB])
+    }
+
+    // MARK: - Stats & Check
+
+    func stats() async throws -> StashStatsResponse {
+        try await captureJSON(args: ["stats", "--json"])
+    }
+
+    func check(urls: Bool = true, files: Bool = true, dupes: Bool = true) async throws -> CheckResult {
+        var args = ["check", "--json"]
+        if !urls || !files || !dupes {
+            if urls { args.append("--urls") }
+            if files { args.append("--files") }
+            if dupes { args.append("--dupes") }
+        }
+        return try await captureJSON(args: args)
+    }
+
+    // MARK: - Bulk Operations
+
+    func bulkTag(ids: [String], addTags: [String] = [], removeTags: [String] = []) async throws {
+        var args = ["bulk", "tag", "--json"]
+        for tag in addTags { args += ["--add-tag", tag] }
+        for tag in removeTags { args += ["--remove-tag", tag] }
+        args += ids
+        _ = try await captureOutput(args: args)
+    }
+
+    func bulkDelete(ids: [String]) async throws {
+        var args = ["bulk", "delete", "--json", "-y"]
+        args += ids
+        _ = try await captureOutput(args: args)
+    }
+
+    func bulkCollect(ids: [String], collection: String, remove: Bool = false) async throws {
+        var args = ["bulk", "collect", "--json", "-c", collection]
+        if remove { args.append("--remove") }
+        args += ids
+        _ = try await captureOutput(args: args)
     }
 
     // MARK: - Private

@@ -7,6 +7,8 @@ struct ItemDetailView: View {
     @State private var showDeleteConfirm = false
     @State private var showLinkSheet = false
     @State private var isFetchingContent = false
+    @State private var isAddingTag = false
+    @State private var newTagText = ""
 
     var body: some View {
         ScrollView {
@@ -76,9 +78,9 @@ struct ItemDetailView: View {
                 }
 
                 // Tags
-                if let tags = item.tags, !tags.isEmpty {
-                    DetailSection(title: "Tags") {
-                        FlowLayout(spacing: 6) {
+                DetailSection(title: "Tags") {
+                    FlowLayout(spacing: 6) {
+                        if let tags = item.tags {
                             ForEach(tags) { tag in
                                 Button {
                                     store.filterByTag(tag.name)
@@ -100,6 +102,38 @@ struct ItemDetailView: View {
                                     }
                                 }
                             }
+                        }
+
+                        if isAddingTag {
+                            InlineTagInput(
+                                text: $newTagText,
+                                allTags: store.tags,
+                                onCommit: { tag in
+                                    let trimmed = tag.trimmingCharacters(in: .whitespaces)
+                                    if !trimmed.isEmpty {
+                                        store.addTagToItem(id: item.id, tag: trimmed)
+                                    }
+                                    newTagText = ""
+                                    isAddingTag = false
+                                },
+                                onCancel: {
+                                    newTagText = ""
+                                    isAddingTag = false
+                                }
+                            )
+                        } else {
+                            Button {
+                                isAddingTag = true
+                            } label: {
+                                Image(systemName: "plus")
+                                    .font(.caption)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(.quaternary)
+                                    .clipShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.secondary)
                         }
                     }
                 }
@@ -152,10 +186,20 @@ struct ItemDetailView: View {
                 }
 
                 // File info
-                if item.mimeType != nil || item.fileSize != nil {
+                if item.mimeType != nil || item.fileSize != nil || item.language != nil {
                     DetailSection(title: "File Info") {
                         if let mime = item.mimeType {
                             LabeledContent("MIME Type", value: mime)
+                        }
+                        if let lang = item.language {
+                            LabeledContent("Language") {
+                                Text(lang)
+                                    .font(.callout.monospaced())
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(.blue.opacity(0.15), in: RoundedRectangle(cornerRadius: 4))
+                                    .foregroundStyle(.blue)
+                            }
                         }
                         if let size = item.humanFileSize {
                             LabeledContent("Size", value: size)
@@ -268,6 +312,7 @@ struct ItemDetailView: View {
             store.linkItems(from: item.id, to: droppedID)
             return true
         }
+        .onAppear { store.markSeen(item.id) }
         .confirmationDialog("Delete \"\(item.title)\"?", isPresented: $showDeleteConfirm) {
             Button("Delete", role: .destructive) {
                 store.deleteItem(id: item.id)
