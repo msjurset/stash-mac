@@ -409,6 +409,17 @@ final class StashStore {
         }
     }
 
+    func addTagsToItem(id: String, tags: [String]) {
+        Task {
+            do {
+                _ = try await cli.editItem(id: id, addTags: tags)
+                loadAll()
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
+    }
+
     func selectItemByID(_ id: String) {
         selectedItemID = id
         if items.first(where: { $0.id == id }) == nil {

@@ -108,10 +108,12 @@ struct ItemDetailView: View {
                             InlineTagInput(
                                 text: $newTagText,
                                 allTags: store.tags,
-                                onCommit: { tag in
-                                    let trimmed = tag.trimmingCharacters(in: .whitespaces)
-                                    if !trimmed.isEmpty {
-                                        store.addTagToItem(id: item.id, tag: trimmed)
+                                onCommit: { input in
+                                    let tags = input.split(separator: ",")
+                                        .map { $0.trimmingCharacters(in: .whitespaces) }
+                                        .filter { !$0.isEmpty }
+                                    if !tags.isEmpty {
+                                        store.addTagsToItem(id: item.id, tags: tags)
                                     }
                                     newTagText = ""
                                     isAddingTag = false
