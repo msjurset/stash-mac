@@ -241,7 +241,11 @@ struct ItemDetailView: View {
                                 .disabled(isFetchingContent)
                             }
                         }
-                        ExtractedTextView(text: text)
+                        if item.type == .email {
+                            EmailContentView(text: text)
+                        } else {
+                            ExtractedTextView(text: text)
+                        }
                     }
                 } else if item.type == .url {
                     // URL with no extracted text — offer to fetch

@@ -36,6 +36,13 @@ deploy: bundle
 	@sleep 1
 	command rm -rf $(INSTALL_DIR)/$(BUNDLE)
 	ditto $(BUNDLE) $(INSTALL_DIR)/$(BUNDLE)
+	xattr -dr com.apple.quarantine $(INSTALL_DIR)/$(BUNDLE) 2>/dev/null || true
+	@if security find-identity -v -p codesigning 2>/dev/null | grep -q "$(SIGN_IDENTITY)"; then \
+		echo "Installed copy retains '$(SIGN_IDENTITY)' signature from bundle step"; \
+	else \
+		codesign --force --deep --sign - $(INSTALL_DIR)/$(BUNDLE); \
+		echo "Ad-hoc signed (no '$(SIGN_IDENTITY)' cert found — run 'make cert' for a stable identity)"; \
+	fi
 	@osascript -e 'use framework "AppKit"' \
 		-e 'set iconImage to current application'\''s NSImage'\''s alloc()'\''s initWithContentsOfFile:"$(INSTALL_DIR)/$(BUNDLE)/Contents/Resources/AppIcon.icns"' \
 		-e 'current application'\''s NSWorkspace'\''s sharedWorkspace()'\''s setIcon:iconImage forFile:"$(INSTALL_DIR)/$(BUNDLE)" options:0'

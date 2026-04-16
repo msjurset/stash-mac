@@ -20,6 +20,7 @@ struct ContentView: View {
             switch store.navigation {
             case .tagGraph:
                 TagGraphView()
+                    .frame(minWidth: 500, idealWidth: 600)
             case .stats:
                 StatsView()
             case .check:
@@ -55,7 +56,7 @@ struct ContentView: View {
         .onChange(of: store.navigation) { _, newValue in
             store.handleNavigationChange(newValue ?? .allItems)
         }
-        .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+        .onDrop(of: [.fileURL, .emailMessage], isTargeted: nil) { providers in
             handleDrop(providers)
             return true
         }
@@ -95,11 +96,36 @@ struct ContentView: View {
 
     private func handleDrop(_ providers: [NSItemProvider]) {
         for provider in providers {
-            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { data, _ in
-                guard let data = data as? Data,
-                      let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
-                Task { @MainActor in
-                    store.addFile(path: url.path, title: nil, tags: [], note: nil, collection: nil)
+            // Try file URL first
+            if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+                    let url: URL?
+                    if let u = item as? URL {
+                        url = u
+                    } else if let data = item as? Data {
+                        url = URL(dataRepresentation: data, relativeTo: nil)
+                    } else {
+                        url = nil
+                    }
+                    guard let url else { return }
+                    Task { @MainActor in
+                        store.addFile(path: url.path, title: nil, tags: [], note: nil, collection: nil)
+                    }
+                }
+            }
+            // Try email message (e.g., dragged from Apple Mail)
+            else if provider.hasItemConformingToTypeIdentifier(UTType.emailMessage.identifier) {
+                provider.loadDataRepresentation(forTypeIdentifier: UTType.emailMessage.identifier) { data, _ in
+                    guard let data, !data.isEmpty else { return }
+                    let tempPath = NSTemporaryDirectory() + "stash-drop-\(UUID().uuidString).eml"
+                    let tempURL = URL(fileURLWithPath: tempPath)
+                    do {
+                        try data.write(to: tempURL)
+                        Task { @MainActor in
+                            store.addFile(path: tempPath, title: nil, tags: [], note: nil, collection: nil)
+                            try? FileManager.default.removeItem(at: tempURL)
+                        }
+                    } catch {}
                 }
             }
         }

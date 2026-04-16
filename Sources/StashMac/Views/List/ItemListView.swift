@@ -104,8 +104,9 @@ struct ItemListView: View {
                     .help("Sort: \(store.sortMode.rawValue)")
                 }
                 .listRowSeparator(.hidden)
-                ForEach(store.items) { item in
+                ForEach(Array(store.items.enumerated()), id: \.element.id) { idx, item in
                     ItemRow(item: item)
+                        .listRowBackground(idx.isMultiple(of: 2) ? Color.clear : Color.primary.opacity(0.04))
                         .tag(item.id)
                         .contextMenu {
                             Button("Open") { store.openItem(id: item.id) }
@@ -120,7 +121,7 @@ struct ItemListView: View {
                         }
                 }
             }
-            .listStyle(.inset(alternatesRowBackgrounds: true))
+            .listStyle(.inset)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .onChange(of: store.searchQuery) { _, _ in
