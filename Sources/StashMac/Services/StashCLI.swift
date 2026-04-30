@@ -217,6 +217,80 @@ actor StashCLI {
         return try await captureJSON(args: args)
     }
 
+    /// Streams `stash check --stream` output as NDJSON events. Each line of
+    /// stdout is decoded into a `CheckEvent` and yielded as soon as it arrives,
+    /// so callers can render findings progressively.
+    nonisolated func checkStream(urls: Bool = true, files: Bool = true, dupes: Bool = true) -> AsyncThrowingStream<CheckEvent, Error> {
+        var args = ["check", "--stream"]
+        if !urls || !files || !dupes {
+            if urls { args.append("--urls") }
+            if files { args.append("--files") }
+            if dupes { args.append("--dupes") }
+        }
+
+        return AsyncThrowingStream { continuation in
+            let process = Process()
+            let stdout = Pipe()
+            let stderr = Pipe()
+            process.standardOutput = stdout
+            process.standardError = stderr
+
+            let decoder = JSONDecoder()
+            decoder.keyDecodingStrategy = .convertFromSnakeCase
+
+            Task.detached(priority: .userInitiated) { [args] in
+                let binaryPath = await self.binaryPath
+                process.executableURL = URL(fileURLWithPath: binaryPath)
+                process.arguments = args
+
+                do {
+                    try process.run()
+                } catch {
+                    continuation.finish(throwing: error)
+                    return
+                }
+
+                let handle = stdout.fileHandleForReading
+                var buffer = Data()
+
+                while true {
+                    let chunk = handle.availableData
+                    if chunk.isEmpty { break }
+                    buffer.append(chunk)
+
+                    while let newlineIdx = buffer.firstIndex(of: 0x0A) {
+                        let lineData = buffer.subdata(in: 0..<newlineIdx)
+                        buffer.removeSubrange(0...newlineIdx)
+                        if lineData.isEmpty { continue }
+                        if let event = try? decoder.decode(CheckEvent.self, from: lineData) {
+                            continuation.yield(event)
+                        }
+                        // Malformed lines (e.g. stray log output) are skipped
+                        // rather than aborting the whole stream.
+                    }
+                }
+
+                process.waitUntilExit()
+
+                if process.terminationStatus != 0 {
+                    let errData = stderr.fileHandleForReading.readDataToEndOfFile()
+                    let errMsg = String(data: errData, encoding: .utf8)?
+                        .trimmingCharacters(in: .whitespacesAndNewlines) ?? "check failed"
+                    continuation.finish(throwing: CLIError.failed(errMsg))
+                    return
+                }
+
+                continuation.finish()
+            }
+
+            continuation.onTermination = { _ in
+                if process.isRunning {
+                    process.terminate()
+                }
+            }
+        }
+    }
+
     // MARK: - Bulk Operations
 
     func bulkTag(ids: [String], addTags: [String] = [], removeTags: [String] = []) async throws {

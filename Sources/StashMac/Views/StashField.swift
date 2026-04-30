@@ -5,7 +5,7 @@ struct StashField: View {
     @Binding var text: String
     var prompt: String = ""
     var onSubmit: (() -> Void)?
-    @FocusState private var isFocused: Bool
+    @State private var isFocused = false
 
     init(_ label: String, text: Binding<String>, prompt: String = "", onSubmit: (() -> Void)? = nil) {
         self.label = label
@@ -19,18 +19,21 @@ struct StashField: View {
             Text(label)
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            TextField("", text: $text, prompt: prompt.isEmpty ? nil : Text(prompt))
-                .textFieldStyle(.plain)
-                .padding(8)
-                .background(isFocused ? Color.accentColor.opacity(0.08) : Color.primary.opacity(0.04))
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(isFocused ? Color.accentColor.opacity(0.5) : Color.primary.opacity(0.1), lineWidth: 1)
-                )
-                .focused($isFocused)
-                .onSubmit { onSubmit?() }
-                .animation(.easeInOut(duration: 0.15), value: isFocused)
+            FilterField(
+                placeholder: prompt,
+                text: $text,
+                onSubmit: onSubmit,
+                onBeginEditing: { isFocused = true },
+                onEndEditing: { isFocused = false }
+            )
+            .padding(8)
+            .background(isFocused ? Color.accentColor.opacity(0.08) : Color.primary.opacity(0.04))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(isFocused ? Color.accentColor.opacity(0.5) : Color.primary.opacity(0.1), lineWidth: 1)
+            )
+            .animation(.easeInOut(duration: 0.15), value: isFocused)
         }
     }
 }

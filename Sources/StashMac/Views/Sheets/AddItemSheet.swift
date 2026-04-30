@@ -65,7 +65,12 @@ struct AddItemSheet: View {
                     Divider()
 
                     StashField("Title", text: $title, prompt: "Optional")
-                    StashField("Tags", text: $tagsString, prompt: "Comma-separated")
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Tags")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        MultiTagField(text: $tagsString, allTags: store.tags, placeholder: "Comma-separated")
+                    }
                     StashField("Note", text: $note, prompt: "Optional")
 
                     HStack {
@@ -110,13 +115,22 @@ struct AddItemSheet: View {
 
         switch selectedTab {
         case .url:
-            store.addURL(url: urlString, title: t, tags: parsedTags, note: n, collection: c)
+            store.addURL(url: normalizeURL(urlString), title: t, tags: parsedTags, note: n, collection: c)
         case .file:
             store.addFile(path: filePath, title: t, tags: parsedTags, note: n, collection: c)
         case .snippet:
             store.addSnippet(text: snippetText, title: t, tags: parsedTags, note: n, collection: c)
         }
         dismiss()
+    }
+
+    /// Default to `https://` when the user omits the scheme. Anything that
+    /// already contains `://` is left alone so `http://`, `ftp://`, etc.
+    /// pass through unchanged.
+    private func normalizeURL(_ input: String) -> String {
+        let trimmed = input.trimmingCharacters(in: .whitespaces)
+        if trimmed.contains("://") { return trimmed }
+        return "https://\(trimmed)"
     }
 
     private func browseFile() {

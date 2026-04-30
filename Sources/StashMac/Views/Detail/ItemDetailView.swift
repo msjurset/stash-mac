@@ -244,7 +244,7 @@ struct ItemDetailView: View {
                         if item.type == .email {
                             EmailContentView(text: text)
                         } else {
-                            ExtractedTextView(text: text)
+                            ExtractedTextView(text: text, itemID: item.id)
                         }
                     }
                 } else if item.type == .url {

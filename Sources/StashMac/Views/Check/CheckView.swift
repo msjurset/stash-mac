@@ -7,16 +7,17 @@ struct CheckView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 if store.isCheckRunning {
-                    HStack {
+                    HStack(spacing: 8) {
                         ProgressView()
                             .controlSize(.small)
-                        Text("Running checks...")
+                        Text("Running checks — results appear as issues are found…")
+                            .foregroundStyle(.secondary)
                     }
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.top, 40)
-                } else if let result = store.checkResult {
-                    resultView(result)
-                } else {
+                }
+
+                if let result = store.checkResult {
+                    resultView(result, running: store.isCheckRunning)
+                } else if !store.isCheckRunning {
                     VStack(spacing: 12) {
                         Image(systemName: "checkmark.shield")
                             .font(.largeTitle)
@@ -49,21 +50,23 @@ struct CheckView: View {
     }
 
     @ViewBuilder
-    private func resultView(_ result: CheckResult) -> some View {
+    private func resultView(_ result: CheckResult, running: Bool) -> some View {
         if result.isEmpty {
-            VStack(spacing: 8) {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.largeTitle)
-                    .foregroundStyle(.green)
-                Text("No issues found")
-                    .font(.headline)
-                Text("Your stash is healthy.")
-                    .foregroundStyle(.secondary)
+            if !running {
+                VStack(spacing: 8) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.largeTitle)
+                        .foregroundStyle(.green)
+                    Text("No issues found")
+                        .font(.headline)
+                    Text("Your stash is healthy.")
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.top, 40)
             }
-            .frame(maxWidth: .infinity, alignment: .center)
-            .padding(.top, 40)
         } else {
-            Text("\(result.totalIssues) issue(s) found")
+            Text("\(result.totalIssues) issue(s) found\(running ? " so far…" : "")")
                 .font(.headline)
 
             if let broken = result.brokenUrls, !broken.isEmpty {
@@ -92,19 +95,39 @@ struct CheckView: View {
                 .foregroundStyle(color)
 
             ForEach(items) { issue in
-                HStack {
-                    Text(issue.title)
-                        .lineLimit(1)
-                    Spacer()
-                    if let detail = issue.detail {
-                        Text(detail)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                }
-                .padding(.vertical, 2)
-                .padding(.horizontal, 8)
+                issueRow(issue)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func issueRow(_ issue: CheckIssue) -> some View {
+        let isSelected = store.selectedItemID == issue.id
+        HStack {
+            Text(issue.title)
+                .lineLimit(1)
+            Spacer()
+            if let detail = issue.detail {
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+        .padding(.vertical, 3)
+        .padding(.horizontal, 8)
+        .background(isSelected ? Color.accentColor.opacity(0.15) : Color.clear, in: RoundedRectangle(cornerRadius: 4))
+        .contentShape(Rectangle())
+        .onTapGesture {
+            store.selectItemByID(issue.id)
+        }
+        .contextMenu {
+            Button("Show in All Items") {
+                store.selectedItemID = issue.id
+                store.applyNavigation(.allItems)
+            }
+            Button("Open") {
+                store.openItem(id: issue.id)
             }
         }
     }
@@ -126,6 +149,36 @@ struct CheckView: View {
     }
 
     @ViewBuilder
+    private func dupeItemRow(_ item: CheckIssue) -> some View {
+        let isSelected = store.selectedItemID == item.id
+        HStack {
+            Text(item.title)
+                .lineLimit(1)
+            Spacer()
+            Text(String(item.id.prefix(10)))
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+        }
+        .padding(.leading, 12)
+        .padding(.vertical, 2)
+        .padding(.trailing, 4)
+        .background(isSelected ? Color.accentColor.opacity(0.15) : Color.clear, in: RoundedRectangle(cornerRadius: 4))
+        .contentShape(Rectangle())
+        .onTapGesture {
+            store.selectItemByID(item.id)
+        }
+        .contextMenu {
+            Button("Show in All Items") {
+                store.selectedItemID = item.id
+                store.applyNavigation(.allItems)
+            }
+            Button("Open") {
+                store.openItem(id: item.id)
+            }
+        }
+    }
+
+    @ViewBuilder
     private func dupeSection(_ groups: [DupeGroup]) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Label("Duplicate Content (\(groups.count) groups)", systemImage: "doc.on.doc")
@@ -138,15 +191,7 @@ struct CheckView: View {
                         .font(.caption.monospaced())
                         .foregroundStyle(.secondary)
                     ForEach(group.items) { item in
-                        HStack {
-                            Text(item.title)
-                                .lineLimit(1)
-                            Spacer()
-                            Text(String(item.id.prefix(10)))
-                                .font(.caption.monospaced())
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.leading, 12)
+                        dupeItemRow(item)
                     }
                 }
                 .padding(.vertical, 4)

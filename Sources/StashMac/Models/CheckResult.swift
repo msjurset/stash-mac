@@ -29,3 +29,14 @@ struct DupeGroup: Codable, Identifiable {
 
     var id: String { hash }
 }
+
+/// One NDJSON event emitted by `stash check --stream`.
+struct CheckEvent: Decodable {
+    var type: String
+    var phase: String?
+    var total: Int?
+    var done: Int?
+    var issue: CheckIssue?
+    var group: DupeGroup?
+    var path: String?
+}

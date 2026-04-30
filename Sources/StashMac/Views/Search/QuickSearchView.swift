@@ -8,9 +8,7 @@ struct QuickSearchView: View {
     @State private var results: [StashItem] = []
     @State private var searchTask: Task<Void, Never>?
     @State private var tagMatches: [StashTag] = []
-    @State private var tagActiveIndex = -1
-    @State private var tagJustAccepted = false
-    @State private var isNavigating = false
+    @State private var tagActiveIndex = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -20,9 +18,7 @@ struct QuickSearchView: View {
                 TagAwareSearchField(
                     query: $query,
                     tagMatches: $tagMatches,
-                    tagActiveIndex: $tagActiveIndex,
-                    onNavigate: { navigate($0) },
-                    onAccept: { handleEnter() }
+                    onKey: { handleKey($0) }
                 )
                 Button("Done") { dismiss() }
                     .keyboardShortcut(.cancelAction)
@@ -37,7 +33,7 @@ struct QuickSearchView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(tagMatches.enumerated()), id: \.element.id) { idx, tag in
                         Button {
-                            completeTag(tag.name)
+                            commitTag(tag.name)
                         } label: {
                             HStack {
                                 Label("tag:\(tag.name)", systemImage: "tag")
@@ -98,19 +94,11 @@ struct QuickSearchView: View {
             }
         }
         .frame(width: 500)
-        .background(CtrlJKMonitor(onNavigate: { navigate($0) }, tagMatches: $tagMatches))
         .onChange(of: query) { _, newQuery in
-            // Skip suggestion rebuild when navigating (preview updates query)
-            if isNavigating {
-                isNavigating = false
-                return
-            }
-            tagJustAccepted = false
-            updateTagSuggestions()
+            recomputeSuggestions()
             if tagMatches.isEmpty {
                 debounceSearch(newQuery)
             } else {
-                // Cancel any in-flight search from previous keystrokes
                 searchTask?.cancel()
                 searchTask = nil
                 results = []
@@ -118,63 +106,91 @@ struct QuickSearchView: View {
         }
     }
 
-    // MARK: - Navigation
+    // MARK: - Key handling
 
-    enum Direction { case down, up }
+    private func handleKey(_ key: SuggestKey) -> Bool {
+        switch key {
+        case .tab, .shiftTab:
+            if tagMatches.isEmpty {
+                openDropdownIfPossible()
+                return true
+            }
+            if tagMatches.count == 1 {
+                tabInsertSingle(tagMatches[0].name)
+                return true
+            }
+            advance(key == .tab ? .down : .up)
+            return true
+        case .arrowDown, .ctrlJ:
+            if tagMatches.isEmpty { return false }
+            advance(.down)
+            return true
+        case .arrowUp, .ctrlK:
+            if tagMatches.isEmpty { return false }
+            advance(.up)
+            return true
+        case .enter:
+            if !tagMatches.isEmpty {
+                let idx = max(tagActiveIndex, 0)
+                if idx < tagMatches.count {
+                    commitTag(tagMatches[idx].name)
+                }
+                return true
+            }
+            // No dropdown — fire the first result if any, else close sheet.
+            if let first = results.first {
+                store.selectedItemID = first.id
+                dismiss()
+                return true
+            }
+            return false
+        case .escape:
+            if !tagMatches.isEmpty {
+                tagMatches = []
+                tagActiveIndex = 0
+                return true
+            }
+            if !query.isEmpty {
+                query = ""
+                return true
+            }
+            dismiss()
+            return true
+        }
+    }
 
-    /// Single entry point for all suggestion navigation (Tab, arrows, Ctrl-J/K).
-    /// Updates the index AND previews the tag in the query field.
-    private func navigate(_ direction: Direction) {
+    private enum Direction { case up, down }
+
+    private func advance(_ direction: Direction) {
         guard !tagMatches.isEmpty else { return }
         switch direction {
-        case .down:
-            tagActiveIndex = tagActiveIndex < 0 ? 0 : min(tagActiveIndex + 1, tagMatches.count - 1)
-        case .up:
-            tagActiveIndex = max(tagActiveIndex - 1, 0)
-        }
-        previewTag(tagMatches[tagActiveIndex].name)
-    }
-
-    private func handleEnter() {
-        if !tagMatches.isEmpty {
-            let idx = tagActiveIndex >= 0 ? tagActiveIndex : 0
-            if idx < tagMatches.count {
-                completeTag(tagMatches[idx].name)
-            }
-            tagJustAccepted = true
-            return
-        }
-        if tagJustAccepted {
-            tagJustAccepted = false
-            return
-        }
-        if let first = results.first {
-            store.selectedItemID = first.id
-            dismiss()
+        case .down: tagActiveIndex = min(tagActiveIndex + 1, tagMatches.count - 1)
+        case .up:   tagActiveIndex = max(tagActiveIndex - 1, 0)
         }
     }
 
-    // MARK: - Tag Suggestions
+    // MARK: - Tag suggestions
 
-    private func updateTagSuggestions() {
-        tagActiveIndex = -1
-
+    private func recomputeSuggestions() {
         guard let match = query.range(of: #"(?:^|\s)tag:(\S*)$"#, options: .regularExpression) else {
             tagMatches = []
+            tagActiveIndex = 0
             return
         }
         let token = query[match]
         guard let colonIdx = token.firstIndex(of: ":") else {
             tagMatches = []
+            tagActiveIndex = 0
             return
         }
         let partial = String(token[token.index(after: colonIdx)...]).lowercased()
 
-        let existing = Set(
-            query.matches(of: /tag:(\S+)/).compactMap { match -> String? in
-                String(match.output.1).lowercased()
-            }
+        var existing = Set(
+            query.matches(of: /tag:(\S+)/).map { String($0.output.1).lowercased() }
         )
+        if !partial.isEmpty {
+            existing.remove(partial)
+        }
 
         tagMatches = Array(store.tags
             .filter { tag in
@@ -182,25 +198,51 @@ struct QuickSearchView: View {
                 return (partial.isEmpty || lower.contains(partial)) && !existing.contains(lower)
             }
             .prefix(8))
+        tagActiveIndex = 0
     }
 
-    /// Preview: replace the partial tag: token with the selected name (no trailing space).
-    private func previewTag(_ tagName: String) {
-        guard let range = query.range(of: #"(?:^|\s)tag:\S*$"#, options: .regularExpression) else { return }
-        let before = query[query.startIndex..<range.lowerBound]
-        let prefix = query[range].hasPrefix(" ") ? " " : ""
-        isNavigating = true
-        query = "\(before)\(prefix)tag:\(tagName)"
+    /// Tab-opens-dropdown: if we're already in a `tag:` value context,
+    /// `recomputeSuggestions` has it covered. Otherwise treat the trailing
+    /// bare word as a key partial and, if it's a prefix of the sole key
+    /// (`tag:`), replace it with `tag:` — no trailing space — chaining into
+    /// value completion.
+    private func openDropdownIfPossible() {
+        if query.range(of: #"(?:^|\s)tag:\S*$"#, options: .regularExpression) != nil {
+            return
+        }
+
+        let partial: String
+        if let wsIdx = query.lastIndex(where: { $0.isWhitespace }) {
+            partial = String(query[query.index(after: wsIdx)...])
+        } else {
+            partial = query
+        }
+
+        let key = "tag:"
+        guard key.hasPrefix(partial.lowercased()) else { return }
+
+        let end = query.endIndex
+        let start = query.index(end, offsetBy: -partial.count)
+        var updated = query
+        updated.replaceSubrange(start..<end, with: key)
+        query = updated
     }
 
-    /// Commit: replace the partial tag: token and add trailing space, dismiss suggestions.
-    private func completeTag(_ tagName: String) {
+    private func commitTag(_ tagName: String) {
         guard let range = query.range(of: #"(?:^|\s)tag:\S*$"#, options: .regularExpression) else { return }
         let before = query[query.startIndex..<range.lowerBound]
         let prefix = query[range].hasPrefix(" ") ? " " : ""
         query = "\(before)\(prefix)tag:\(tagName) "
         tagMatches = []
+        tagActiveIndex = 0
         debounceSearch(query)
+    }
+
+    private func tabInsertSingle(_ tagName: String) {
+        guard let range = query.range(of: #"(?:^|\s)tag:\S*$"#, options: .regularExpression) else { return }
+        let before = query[query.startIndex..<range.lowerBound]
+        let prefix = query[range].hasPrefix(" ") ? " " : ""
+        query = "\(before)\(prefix)tag:\(tagName)"
     }
 
     /// Parse `tag:xxx` tokens out of the query and pass them as CLI `--tag` flags.
@@ -210,9 +252,7 @@ struct QuickSearchView: View {
             results = []
             return
         }
-        // Extract tag: tokens
         let tagTokens = query.matches(of: /tag:(\S+)/).map { String($0.output.1) }
-        // Remaining text query (strip tag: tokens)
         let textQuery = query
             .replacing(/tag:\S*/, with: "")
             .trimmingCharacters(in: .whitespaces)
@@ -223,7 +263,6 @@ struct QuickSearchView: View {
             do {
                 let found: [StashItem]
                 if textQuery.isEmpty && !tagTokens.isEmpty {
-                    // Tag-only filter — use list with tag flags
                     found = try await StashCLI.shared.listItems(tags: tagTokens, limit: 20)
                 } else {
                     found = try await StashCLI.shared.searchItems(query: textQuery, tags: tagTokens, limit: 20)
@@ -238,22 +277,24 @@ struct QuickSearchView: View {
 
 // MARK: - TagAwareSearchField
 
-/// NSTextField that forwards Tab, arrows, Enter, and Ctrl-J/K to the parent view's callbacks.
+/// NSTextField that funnels Tab, Shift-Tab, arrows, Enter, Escape, and
+/// Ctrl-J/K through a single `onKey` callback.
 struct TagAwareSearchField: NSViewRepresentable {
     @Binding var query: String
     @Binding var tagMatches: [StashTag]
-    @Binding var tagActiveIndex: Int
-    let onNavigate: (QuickSearchView.Direction) -> Void
-    let onAccept: () -> Void
+    /// Returns true if the event was consumed.
+    let onKey: (SuggestKey) -> Bool
 
     func makeNSView(context: Context) -> NSTextField {
-        let field = NSTextField()
+        let field = NoAutoFillTextField()
         field.placeholderString = "Search stash... (tag: to filter)"
         field.isBordered = false
         field.backgroundColor = .clear
+        field.drawsBackground = false
         field.font = .preferredFont(forTextStyle: .title3)
         field.focusRingType = .none
         field.delegate = context.coordinator
+        context.coordinator.installCtrlJKMonitor(on: field)
         DispatchQueue.main.async { field.window?.makeFirstResponder(field) }
         return field
     }
@@ -261,7 +302,6 @@ struct TagAwareSearchField: NSViewRepresentable {
     func updateNSView(_ nsView: NSTextField, context: Context) {
         if nsView.stringValue != query {
             nsView.stringValue = query
-            // Place cursor at end after programmatic update
             if let editor = nsView.currentEditor() {
                 editor.selectedRange = NSRange(location: nsView.stringValue.count, length: 0)
             }
@@ -272,8 +312,14 @@ struct TagAwareSearchField: NSViewRepresentable {
         Coordinator(self)
     }
 
+    static func dismantleNSView(_ nsView: NSTextField, coordinator: Coordinator) {
+        coordinator.removeCtrlJKMonitor()
+    }
+
     @MainActor class Coordinator: NSObject, NSTextFieldDelegate {
         var parent: TagAwareSearchField
+        private var eventMonitor: Any?
+        private weak var field: NSTextField?
 
         init(_ parent: TagAwareSearchField) {
             self.parent = parent
@@ -285,87 +331,43 @@ struct TagAwareSearchField: NSViewRepresentable {
         }
 
         func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-            // Tab
-            if commandSelector == #selector(NSResponder.insertTab(_:)) {
-                if !parent.tagMatches.isEmpty {
-                    parent.onNavigate(.down)
-                    return true
-                }
+            let key: SuggestKey?
+            switch commandSelector {
+            case #selector(NSResponder.insertTab(_:)):         key = .tab
+            case #selector(NSResponder.insertBacktab(_:)):     key = .shiftTab
+            case #selector(NSResponder.moveDown(_:)):          key = .arrowDown
+            case #selector(NSResponder.moveUp(_:)):            key = .arrowUp
+            case #selector(NSResponder.insertNewline(_:)):     key = .enter
+            case #selector(NSResponder.cancelOperation(_:)):   key = .escape
+            default: key = nil
             }
-            // Arrow down
-            if commandSelector == #selector(NSResponder.moveDown(_:)) {
-                if !parent.tagMatches.isEmpty {
-                    parent.onNavigate(.down)
-                    return true
-                }
-            }
-            // Arrow up
-            if commandSelector == #selector(NSResponder.moveUp(_:)) {
-                if !parent.tagMatches.isEmpty {
-                    parent.onNavigate(.up)
-                    return true
-                }
-            }
-            // Enter
-            if commandSelector == #selector(NSResponder.insertNewline(_:)) {
-                parent.onAccept()
-                return true
-            }
-            return false
+            guard let key else { return false }
+            return parent.onKey(key)
         }
-    }
-}
 
-// MARK: - Ctrl-J/K Event Monitor
-
-/// Intercepts Ctrl-J/K at the NSEvent level (these don't map to standard AppKit commands).
-struct CtrlJKMonitor: NSViewRepresentable {
-    let onNavigate: (QuickSearchView.Direction) -> Void
-    @Binding var tagMatches: [StashTag]
-
-    func makeNSView(context: Context) -> NSView {
-        let view = MonitorView()
-        view.onNavigate = onNavigate
-        view.tagMatchesRef = { [self] in self.tagMatches }
-        return view
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {
-        guard let view = nsView as? MonitorView else { return }
-        view.onNavigate = onNavigate
-        view.tagMatchesRef = { [self] in self.tagMatches }
-    }
-
-    class MonitorView: NSView {
-        var onNavigate: ((QuickSearchView.Direction) -> Void)?
-        var tagMatchesRef: (() -> [StashTag])?
-        private var monitor: Any?
-
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            guard monitor == nil else { return }
-            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-                guard let self,
-                      let tags = self.tagMatchesRef?(), !tags.isEmpty,
-                      event.modifierFlags.contains(.control) else { return event }
-
+        func installCtrlJKMonitor(on field: NSTextField) {
+            self.field = field
+            // Ctrl-J/K don't map to AppKit selectors — intercept via NSEvent.
+            eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self else { return event }
+                guard event.modifierFlags.contains(.control) else { return event }
+                guard let field = self.field, field.window?.firstResponder is NSTextView else { return event }
                 let char = event.charactersIgnoringModifiers
-                if char == "j" {
-                    Task { @MainActor in self.onNavigate?(.down) }
-                    return nil
+                let key: SuggestKey?
+                switch char {
+                case "j": key = .ctrlJ
+                case "k": key = .ctrlK
+                default: key = nil
                 }
-                if char == "k" {
-                    Task { @MainActor in self.onNavigate?(.up) }
-                    return nil
-                }
-                return event
+                guard let key else { return event }
+                let consumed = self.parent.onKey(key)
+                return consumed ? nil : event
             }
         }
 
-        override func removeFromSuperview() {
-            if let monitor { NSEvent.removeMonitor(monitor) }
-            monitor = nil
-            super.removeFromSuperview()
+        func removeCtrlJKMonitor() {
+            if let eventMonitor { NSEvent.removeMonitor(eventMonitor) }
+            eventMonitor = nil
         }
     }
 }

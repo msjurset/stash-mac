@@ -322,13 +322,50 @@ final class StashStore {
         Task {
             isCheckRunning = true
             error = nil
+            checkResult = CheckResult()
             do {
-                checkResult = try await cli.check()
+                for try await event in cli.checkStream() {
+                    apply(event)
+                }
             } catch {
                 self.error = error.localizedDescription
             }
             isCheckRunning = false
         }
+    }
+
+    private func apply(_ event: CheckEvent) {
+        var result = checkResult ?? CheckResult()
+        switch event.type {
+        case "broken_url":
+            if let issue = event.issue {
+                var list = result.brokenUrls ?? []
+                list.append(issue)
+                result.brokenUrls = list
+            }
+        case "missing_file":
+            if let issue = event.issue {
+                var list = result.missingFiles ?? []
+                list.append(issue)
+                result.missingFiles = list
+            }
+        case "orphaned_file":
+            if let path = event.path {
+                var list = result.orphanedFiles ?? []
+                list.append(path)
+                result.orphanedFiles = list
+            }
+        case "duplicate_group":
+            if let group = event.group {
+                var list = result.duplicateHashes ?? []
+                list.append(group)
+                result.duplicateHashes = list
+            }
+        default:
+            // phase_start, progress, done — no accumulation needed.
+            break
+        }
+        checkResult = result
     }
 
     // MARK: - Saved Searches
@@ -613,6 +650,7 @@ final class StashStore {
             loadStats()
             return
         case .check:
+            selectedItemID = nil
             return
         case .dupes:
             loadDupes()

@@ -30,14 +30,19 @@ struct ArchiveContentsView: View {
             }
         }
         .task {
-            loadTree()
+            await loadTree()
         }
     }
 
-    private func loadTree() {
+    private func loadTree() async {
+        let url = fileURL
+        let mime = mimeType
         do {
-            let entries = try listArchive(url: fileURL, mimeType: mimeType)
-            tree = buildTree(from: entries)
+            let node = try await Task.detached(priority: .userInitiated) {
+                let entries = try listArchive(url: url, mimeType: mime)
+                return buildTree(from: entries)
+            }.value
+            tree = node
         } catch {
             loadError = "Could not read archive: \(error.localizedDescription)"
         }
@@ -117,7 +122,6 @@ private func extractTarString(_ data: Data, range: Range<Int>) -> String {
 }
 
 private func decompressGzip(_ data: Data) throws -> Data {
-    // Use Process with gzip -d for decompression
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/gunzip")
     process.arguments = ["-c"]
@@ -129,15 +133,22 @@ private func decompressGzip(_ data: Data) throws -> Data {
     process.standardError = FileHandle.nullDevice
 
     try process.run()
-    stdin.fileHandleForWriting.write(data)
-    stdin.fileHandleForWriting.closeFile()
+
+    // Write stdin concurrently so we can drain stdout in parallel.
+    // Without this, gunzip blocks on a full stdout pipe, stops consuming
+    // stdin, and the sync write deadlocks on a full stdin pipe.
+    DispatchQueue.global(qos: .userInitiated).async {
+        stdin.fileHandleForWriting.write(data)
+        stdin.fileHandleForWriting.closeFile()
+    }
+
+    let decompressed = stdout.fileHandleForReading.readDataToEndOfFile()
     process.waitUntilExit()
 
-    return stdout.fileHandleForReading.readDataToEndOfFile()
+    return decompressed
 }
 
 private func listZip(url: URL) throws -> [ArchiveEntry] {
-    // Use Process with zipinfo for listing
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/zipinfo")
     process.arguments = ["-1", url.path]
@@ -147,9 +158,12 @@ private func listZip(url: URL) throws -> [ArchiveEntry] {
     process.standardError = FileHandle.nullDevice
 
     try process.run()
+
+    // Drain stdout before waitUntilExit so a long listing can't fill the
+    // pipe buffer and deadlock the child.
+    let data = stdout.fileHandleForReading.readDataToEndOfFile()
     process.waitUntilExit()
 
-    let data = stdout.fileHandleForReading.readDataToEndOfFile()
     let output = String(data: data, encoding: .utf8) ?? ""
 
     return output.split(separator: "\n").map { line in

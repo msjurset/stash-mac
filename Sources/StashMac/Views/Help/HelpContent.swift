@@ -262,7 +262,8 @@ enum HelpTopic: String, CaseIterable, Identifiable {
                     "Orphaned files — files on disk not referenced by any item",
                     "Duplicate content — multiple items sharing identical file content",
                 ]),
-                .paragraph("Results are color-coded by severity. URL checks may take a moment as each link is tested."),
+                .paragraph("Results stream in progressively — each broken URL or missing file appears as soon as it's detected, so you don't have to wait for every URL to be tested before seeing findings. URL checks run in parallel, so a single slow or failing request no longer blocks the rest."),
+                .paragraph("Click any issue row to load that item in the detail pane on the right. Right-click for options to open the item or jump to it in All Items."),
             ]
 
         case .clipboard:

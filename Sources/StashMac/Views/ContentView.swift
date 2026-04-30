@@ -40,8 +40,10 @@ struct ContentView: View {
                         .frame(maxWidth: .infinity, minHeight: 200)
                 }
                 .frame(maxWidth: .infinity)
-            case .stats, .check:
+            case .stats:
                 EmptyView()
+            case .check:
+                DetailRouter(showEditSheet: $showEditSheet)
             case .dupes:
                 DetailRouter(showEditSheet: $showEditSheet)
             case .savedSearch:
@@ -92,6 +94,18 @@ struct ContentView: View {
             showQuickSearch = true
         }
         .frame(minWidth: 900, minHeight: 500)
+        .alert(
+            "Something went wrong",
+            isPresented: Binding(
+                get: { store.error != nil },
+                set: { if !$0 { store.error = nil } }
+            ),
+            presenting: store.error
+        ) { _ in
+            Button("OK", role: .cancel) { store.error = nil }
+        } message: { message in
+            Text(message)
+        }
     }
 
     private func handleDrop(_ providers: [NSItemProvider]) {
@@ -165,9 +179,11 @@ struct SearchKeyMonitor: NSViewRepresentable {
             monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
                 guard let self, let onSearch = self.onSearch else { return event }
 
-                // "/" without modifiers (and not in a text field)
+                // "/" without modifiers (and not in a text field). Check the
+                // event's own window so typing in sheets/popovers doesn't
+                // get hijacked when the main window has no focused field.
                 if event.charactersIgnoringModifiers == "/" && event.modifierFlags.intersection(.deviceIndependentFlagsMask) == [] {
-                    if !self.isTextFieldActive {
+                    if !Self.isTextFieldActive(for: event) {
                         DispatchQueue.main.async { onSearch() }
                         return nil // consume the event
                     }
@@ -191,8 +207,8 @@ struct SearchKeyMonitor: NSViewRepresentable {
             super.removeFromSuperview()
         }
 
-        private var isTextFieldActive: Bool {
-            guard let responder = window?.firstResponder else { return false }
+        private static func isTextFieldActive(for event: NSEvent) -> Bool {
+            let responder = event.window?.firstResponder ?? NSApp.keyWindow?.firstResponder
             return responder is NSTextView || responder is NSTextField
         }
     }

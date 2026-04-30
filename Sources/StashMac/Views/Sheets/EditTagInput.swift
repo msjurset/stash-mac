@@ -6,8 +6,8 @@ struct EditTagInput: View {
     let existingTags: [String]
     let onCommit: (String) -> Void
 
-    @State private var activeIndex = -1
-    @FocusState private var isFocused: Bool
+    @State private var activeIndex = 0
+    @State private var isEditing = false
 
     private var filtered: [StashTag] {
         let query = text.lowercased().trimmingCharacters(in: .whitespaces)
@@ -19,7 +19,7 @@ struct EditTagInput: View {
     }
 
     private var showSuggestions: Bool {
-        isFocused && !filtered.isEmpty
+        isEditing && !filtered.isEmpty
     }
 
     var body: some View {
@@ -29,42 +29,48 @@ struct EditTagInput: View {
                     Text("Add tag")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    TextField("", text: $text)
-                        .textFieldStyle(.roundedBorder)
-                        .focused($isFocused)
-                        .onChange(of: text) { _, _ in
-                            activeIndex = -1
-                        }
-                        .onSubmit {
-                            if activeIndex >= 0, activeIndex < filtered.count {
-                                onCommit(filtered[activeIndex].name)
-                            } else {
-                                onCommit(text)
+                    FilterField(
+                        placeholder: "",
+                        text: $text,
+                        isBordered: true,
+                        onSubmit: commitCurrent,
+                        onKey: { key in
+                            switch key {
+                            case .tab:
+                                if !showSuggestions { return false }
+                                if filtered.count == 1 {
+                                    text = filtered[0].name
+                                    return true
+                                }
+                                activeIndex = clamp(activeIndex + 1)
+                                return true
+                            case .shiftTab:
+                                if !showSuggestions { return false }
+                                activeIndex = clamp(activeIndex - 1)
+                                return true
+                            case .arrowDown:
+                                if !showSuggestions { return false }
+                                activeIndex = clamp(activeIndex + 1)
+                                return true
+                            case .arrowUp:
+                                if !showSuggestions { return false }
+                                activeIndex = clamp(activeIndex - 1)
+                                return true
+                            case .escape:
+                                text = ""
+                                return true
+                            default:
+                                return false
                             }
-                        }
-                        .onKeyPress(.downArrow) {
-                            if !filtered.isEmpty {
-                                activeIndex = min(activeIndex + 1, filtered.count - 1)
-                            }
-                            return .handled
-                        }
-                        .onKeyPress(.upArrow) {
-                            activeIndex = max(activeIndex - 1, -1)
-                            return .handled
-                        }
-                        .onKeyPress(.escape) {
-                            text = ""
-                            isFocused = false
-                            return .handled
-                        }
-                }
-                Button("Add") {
-                    if activeIndex >= 0, activeIndex < filtered.count {
-                        onCommit(filtered[activeIndex].name)
-                    } else {
-                        onCommit(text)
+                        },
+                        onBeginEditing: { isEditing = true },
+                        onEndEditing: { isEditing = false }
+                    )
+                    .onChange(of: text) { _, _ in
+                        activeIndex = 0
                     }
                 }
+                Button("Add", action: commitCurrent)
                 .disabled(text.trimmingCharacters(in: .whitespaces).isEmpty)
                 .padding(.top, 18)
             }
@@ -94,6 +100,28 @@ struct EditTagInput: View {
                 .shadow(radius: 4)
                 .padding(.top, 2)
             }
+        }
+    }
+
+    private func clamp(_ i: Int) -> Int {
+        let count = filtered.count
+        if count == 0 { return 0 }
+        return min(max(i, 0), count - 1)
+    }
+
+    /// If a suggestion is highlighted, commit it as a single tag. Otherwise
+    /// split the free-text on commas, trim each piece, and commit one tag
+    /// per non-empty piece — so `"bleep,blorp"` adds two tags.
+    private func commitCurrent() {
+        if showSuggestions, activeIndex < filtered.count {
+            onCommit(filtered[activeIndex].name)
+            return
+        }
+        let tags = text.split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        for tag in tags {
+            onCommit(tag)
         }
     }
 }

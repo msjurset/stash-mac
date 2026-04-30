@@ -213,9 +213,11 @@ struct SidebarView: View {
             Image(systemName: "line.3.horizontal.decrease")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
-            TextField("Filter", text: $tagFilter)
-                .textFieldStyle(.plain)
-                .font(.caption)
+            FilterField(
+                placeholder: "Filter",
+                text: $tagFilter,
+                font: .preferredFont(forTextStyle: .caption1)
+            )
             if !tagFilter.isEmpty {
                 Button {
                     tagFilter = ""

@@ -19,11 +19,14 @@ struct LinkItemSheet: View {
             Text("Link Item")
                 .font(.headline)
 
-            TextField("Search for target item...", text: $searchText)
-                .textFieldStyle(.roundedBorder)
-                .onChange(of: searchText) {
-                    performSearch()
-                }
+            FilterField(
+                placeholder: "Search for target item...",
+                text: $searchText,
+                isBordered: true
+            )
+            .onChange(of: searchText) {
+                performSearch()
+            }
 
             if !searchResults.isEmpty {
                 List(searchResults, selection: Binding(
@@ -50,8 +53,11 @@ struct LinkItemSheet: View {
                     .frame(height: 200)
             }
 
-            TextField("Label (optional)", text: $label)
-                .textFieldStyle(.roundedBorder)
+            FilterField(
+                placeholder: "Label (optional)",
+                text: $label,
+                isBordered: true
+            )
 
             Toggle("Directed link", isOn: $directed)
 

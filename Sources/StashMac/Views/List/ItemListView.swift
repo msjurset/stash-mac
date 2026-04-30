@@ -6,11 +6,9 @@ import SwiftUI
 @MainActor
 final class TagSuggestionState {
     var matches: [StashTag] = []
-    var activeIndex = -1
-    var justAccepted = false
-    var isNavigating = false
-    var onNavigate: ((QuickSearchView.Direction) -> Void)?
-    var onAccept: (() -> Void)?
+    var activeIndex = 0
+    /// Returns `true` if the event was consumed.
+    var onKey: ((SuggestKey) -> Bool)?
 }
 
 struct ItemListView: View {
@@ -18,7 +16,6 @@ struct ItemListView: View {
     @Binding var showEditSheet: Bool
 
     @State private var state = TagSuggestionState()
-    @FocusState private var searchFocused: Bool
 
     var body: some View {
         @Bindable var store = store
@@ -27,10 +24,11 @@ struct ItemListView: View {
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
-                TextField("Search items... (tag: to filter)", text: $store.searchQuery)
-                    .textFieldStyle(.plain)
-                    .focused($searchFocused)
-                    .onSubmit { store.refresh() }
+                FilterField(
+                    placeholder: "Search items... (tag: to filter)",
+                    text: $store.searchQuery,
+                    onSubmit: { store.refresh() }
+                )
                 if !store.searchQuery.isEmpty {
                     Button {
                         store.searchQuery = ""
@@ -54,7 +52,7 @@ struct ItemListView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(state.matches.enumerated()), id: \.element.id) { idx, tag in
                         Button {
-                            completeTag(tag.name)
+                            commitTag(tag.name)
                         } label: {
                             HStack {
                                 Image(systemName: "tag")
@@ -125,20 +123,14 @@ struct ItemListView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .onChange(of: store.searchQuery) { _, _ in
-            if state.isNavigating {
-                state.isNavigating = false
-                return
-            }
-            state.justAccepted = false
-            updateTagSuggestions()
+            recomputeSuggestions()
             if state.matches.isEmpty {
                 store.debouncedRefresh()
             }
         }
         .background(SearchFieldKeyMonitor(state: state))
         .onAppear {
-            state.onNavigate = { navigate($0) }
-            state.onAccept = { handleEnter() }
+            state.onKey = { handleKey($0) }
         }
         .overlay {
             if store.items.isEmpty && !store.isLoading && state.matches.isEmpty {
@@ -157,83 +149,171 @@ struct ItemListView: View {
         }
     }
 
-    // MARK: - Tag Suggestion Logic
+    // MARK: - Suggestion logic
 
-    private func updateTagSuggestions() {
-        state.activeIndex = -1
+    /// Recompute tag matches based on the current query. Sets `activeIndex = 0`
+    /// when matches exist (first item is always pre-highlighted, per the rule).
+    /// The tag token currently being edited (the last `tag:...` at the end of
+    /// the query) does NOT count as "used" — it should still suggest itself.
+    private func recomputeSuggestions() {
         let query = store.searchQuery
         guard let match = query.range(of: #"(?:^|\s)tag:(\S*)$"#, options: .regularExpression) else {
             state.matches = []
+            state.activeIndex = 0
             return
         }
         let token = query[match]
         guard let colonIdx = token.firstIndex(of: ":") else {
             state.matches = []
+            state.activeIndex = 0
             return
         }
         let partial = String(token[token.index(after: colonIdx)...]).lowercased()
 
-        let existing = Set(
+        // Already-committed tag tokens, excluding the one being edited at cursor.
+        var existing = Set(
             query.matches(of: /tag:(\S+)/).map { String($0.output.1).lowercased() }
         )
+        if !partial.isEmpty {
+            existing.remove(partial)
+        }
 
         state.matches = store.tags
             .filter { tag in
                 let lower = tag.name.lowercased()
-                return (partial.isEmpty || lower.contains(partial)) && !existing.contains(lower)
+                let matches = partial.isEmpty || lower.contains(partial)
+                return matches && !existing.contains(lower)
             }
             .prefix(8)
             .map { $0 }
+        state.activeIndex = 0
     }
 
-    private func navigate(_ direction: QuickSearchView.Direction) {
-        guard !state.matches.isEmpty else { return }
-        switch direction {
-        case .down:
-            state.activeIndex = state.activeIndex < 0 ? 0 : min(state.activeIndex + 1, state.matches.count - 1)
-        case .up:
-            state.activeIndex = max(state.activeIndex - 1, 0)
-        }
-        previewTag(state.matches[state.activeIndex].name)
-    }
+    /// Tab-opens-dropdown per the rule.
+    ///
+    /// If the cursor is inside a `tag:<partial>` token, `recomputeSuggestions`
+    /// has already populated matches — no-op here (the dropdown opens on its
+    /// own via the typing flow).
+    ///
+    /// Otherwise the cursor is inside a bare word (or empty). We treat it as a
+    /// *key* completion context: if the word is a prefix of the one known key
+    /// (`tag:`), replace the word with `tag:` — no trailing space — and let
+    /// the subsequent `onChange` recompute open the value dropdown.
+    private func openDropdownIfPossible() {
+        let query = store.searchQuery
 
-    private func handleEnter() {
-        if !state.matches.isEmpty {
-            let idx = state.activeIndex >= 0 ? state.activeIndex : 0
-            if idx < state.matches.count {
-                completeTag(state.matches[idx].name)
-            }
-            state.justAccepted = true
+        // Already in value context? recompute handles it; avoid rewriting.
+        if query.range(of: #"(?:^|\s)tag:\S*$"#, options: .regularExpression) != nil {
             return
         }
-        if state.justAccepted {
-            state.justAccepted = false
-            store.refresh()
+
+        // Figure out the current bare-word partial (the run of non-whitespace
+        // at the end of the query). Empty when the query is empty or ends in
+        // whitespace.
+        let partial: String
+        if let wsIdx = query.lastIndex(where: { $0.isWhitespace }) {
+            partial = String(query[query.index(after: wsIdx)...])
+        } else {
+            partial = query
         }
+
+        // Key completion: only one key exists. Commit it if the partial is a
+        // prefix; otherwise no candidates → silent no-op.
+        let key = "tag:"
+        guard key.hasPrefix(partial.lowercased()) else { return }
+
+        // Replace the partial with the key (no trailing space — chain into
+        // value completion).
+        let end = query.endIndex
+        let start = query.index(end, offsetBy: -partial.count)
+        var updated = query
+        updated.replaceSubrange(start..<end, with: key)
+        store.searchQuery = updated
     }
 
-    private func previewTag(_ tagName: String) {
-        guard let range = store.searchQuery.range(of: #"(?:^|\s)tag:\S*$"#, options: .regularExpression) else { return }
-        let query = store.searchQuery
-        let before = query[query.startIndex..<range.lowerBound]
-        let prefix = query[range].hasPrefix(" ") ? " " : ""
-        state.isNavigating = true
-        store.searchQuery = "\(before)\(prefix)tag:\(tagName)"
-    }
-
-    private func completeTag(_ tagName: String) {
+    /// Commit an accepted tag: replace `tag:<partial>` with `tag:<name> ` and
+    /// dismiss the dropdown. The trailing space lets the user keep typing.
+    private func commitTag(_ tagName: String) {
         guard let range = store.searchQuery.range(of: #"(?:^|\s)tag:\S*$"#, options: .regularExpression) else { return }
         let query = store.searchQuery
         let before = query[query.startIndex..<range.lowerBound]
         let prefix = query[range].hasPrefix(" ") ? " " : ""
         store.searchQuery = "\(before)\(prefix)tag:\(tagName) "
         state.matches = []
+        state.activeIndex = 0
         store.debouncedRefresh()
+    }
+
+    /// Tab-with-single-item: insert the sole match into the field WITHOUT a
+    /// trailing space, and keep the dropdown open. Recompute so the dropdown
+    /// reflects the new cursor position (it will narrow to match itself).
+    private func tabInsertSingle(_ tagName: String) {
+        guard let range = store.searchQuery.range(of: #"(?:^|\s)tag:\S*$"#, options: .regularExpression) else { return }
+        let query = store.searchQuery
+        let before = query[query.startIndex..<range.lowerBound]
+        let prefix = query[range].hasPrefix(" ") ? " " : ""
+        store.searchQuery = "\(before)\(prefix)tag:\(tagName)"
+        // recomputeSuggestions runs via onChange; activeIndex resets to 0.
+    }
+
+    private func handleKey(_ key: SuggestKey) -> Bool {
+        switch key {
+        case .tab, .shiftTab:
+            if state.matches.isEmpty {
+                openDropdownIfPossible()
+                return true
+            }
+            if state.matches.count == 1 {
+                tabInsertSingle(state.matches[0].name)
+                return true
+            }
+            advance(key == .tab ? .down : .up)
+            return true
+        case .arrowDown, .ctrlJ:
+            if state.matches.isEmpty { return false }
+            advance(.down)
+            return true
+        case .arrowUp, .ctrlK:
+            if state.matches.isEmpty { return false }
+            advance(.up)
+            return true
+        case .enter:
+            if !state.matches.isEmpty {
+                let idx = max(state.activeIndex, 0)
+                if idx < state.matches.count {
+                    commitTag(state.matches[idx].name)
+                }
+                return true
+            }
+            return false  // fall through to TextField.onSubmit
+        case .escape:
+            if !state.matches.isEmpty {
+                state.matches = []
+                state.activeIndex = 0
+                return true
+            }
+            if !store.searchQuery.isEmpty {
+                store.searchQuery = ""
+                store.refresh()
+                return true
+            }
+            return false
+        }
+    }
+
+    private enum Direction { case up, down }
+
+    private func advance(_ direction: Direction) {
+        guard !state.matches.isEmpty else { return }
+        switch direction {
+        case .down: state.activeIndex = min(state.activeIndex + 1, state.matches.count - 1)
+        case .up:   state.activeIndex = max(state.activeIndex - 1, 0)
+        }
     }
 }
 
-/// Intercepts Tab, Ctrl-J/K, arrows, and Enter in the search field.
-/// Reads from the shared TagSuggestionState reference (always current).
+/// Intercepts Tab, Shift-Tab, Ctrl-J/K, arrows, Enter, and Escape in the
+/// search field and routes them through the shared `TagSuggestionState`.
 struct SearchFieldKeyMonitor: NSViewRepresentable {
     let state: TagSuggestionState
 
@@ -254,41 +334,29 @@ struct SearchFieldKeyMonitor: NSViewRepresentable {
             guard monitor == nil else { return }
             monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
                 guard let self, let state = self.state else { return event }
-
                 guard self.window?.firstResponder is NSTextView else { return event }
 
                 let ctrl = event.modifierFlags.contains(.control)
+                let shift = event.modifierFlags.contains(.shift)
                 let char = event.charactersIgnoringModifiers
                 let keyCode = event.keyCode
 
-                let hasSuggestions = MainActor.assumeIsolated { !state.matches.isEmpty }
-                let justAccepted = MainActor.assumeIsolated { state.justAccepted }
-
-                if hasSuggestions {
-                    if keyCode == 48 && !ctrl {
-                        MainActor.assumeIsolated { state.onNavigate?(.down) }
-                        return nil
-                    }
-                    if (ctrl && char == "j") || keyCode == 125 {
-                        MainActor.assumeIsolated { state.onNavigate?(.down) }
-                        return nil
-                    }
-                    if (ctrl && char == "k") || keyCode == 126 {
-                        MainActor.assumeIsolated { state.onNavigate?(.up) }
-                        return nil
-                    }
-                    if keyCode == 36 {
-                        MainActor.assumeIsolated { state.onAccept?() }
-                        return nil
-                    }
+                let key: SuggestKey?
+                switch keyCode {
+                case 48:  key = shift ? .shiftTab : .tab            // Tab
+                case 125: key = .arrowDown                          // ↓
+                case 126: key = .arrowUp                            // ↑
+                case 36:  key = .enter                              // Return
+                case 53:  key = .escape                             // Esc
+                default:
+                    if ctrl && char == "j" { key = .ctrlJ }
+                    else if ctrl && char == "k" { key = .ctrlK }
+                    else { key = nil }
                 }
 
-                if keyCode == 36 && justAccepted {
-                    MainActor.assumeIsolated { state.onAccept?() }
-                    return nil
-                }
-
-                return event
+                guard let key else { return event }
+                let consumed = MainActor.assumeIsolated { state.onKey?(key) ?? false }
+                return consumed ? nil : event
             }
         }
 
