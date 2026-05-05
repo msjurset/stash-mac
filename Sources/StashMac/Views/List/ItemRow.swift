@@ -30,7 +30,12 @@ struct ItemRow: View {
                             .background(.blue.opacity(0.15), in: RoundedRectangle(cornerRadius: 3))
                             .foregroundStyle(.blue)
                     }
-                    if let tags = item.tags, !tags.isEmpty {
+                    if item.type == .email, let from = item.fromName {
+                        Text(from)
+                            .lineLimit(1)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else if let tags = item.tags, !tags.isEmpty {
                         Text(tags.map { "#\($0.name)" }.joined(separator: " "))
                             .kerning(0.5)
                             .font(.caption)

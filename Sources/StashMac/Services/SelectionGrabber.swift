@@ -162,6 +162,7 @@ final class SelectionGrabber {
                 try? FileManager.default.removeItem(at: tempURL)
                 await MainActor.run {
                     self.status = "Stashed!"
+                    NotificationCenter.default.post(name: .stashDidIngest, object: nil)
                 }
             } catch {
                 try? FileManager.default.removeItem(at: tempURL)
@@ -184,6 +185,7 @@ final class SelectionGrabber {
                 await MainActor.run {
                     self.status = "Stashed!"
                     self.log("CLI success")
+                    NotificationCenter.default.post(name: .stashDidIngest, object: nil)
                 }
             } catch {
                 await MainActor.run { [weak self] in

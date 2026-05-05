@@ -7,7 +7,8 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "StashMac",
-            path: "Sources/StashMac"
+            path: "Sources/StashMac",
+            resources: [.process("Resources")]
         ),
         .testTarget(
             name: "StashMacTests",

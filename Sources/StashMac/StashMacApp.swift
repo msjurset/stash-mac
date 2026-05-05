@@ -1,7 +1,22 @@
+import AppKit
 import SwiftUI
+import UserNotifications
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    private let servicesProvider = ServicesProvider()
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.servicesProvider = servicesProvider
+        NSUpdateDynamicServices()
+        UNUserNotificationCenter.current().requestAuthorization(
+            options: [.alert, .sound]
+        ) { _, _ in }
+    }
+}
 
 @main
 struct StashMacApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var store = StashStore()
     @State private var clipboardMonitor = ClipboardMonitor()
     @State private var selectionGrabber = SelectionGrabber()
@@ -27,7 +42,7 @@ struct StashMacApp: App {
         }
         .defaultSize(width: 800, height: 550)
 
-        MenuBarExtra("Stash", systemImage: clipboardMonitor.isWatching ? "tray.full.fill" : "tray") {
+        MenuBarExtra("Stash", image: clipboardMonitor.isWatching ? "MenuBarIcon" : "MenuBarIconIdle") {
             ClipboardMenuView()
                 .environment(clipboardMonitor)
                 .environment(selectionGrabber)

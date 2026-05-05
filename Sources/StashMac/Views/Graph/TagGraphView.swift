@@ -7,6 +7,8 @@ struct TagGraphView: View {
     @State private var dragOffset: CGSize = .zero
     @State private var canvasScale: CGFloat = 1.0
     @State private var draggedNodeIndex: Int?
+    @State private var lastMagnification: CGFloat = 1.0
+    @GestureState private var isMagnifying: Bool = false
 
     var body: some View {
         GeometryReader { geo in
@@ -50,6 +52,13 @@ struct TagGraphView: View {
             .background(Color(nsColor: .controlBackgroundColor))
             .gesture(dragGesture(in: geo.size))
             .gesture(magnifyGesture)
+            .onChange(of: isMagnifying) { _, active in
+                // @GestureState auto-flips back to false when the gesture
+                // ends OR is cancelled. Reset our delta accumulator so the
+                // next gesture's first tick computes a delta near 1.0
+                // instead of a bogus jump from a stale value.
+                if !active { lastMagnification = 1.0 }
+            }
             .onTapGesture { location in
                 handleTap(at: location, in: geo.size)
             }
@@ -114,9 +123,31 @@ struct TagGraphView: View {
 
     private var magnifyGesture: some Gesture {
         MagnifyGesture()
+            .updating($isMagnifying) { _, state, _ in state = true }
             .onChanged { value in
-                canvasScale = max(0.3, min(3.0, value.magnification))
+                // MagnifyGesture.magnification is cumulative-from-gesture-start
+                // (1.0 at start). Convert to a per-tick delta so each onChanged
+                // applies an incremental zoom around the pinch start point.
+                let delta = value.magnification / lastMagnification
+                lastMagnification = value.magnification
+                applyZoom(by: delta, anchor: value.startLocation)
             }
+            .onEnded { _ in
+                lastMagnification = 1.0
+            }
+    }
+
+    /// Multiplicatively scale the canvas by `delta` while keeping the world
+    /// point under `anchor` (in view coordinates) fixed on screen. Adjusts
+    /// `canvasOffset` so the zoom feels anchored to the cursor.
+    private func applyZoom(by delta: CGFloat, anchor: CGPoint) {
+        let oldScale = canvasScale
+        let newScale = max(0.3, min(3.0, oldScale * delta))
+        guard newScale != oldScale else { return }
+        let k = newScale / oldScale
+        canvasOffset.width = anchor.x - (anchor.x - canvasOffset.width) * k
+        canvasOffset.height = anchor.y - (anchor.y - canvasOffset.height) * k
+        canvasScale = newScale
     }
 
     private func handleTap(at location: CGPoint, in size: CGSize) {

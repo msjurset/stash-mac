@@ -11,6 +11,11 @@ bundle: build icon
 	command cp .build/release/StashMac $(BUNDLE)/Contents/MacOS/$(APP_NAME)
 	command cp AppIcon.icns $(BUNDLE)/Contents/Resources/AppIcon.icns
 	command cp Info.plist $(BUNDLE)/Contents/Info.plist
+	xcrun actool Sources/StashMac/Resources/Assets.xcassets \
+		--compile $(BUNDLE)/Contents/Resources \
+		--platform macosx \
+		--minimum-deployment-target 15.0 \
+		--output-format human-readable-text >/dev/null
 	@if security find-identity -v -p codesigning 2>/dev/null | grep -q "$(SIGN_IDENTITY)"; then \
 		codesign --force --sign "$(SIGN_IDENTITY)" $(BUNDLE); \
 		echo "Signed with $(SIGN_IDENTITY)"; \
@@ -47,6 +52,7 @@ deploy: bundle
 		-e 'set iconImage to current application'\''s NSImage'\''s alloc()'\''s initWithContentsOfFile:"$(INSTALL_DIR)/$(BUNDLE)/Contents/Resources/AppIcon.icns"' \
 		-e 'current application'\''s NSWorkspace'\''s sharedWorkspace()'\''s setIcon:iconImage forFile:"$(INSTALL_DIR)/$(BUNDLE)" options:0'
 	@killall Dock 2>/dev/null || true
+	@/System/Library/CoreServices/pbs -update 2>/dev/null || true
 	@echo "Deployed to $(INSTALL_DIR)/$(BUNDLE)"
 	open $(INSTALL_DIR)/$(BUNDLE)
 

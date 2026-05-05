@@ -38,6 +38,25 @@ struct StashItem: Codable, Identifiable, Hashable {
         metadata?["language"]
     }
 
+    /// For email items, the sender's display name (or address if no name was
+    /// supplied) parsed from the "From:" line at the top of `extractedText`.
+    var fromName: String? {
+        guard type == .email, let text = extractedText else { return nil }
+        for raw in text.split(separator: "\n", omittingEmptySubsequences: false).prefix(20) {
+            let line = String(raw)
+            guard line.hasPrefix("From: ") else { continue }
+            let value = String(line.dropFirst(6)).trimmingCharacters(in: .whitespaces)
+            if let lt = value.firstIndex(of: "<"), lt > value.startIndex {
+                let name = value[..<lt]
+                    .trimmingCharacters(in: .whitespaces)
+                    .trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+                if !name.isEmpty { return name }
+            }
+            return value.isEmpty ? nil : value
+        }
+        return nil
+    }
+
     var humanFileSize: String? {
         guard let size = fileSize, size > 0 else { return nil }
         let units = ["B", "KB", "MB", "GB"]

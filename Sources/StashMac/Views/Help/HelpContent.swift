@@ -23,6 +23,7 @@ enum HelpTopic: String, CaseIterable, Identifiable {
     case duplicates = "Duplicates"
     case statsAndCheck = "Stats & Health Check"
     case clipboard = "Clipboard Quick-Stash"
+    case services = "System Services"
     case keyboard = "Keyboard Shortcuts"
 
     var id: String { rawValue }
@@ -41,6 +42,7 @@ enum HelpTopic: String, CaseIterable, Identifiable {
         case .duplicates: return "doc.on.doc"
         case .statsAndCheck: return "chart.bar"
         case .clipboard: return "doc.on.clipboard"
+        case .services: return "square.and.arrow.down.on.square"
         case .keyboard: return "keyboard"
         }
     }
@@ -285,6 +287,26 @@ enum HelpTopic: String, CaseIterable, Identifiable {
                     "Quit — exit the app entirely (not just close the window)",
                 ]),
                 .paragraph("The menubar icon changes to a filled tray when clipboard watching is active. Only HTTP and HTTPS URLs are detected — other clipboard content is ignored."),
+            ]
+
+        case .services:
+            return [
+                .paragraph("Stash registers a system Service so you can stash content from any app without switching windows. Look for \"Stash Selection\" under the right-click menu's Services submenu, or under the app menu > Services."),
+                .heading("What You Can Stash"),
+                .bullet([
+                    "Selected text in any app — saved as a snippet, titled with the source app name",
+                    "Selected files in Finder — each file added to your stash",
+                    "Email body text in Mail — selected text becomes a snippet (Mail does not expose the whole message to Services, only the highlighted text)",
+                ]),
+                .heading("Bind a Keyboard Shortcut"),
+                .numbered([
+                    "Open System Settings > Keyboard > Keyboard Shortcuts > Services",
+                    "Find \"Stash Selection\" under Text or Files",
+                    "Click \"none\" and press your shortcut (e.g. ⌃⌥⌘S)",
+                ]),
+                .paragraph("After deploying, the service may take a moment (or one logout/login) to appear. The deploy step runs `pbs -update` to refresh the system's Services index."),
+                .heading("Where to Find Output"),
+                .paragraph("Stashed items show up in your stash like any other entry. Notifications confirm success or report errors; logs are written to /tmp/stash-services.log for troubleshooting."),
             ]
 
         case .keyboard:

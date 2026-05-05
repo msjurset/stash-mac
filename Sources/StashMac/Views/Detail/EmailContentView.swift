@@ -50,41 +50,49 @@ struct EmailContentView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 6))
             }
 
-            // Body with hyperlinks
+            // Body with hyperlinks and markdown (bullets, headings, etc.)
             if !message.body.isEmpty {
-                bodyView(message.body)
+                MarkdownText(unwrapBodyLinks(message.body), isSelectable: true)
                     .padding(10)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(.quaternary)
                     .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .environment(\.openURL, OpenURLAction { url in
+                        NSWorkspace.shared.open(unwrapURL(url))
+                        return .handled
+                    })
             }
         }
     }
 
-    @ViewBuilder
-    private func bodyView(_ text: String) -> some View {
-        Text(attributedBody(text))
-            .font(.body)
-            .lineSpacing(4)
-            .textSelection(.enabled)
-            .environment(\.openURL, OpenURLAction { url in
-                NSWorkspace.shared.open(url)
-                return .handled
-            })
-    }
-
-    private func attributedBody(_ text: String) -> AttributedString {
-        var result = AttributedString()
-        for part in parseBodyParts(text) {
-            switch part {
-            case .text(let str):
-                result += AttributedString(str)
-            case .link(let label, let url):
-                var chunk = AttributedString(label)
-                chunk.link = url
-                chunk.foregroundColor = .accentColor
-                result += chunk
+    /// Rewrites SafeLinks / Google-redirect URLs in the body text in-place so
+    /// the rendered markdown shows the real destination. Markdown link bodies
+    /// `[label](url)` and bare `https://…` URLs are both handled.
+    private func unwrapBodyLinks(_ text: String) -> String {
+        let pattern = #"https?://[^\s)<>\]]+"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            return text
+        }
+        let nsText = text as NSString
+        let matches = regex.matches(in: text, range: NSRange(location: 0, length: nsText.length))
+        var result = ""
+        var lastEnd = 0
+        for match in matches {
+            let range = match.range
+            if range.location > lastEnd {
+                result += nsText.substring(with: NSRange(location: lastEnd, length: range.location - lastEnd))
             }
+            let urlStr = nsText.substring(with: range)
+            if let url = URL(string: urlStr) {
+                let unwrapped = unwrapURL(url)
+                result += unwrapped.absoluteString
+            } else {
+                result += urlStr
+            }
+            lastEnd = range.location + range.length
+        }
+        if lastEnd < nsText.length {
+            result += nsText.substring(from: lastEnd)
         }
         return result
     }
@@ -95,11 +103,6 @@ struct EmailContentView: View {
 private struct EmailMessage {
     var headers: [(label: String, value: String)]
     var body: String
-}
-
-private enum BodyPart {
-    case text(String)
-    case link(label: String, url: URL)
 }
 
 /// Ensure known header keywords always start on their own line. Older CLI
@@ -178,65 +181,6 @@ private func isStartOfNewHeaderBlock(_ line: String, previous: [String]) -> Bool
     return !trimmed.isEmpty
 }
 
-/// Parse body text into segments of plain text and clickable hyperlinks.
-/// Matches (in priority order): markdown links `[label](url)`, URLs in
-/// parentheses `(https://...)`, angle brackets `<https://...>`, or bare
-/// `https://...`. Surrounding text is emitted as-is.
-private func parseBodyParts(_ text: String) -> [BodyPart] {
-    let urlPattern = try! NSRegularExpression(
-        pattern: #"\[([^\]]+)\]\((https?://[^\s)]+)\)|\((https?://[^\s)]+)\)|<(https?://[^\s>]+)>|(https?://[^\s)<>]+)"#
-    )
-
-    let nsText = text as NSString
-    let fullRange = NSRange(location: 0, length: nsText.length)
-    var parts: [BodyPart] = []
-    var lastEnd = 0
-
-    for match in urlPattern.matches(in: text, range: fullRange) {
-        let matchRange = match.range
-
-        if matchRange.location > lastEnd {
-            let before = nsText.substring(with: NSRange(location: lastEnd, length: matchRange.location - lastEnd))
-            parts.append(.text(before))
-        }
-
-        // Group 1+2: markdown link [label](url) — use label as display text
-        if match.range(at: 1).location != NSNotFound,
-           match.range(at: 2).location != NSNotFound {
-            let label = nsText.substring(with: match.range(at: 1))
-            let urlStr = nsText.substring(with: match.range(at: 2))
-            if let url = URL(string: urlStr) {
-                parts.append(.link(label: label, url: url))
-            } else {
-                parts.append(.text(nsText.substring(with: matchRange)))
-            }
-        } else {
-            let urlStr: String
-            if match.range(at: 3).location != NSNotFound {
-                urlStr = nsText.substring(with: match.range(at: 3))
-            } else if match.range(at: 4).location != NSNotFound {
-                urlStr = nsText.substring(with: match.range(at: 4))
-            } else {
-                urlStr = nsText.substring(with: match.range(at: 5))
-            }
-
-            if let url = URL(string: urlStr) {
-                parts.append(.link(label: linkLabel(for: url), url: url))
-            } else {
-                parts.append(.text(nsText.substring(with: matchRange)))
-            }
-        }
-
-        lastEnd = matchRange.location + matchRange.length
-    }
-
-    if lastEnd < nsText.length {
-        parts.append(.text(nsText.substring(from: lastEnd)))
-    }
-
-    return parts.isEmpty ? [.text(text)] : parts
-}
-
 /// Unwrap SafeLinks/redirect URLs to get the real destination.
 private func unwrapURL(_ url: URL) -> URL {
     // Outlook SafeLinks: https://nam10.safelinks.protection.outlook.com/?url=https%3A%2F%2F...
@@ -256,13 +200,3 @@ private func unwrapURL(_ url: URL) -> URL {
     return url
 }
 
-/// Generate a short readable label for a URL.
-private func linkLabel(for url: URL) -> String {
-    let resolved = unwrapURL(url)
-    // Use the last meaningful path component if available
-    let pathParts = resolved.path.split(separator: "/").filter { $0 != "index.html" }
-    if let last = pathParts.last, !last.isEmpty {
-        return String(last)
-    }
-    return resolved.host ?? resolved.absoluteString
-}

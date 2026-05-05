@@ -61,8 +61,19 @@ final class StashStore {
     private let cli = StashCLI.shared
     private var searchTask: Task<Void, Never>?
     private var suppressNavigationChange = false
+    private var ingestObserver: NSObjectProtocol?
 
     var fetchedItem: StashItem?
+
+    init() {
+        ingestObserver = NotificationCenter.default.addObserver(
+            forName: .stashDidIngest,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.loadAll() }
+        }
+    }
 
     var selectedItem: StashItem? {
         guard let id = selectedItemID else { return nil }
@@ -76,11 +87,12 @@ final class StashStore {
             isLoading = true
             error = nil
             do {
-                items = try await cli.listItems(limit: 100)
+                items = try await fetchFilteredItems()
                 tags = try await cli.listTags()
                 collections = try await cli.listCollections()
                 tagGraphData = try await cli.tagGraph()
                 savedSearches = try await cli.listSavedSearches()
+                applySortMode()
                 // Mark all existing items as seen on first load
                 if !UserDefaults.standard.bool(forKey: "initialSeenDone2") {
                     let allItems = try await cli.listItems(limit: 100000)
@@ -112,38 +124,44 @@ final class StashStore {
             isLoading = true
             error = nil
             do {
-                // Parse tag: tokens from the search query and merge with sidebar filter tags
-                var allTags = Array(filterTags)
-                var textQuery = searchQuery
-
-                if !searchQuery.isEmpty {
-                    let pattern = /tag:(\S+)/
-                    let inlineMatches = searchQuery.matches(of: pattern)
-                    allTags += inlineMatches.map { String($0.output.1) }
-                    textQuery = searchQuery.replacing(/tag:\S*/, with: "").trimmingCharacters(in: .whitespaces)
-                }
-
-                if textQuery.isEmpty {
-                    items = try await cli.listItems(
-                        type: filterType,
-                        tags: allTags,
-                        collection: filterCollection,
-                        limit: 100
-                    )
-                } else {
-                    items = try await cli.searchItems(
-                        query: textQuery,
-                        type: filterType,
-                        tags: allTags,
-                        limit: 100
-                    )
-                }
+                items = try await fetchFilteredItems()
                 applySortMode()
             } catch {
                 self.error = error.localizedDescription
             }
             isLoading = false
         }
+    }
+
+    /// Fetch items honoring the current sidebar filters and search query.
+    /// Inline `tag:foo` tokens in the search box are extracted and merged with
+    /// the sidebar tag filter. Used by both `refresh()` (items only) and
+    /// `loadAll()` (items + tags/collections/saved-searches/graph).
+    private func fetchFilteredItems() async throws -> [StashItem] {
+        var allTags = Array(filterTags)
+        var textQuery = searchQuery
+
+        if !searchQuery.isEmpty {
+            let pattern = /tag:(\S+)/
+            let inlineMatches = searchQuery.matches(of: pattern)
+            allTags += inlineMatches.map { String($0.output.1) }
+            textQuery = searchQuery.replacing(/tag:\S*/, with: "").trimmingCharacters(in: .whitespaces)
+        }
+
+        if textQuery.isEmpty {
+            return try await cli.listItems(
+                type: filterType,
+                tags: allTags,
+                collection: filterCollection,
+                limit: 100
+            )
+        }
+        return try await cli.searchItems(
+            query: textQuery,
+            type: filterType,
+            tags: allTags,
+            limit: 100
+        )
     }
 
     private func applySortMode() {

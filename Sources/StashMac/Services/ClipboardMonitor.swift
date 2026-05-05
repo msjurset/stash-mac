@@ -50,6 +50,7 @@ final class ClipboardMonitor {
                 if recentStashes.count > 10 {
                     recentStashes = Array(recentStashes.prefix(10))
                 }
+                NotificationCenter.default.post(name: .stashDidIngest, object: nil)
             } catch {
                 // Put it back on failure
                 pendingURLs.insert(pending, at: 0)
@@ -66,6 +67,7 @@ final class ClipboardMonitor {
                     let item = try await cli.addURL(url: pending.url)
                     let stash = QuickStash(url: pending.url, title: item.title, date: Date())
                     recentStashes.insert(stash, at: 0)
+                    NotificationCenter.default.post(name: .stashDidIngest, object: nil)
                 } catch {}
             }
         }
