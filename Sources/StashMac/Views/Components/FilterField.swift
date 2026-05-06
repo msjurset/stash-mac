@@ -40,6 +40,13 @@ struct FilterField: NSViewRepresentable {
         field.focusRingType = .none
         field.delegate = context.coordinator
         field.stringValue = text
+        // Route the field's "I just became first responder" event through
+        // the coordinator so callers' `onBeginEditing` fires on click-in
+        // (focus arrival) — not just on the first text edit, which is
+        // when NSText's `controlTextDidBeginEditing` would fire.
+        field.onFocusReceived = { [weak coord = context.coordinator] in
+            coord?.handleFocusReceived()
+        }
         if autoFocus {
             DispatchQueue.main.async { field.window?.makeFirstResponder(field) }
         }
@@ -74,6 +81,19 @@ struct FilterField: NSViewRepresentable {
         }
 
         func controlTextDidBeginEditing(_ obj: Notification) {
+            // Fires on the first edit (typing), not on click-in. The
+            // focus-on-arrival path (`handleFocusReceived`) is what most
+            // callers want. Keep this notification too for compatibility
+            // with any caller that genuinely wants "started editing".
+            parent.onBeginEditing?()
+        }
+
+        /// Called by `NoAutoFillTextField.becomeFirstResponder` so that
+        /// `onBeginEditing` fires on focus arrival (click-in / programmatic
+        /// focus), not just on the first edit. SwiftUI popover-on-focus
+        /// patterns depend on this — `controlTextDidBeginEditing` is too
+        /// late.
+        func handleFocusReceived() {
             parent.onBeginEditing?()
         }
 
@@ -106,14 +126,36 @@ struct FilterField: NSViewRepresentable {
 
 /// `NSTextField` subclass that suppresses AppKit's autofill/autocomplete
 /// popup and every other "helpful" automatic text feature on its field
-/// editor. All eight flags must be disabled, and they have to be
-/// re-disabled in three lifecycle points — the field editor is
-/// re-initialized across responder transitions and restores defaults
-/// each time.
+/// editor. All eight legacy auto-* flags must be disabled, plus the macOS
+/// 14 inline-prediction trait and the macOS 15 Writing Tools traits, and
+/// they have to be re-disabled in *four* lifecycle points — the field
+/// editor is re-initialized across responder transitions and restores
+/// defaults each time. The cell-level hook (layer 4) is the only place
+/// early enough to suppress the popup on first focus per session.
 final class NoAutoFillTextField: NSTextField {
+    /// Fires when the field actually becomes first responder (i.e. on
+    /// click into / programmatic focus), as opposed to NSText's
+    /// `controlTextDidBeginEditing` which only fires on the first edit
+    /// operation. Used by the popover-on-focus pattern in InlineEditField
+    /// and the regex-guide trigger.
+    var onFocusReceived: (() -> Void)?
+
+    /// Force the cell to be our subclass so the cell-level
+    /// `setUpFieldEditorAttributes` override gets installed. Without this
+    /// override AppKit hands the field its default `NSTextFieldCell` and
+    /// the popup appears on the first focus per session before any of the
+    /// instance-level lifecycle hooks fire.
+    override class var cellClass: AnyClass? {
+        get { NoAutoFillTextFieldCell.self }
+        set {}
+    }
+
     override func becomeFirstResponder() -> Bool {
         let ok = super.becomeFirstResponder()
-        if ok { Self.disableAutoFeatures(on: currentEditor() as? NSTextView) }
+        if ok {
+            Self.disableAutoFeatures(on: currentEditor() as? NSTextView)
+            onFocusReceived?()
+        }
         return ok
     }
 
@@ -138,5 +180,36 @@ final class NoAutoFillTextField: NSTextField {
         tv.isAutomaticDashSubstitutionEnabled = false
         tv.isAutomaticDataDetectionEnabled = false
         tv.isAutomaticLinkDetectionEnabled = false
+        // macOS 14 added an inline-prediction surface that renders as the
+        // empty rounded ghost popup beneath the field on focus. None of
+        // the legacy auto-* flags affect it.
+        if #available(macOS 14.0, *) {
+            tv.inlinePredictionType = .no
+        }
+        // macOS 15 routes predictive text through Apple Intelligence
+        // Writing Tools — the popup reappears here unless we explicitly
+        // opt out at the per-editor level.
+        if #available(macOS 15.0, *) {
+            tv.writingToolsBehavior = .none
+            tv.allowedWritingToolsResultOptions = []
+        }
+    }
+}
+
+/// Cell that disables predictions on the field editor *before* it begins
+/// taking input. The instance-level lifecycle hooks (`becomeFirstResponder`,
+/// `textDidBeginEditing`, etc.) fire AFTER `super.becomeFirstResponder()`,
+/// but on Sequoia the inline-prediction popup is scheduled inside that
+/// super call — by the time the hooks run, the popup has already been laid
+/// out once. `setUpFieldEditorAttributes` runs earlier, before AppKit
+/// attaches the editor for input, which is the only point that suppresses
+/// the popup on first focus per session.
+final class NoAutoFillTextFieldCell: NSTextFieldCell {
+    override func setUpFieldEditorAttributes(_ textObj: NSText) -> NSText {
+        let configured = super.setUpFieldEditorAttributes(textObj)
+        if let editor = configured as? NSTextView {
+            NoAutoFillTextField.disableAutoFeatures(on: editor)
+        }
+        return configured
     }
 }

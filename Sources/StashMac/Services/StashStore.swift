@@ -51,6 +51,31 @@ final class StashStore {
             }
         }
     }
+    /// Rules loaded from the CLI. Populated lazily by `loadRules()`; the
+    /// rules sidebar entry kicks off the first load. Both `RulesView` (the
+    /// list) and `RuleDetailView` (the form) read from this.
+    var rules: [Rule] = []
+    var rulesLoading = false
+    var rulesError: String?
+    /// Currently selected rule. Drives `RuleDetailView`. `__new__` is a
+    /// sentinel for an unsaved draft created via the "+" button — the
+    /// detail pane shows a blank form bound to `draftRule`.
+    var selectedRuleName: String?
+    /// Working copy for an unsaved new rule. Created when the user clicks
+    /// "+" in the rules list. Discarded if the user navigates away
+    /// without saving.
+    var draftRule: Rule?
+
+    /// Rule activity events loaded from `stash rules log --json`. The
+    /// activity view triggers loads with the current filter set and the
+    /// store re-reads on `.stashDidIngest` so newly-fired events appear
+    /// without manual refresh.
+    var ruleEvents: [RuleEvent] = []
+    var ruleEventsLoading = false
+    var ruleEventsError: String?
+    /// Stable id of the selected event in `RuleActivityView`, used to
+    /// drive `RuleActivityDetailView` in the right column.
+    var selectedRuleEventID: String?
     var isLoading = false
     var error: String?
     var flashMessage: String?
@@ -319,6 +344,128 @@ final class StashStore {
                 loadAll()
             } catch {
                 self.error = error.localizedDescription
+            }
+        }
+    }
+
+    // MARK: - Rules
+
+    func loadRules() {
+        Task {
+            rulesLoading = true
+            defer { rulesLoading = false }
+            do {
+                rules = try await cli.listRules()
+                rulesError = nil
+            } catch {
+                rulesError = error.localizedDescription
+            }
+        }
+    }
+
+    /// Begin a new-rule draft. Sets `draftRule` to a blank Rule and
+    /// selects it via the `__new__` sentinel so the detail pane shows the
+    /// form. The draft persists across selection changes until saved or
+    /// discarded.
+    func startNewRuleDraft() {
+        let blank = Rule(
+            name: "",
+            enabled: nil,
+            match: RuleMatch(),
+            actions: [RuleAction()]
+        )
+        draftRule = blank
+        selectedRuleName = "__new__"
+    }
+
+    func discardDraft() {
+        draftRule = nil
+        if selectedRuleName == "__new__" {
+            selectedRuleName = nil
+        }
+    }
+
+    func saveRule(_ rule: Rule) {
+        Task {
+            do {
+                try await cli.saveRule(rule)
+                rules = try await cli.listRules()
+                draftRule = nil
+                selectedRuleName = rule.name
+                rulesError = nil
+            } catch {
+                rulesError = "Failed to save \(rule.name): \(error.localizedDescription)"
+            }
+        }
+    }
+
+    func deleteRule(name: String) {
+        Task {
+            do {
+                try await cli.removeRule(name: name)
+                rules = try await cli.listRules()
+                if selectedRuleName == name { selectedRuleName = nil }
+                rulesError = nil
+            } catch {
+                rulesError = "Failed to delete \(name): \(error.localizedDescription)"
+            }
+        }
+    }
+
+    /// Rename a rule. Re-selects the renamed rule and refreshes the
+    /// activity feed so per-rule history stays attached after the log
+    /// rewrite. Errors land in `rulesError`.
+    func renameRule(oldName: String, newName: String) {
+        Task {
+            do {
+                try await cli.renameRule(oldName: oldName, newName: newName)
+                rules = try await cli.listRules()
+                if selectedRuleName == oldName {
+                    selectedRuleName = newName
+                }
+                // Reload activity so any open feed picks up the rewritten
+                // rule names.
+                loadRuleEvents()
+                rulesError = nil
+            } catch {
+                rulesError = "Failed to rename \(oldName) → \(newName): \(error.localizedDescription)"
+            }
+        }
+    }
+
+    /// Load activity-log events with the given filters. `since` accepts
+    /// the same syntax as `stash rules log --since` (`30m`, `1h`, `7d`,
+    /// `1w`). Errors land in `ruleEventsError` so the view can surface
+    /// them without crashing.
+    func loadRuleEvents(
+        type: RuleEvent.EventType? = nil,
+        rule: String? = nil,
+        since: String? = nil,
+        limit: Int = 200
+    ) {
+        Task {
+            ruleEventsLoading = true
+            defer { ruleEventsLoading = false }
+            do {
+                ruleEvents = try await cli.listRuleEvents(
+                    type: type, rule: rule, limit: limit, since: since
+                )
+                ruleEventsError = nil
+            } catch {
+                ruleEventsError = error.localizedDescription
+            }
+        }
+    }
+
+    func setRuleEnabled(name: String, enabled: Bool) {
+        Task {
+            do {
+                try await cli.setRuleEnabled(name: name, enabled: enabled)
+                if let idx = rules.firstIndex(where: { $0.name == name }) {
+                    rules[idx].enabled = enabled
+                }
+            } catch {
+                rulesError = "Failed to toggle \(name): \(error.localizedDescription)"
             }
         }
     }
@@ -692,7 +839,7 @@ final class StashStore {
             filterTags = [t.name]
         case .collection(let c):
             filterCollection = c.name
-        case .tagGraph, .stats, .check, .dupes, .savedSearch:
+        case .tagGraph, .stats, .check, .dupes, .savedSearch, .rules, .ruleActivity:
             break
         }
         refresh()

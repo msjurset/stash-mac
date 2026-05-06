@@ -27,6 +27,10 @@ struct ContentView: View {
                 CheckView()
             case .dupes:
                 DupesView()
+            case .rules:
+                RulesView()
+            case .ruleActivity:
+                RuleActivityView()
             default:
                 ItemListView(showEditSheet: $showEditSheet)
             }
@@ -42,6 +46,10 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity)
             case .stats:
                 EmptyView()
+            case .rules:
+                RuleDetailView()
+            case .ruleActivity:
+                RuleActivityDetailView()
             case .check:
                 DetailRouter(showEditSheet: $showEditSheet)
             case .dupes:
@@ -77,14 +85,19 @@ struct ContentView: View {
             QuickSearchView()
         }
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    showAddSheet = true
-                } label: {
-                    Label("Add Item", systemImage: "plus")
+            // Hide on Rules — that view owns its own "+ New Rule" button.
+            // Also hide on Rule Activity — that's a read-only feed; "Add
+            // item" doesn't make sense there. ⌘N shortcut suppressed too.
+            if store.navigation != .rules && store.navigation != .ruleActivity {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        showAddSheet = true
+                    } label: {
+                        Label("Add Item", systemImage: "plus")
+                    }
+                    .keyboardShortcut("n")
+                    .help("Add new item (⌘N)")
                 }
-                .keyboardShortcut("n")
-                .help("Add new item (⌘N)")
             }
         }
         .background(SearchKeyMonitor {

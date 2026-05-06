@@ -17,13 +17,18 @@ struct SidebarView: View {
     var body: some View {
         ScrollViewReader { proxy in
             List(selection: $selection) {
+                // Library — just All Items now. Per-type filtering moved
+                // into a chip bar at the top of ItemListView so the
+                // sidebar isn't 12 rows of clutter.
                 Section("Library") {
                     Label("All Items", systemImage: "tray.full")
                         .tag(NavigationItem.allItems)
-                    ForEach(ItemType.allCases) { type in
-                        Label(type.label, systemImage: type.icon)
-                            .tag(NavigationItem.type(type))
-                    }
+                }
+
+                // Tools — analytical / maintenance views. They don't
+                // produce or modify items themselves; they're "stuff
+                // about your stuff".
+                Section("Tools") {
                     Label("Tag Graph", systemImage: "chart.dots.scatter")
                         .tag(NavigationItem.tagGraph)
                     Label("Stats", systemImage: "chart.bar")
@@ -32,6 +37,17 @@ struct SidebarView: View {
                         .tag(NavigationItem.dupes)
                     Label("Health Check", systemImage: "checkmark.shield")
                         .tag(NavigationItem.check)
+                }
+
+                // Rules — automation. Activity is intentionally left as
+                // a sibling rather than nested under Rules so a quick
+                // glance at recent fires doesn't require selecting a
+                // specific rule first.
+                Section("Rules") {
+                    Label("Rules", systemImage: "wand.and.stars")
+                        .tag(NavigationItem.rules)
+                    Label("Activity", systemImage: "clock.arrow.circlepath")
+                        .tag(NavigationItem.ruleActivity)
                 }
 
                 if !store.savedSearches.isEmpty {

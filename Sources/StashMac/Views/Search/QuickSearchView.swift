@@ -295,7 +295,18 @@ struct TagAwareSearchField: NSViewRepresentable {
         field.focusRingType = .none
         field.delegate = context.coordinator
         context.coordinator.installCtrlJKMonitor(on: field)
-        DispatchQueue.main.async { field.window?.makeFirstResponder(field) }
+        // Install the field-editor interceptor on the sheet's window
+        // *before* we force first-responder. Otherwise the
+        // `didBecomeKeyNotification`-driven install can race the
+        // programmatic focus and the sheet's first focus uses AppKit's
+        // default field editor — which paints the rounded ghost popup
+        // before any of the per-field suppression layers can run.
+        DispatchQueue.main.async {
+            if let window = field.window {
+                installFieldEditorInterceptor(on: window)
+                window.makeFirstResponder(field)
+            }
+        }
         return field
     }
 

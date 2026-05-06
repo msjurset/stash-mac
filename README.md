@@ -19,6 +19,7 @@ Native macOS app for storing, organizing, and retrieving links, files, snippets,
 - **Open Items** — Open any stashed item with the system default application
 - **Keyboard Shortcuts** — ⌘N to add, ⌘K to search, ⌘? for help
 - **Tag Graph** — Force-directed graph of tag co-occurrence with cursor-anchored pinch-zoom (zoom toward where the pointer is, even after panning)
+- **Capture Rules** — Sidebar "Rules" entry plus `stash rules` CLI for declarative tagging, retitling, note-stamping, notifying, linking, or skipping items as they're stashed. Match by domain, MIME, sender, content regex (with named captures); compose action chains; templates with `{{.Title}}` `{{.Sender}}` `{{.Captures.X}}` etc. Rules live at `~/.stash/rules.yaml`
 - **Help System** — Menu bar Help (⌘?) with topics for every major feature + contextual ? button on detail, list, and add views
 
 ## Requirements

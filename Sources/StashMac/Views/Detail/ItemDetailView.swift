@@ -42,22 +42,9 @@ struct ItemDetailView: View {
                             .aspectRatio(contentMode: .fit)
                             .frame(maxWidth: 500, maxHeight: 400)
                             .clipShape(RoundedRectangle(cornerRadius: 6))
-                    }
-                }
-
-                // URL
-                if let urlString = item.url, !urlString.isEmpty {
-                    DetailSection(title: "URL") {
-                        Text(urlString)
-                            .foregroundStyle(.blue)
-                            .textSelection(.enabled)
-                            .font(.body.monospaced())
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .fixedSize(horizontal: false, vertical: true)
+                            .contentShape(RoundedRectangle(cornerRadius: 6))
                             .onTapGesture {
-                                if let url = URL(string: urlString) {
-                                    NSWorkspace.shared.open(url)
-                                }
+                                ImagePreviewPresenter.present(image: nsImage)
                             }
                             .onHover { hovering in
                                 if hovering {
@@ -66,6 +53,14 @@ struct ItemDetailView: View {
                                     NSCursor.pop()
                                 }
                             }
+                            .help("Click to open in viewer")
+                    }
+                }
+
+                // URL
+                if let urlString = item.url, !urlString.isEmpty {
+                    DetailSection(title: "URL") {
+                        ClickableURLText(urlString: urlString)
                     }
                 }
 
@@ -337,6 +332,7 @@ struct ItemDetailView: View {
             isFetchingContent = false
         }
     }
+
 }
 
 func isArchiveMIME(_ mimeType: String) -> Bool {

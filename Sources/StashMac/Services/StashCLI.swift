@@ -23,6 +23,15 @@ actor StashCLI {
         return d
     }
 
+    /// Encoder for outbound JSON (e.g. piping a rule into `stash autotag save`).
+    /// Mirrors the decoder's snake_case convention so the CLI sees field names
+    /// matching its Go struct tags.
+    private var encoder: JSONEncoder {
+        let e = JSONEncoder()
+        e.keyEncodingStrategy = .convertToSnakeCase
+        return e
+    }
+
     // MARK: - Items
 
     func listItems(
@@ -44,9 +53,14 @@ actor StashCLI {
         tags: [String] = [],
         limit: Int = 50
     ) async throws -> [StashItem] {
-        var args = ["search", "--json", query, "-l", "\(limit)"]
+        // The query goes after `--` so cobra stops walking subcommands —
+        // otherwise queries like "delete", "save", "list", or "run"
+        // resolve to `stash search delete` etc. and the trailing `-l`
+        // becomes an unknown flag.
+        var args = ["search", "--json", "-l", "\(limit)"]
         if let type { args += ["--type", type.rawValue] }
         for tag in tags { args += ["--tag", tag] }
+        args += ["--", query]
         return try await captureJSON(args: args)
     }
 
@@ -288,6 +302,82 @@ actor StashCLI {
                     process.terminate()
                 }
             }
+        }
+    }
+
+    // MARK: - Rules
+
+    func listRules() async throws -> [Rule] {
+        try await captureJSON(args: ["rules", "list", "--json"])
+    }
+
+    func testRule(itemID: String) async throws -> RuleTestResult {
+        try await captureJSON(args: ["rules", "test", "--json", itemID])
+    }
+
+    func setRuleEnabled(name: String, enabled: Bool) async throws {
+        let verb = enabled ? "enable" : "disable"
+        _ = try await captureOutput(args: ["rules", verb, "--json", name])
+    }
+
+    /// Upsert a rule by piping its JSON form to `stash rules save`. The
+    /// rule's `name` is the upsert key — saving a rule with the same name
+    /// replaces the existing one in the YAML, preserving comments.
+    func saveRule(_ rule: Rule) async throws {
+        let data = try encoder.encode(rule)
+        let payload = String(data: data, encoding: .utf8) ?? "{}"
+        _ = try await executeWithStdin(args: ["rules", "save", "--json"], input: payload)
+    }
+
+    func removeRule(name: String) async throws {
+        _ = try await captureOutput(args: ["rules", "remove", "--json", name])
+    }
+
+    /// Rename a rule. Updates rules.yaml in place and rewrites rules.log
+    /// so historical activity stays attached to the rule under its new
+    /// name. Errors if `newName` collides with an existing rule.
+    func renameRule(oldName: String, newName: String) async throws {
+        _ = try await captureOutput(args: ["rules", "rename", "--json", oldName, newName])
+    }
+
+    /// Run rules over existing items. `ruleName` limits the run to a single
+    /// rule; nil applies all enabled rules. When `dryRun` is true no writes
+    /// happen but the returned summary lists the would-be changes.
+    func applyRules(ruleName: String? = nil, dryRun: Bool = false) async throws -> RuleApplySummary {
+        var args = ["rules", "apply", "--json"]
+        if let ruleName { args += ["--rule", ruleName] }
+        if dryRun { args.append("--dry-run") }
+        return try await captureJSON(args: args)
+    }
+
+    /// Read the rules activity log. Calls `stash rules log --json` which
+    /// emits JSONL (one Event per line); we decode line-by-line because
+    /// the log isn't a single JSON document. Returns events newest-first
+    /// (the CLI orders them that way already).
+    ///
+    /// Filters mirror the CLI flags. Pass nil to skip a filter.
+    func listRuleEvents(
+        type: RuleEvent.EventType? = nil,
+        rule: String? = nil,
+        limit: Int = 100,
+        since: String? = nil
+    ) async throws -> [RuleEvent] {
+        var args = ["rules", "log", "--json", "-l", "\(limit)"]
+        if let type { args += ["--type", type.rawValue] }
+        if let rule { args += ["--rule", rule] }
+        if let since { args += ["--since", since] }
+        let output = try await captureOutput(args: args)
+        return decodeJSONLines(output, as: RuleEvent.self)
+    }
+
+    /// Decode line-delimited JSON. Empty lines and parse errors are
+    /// skipped — the rules log can in principle contain a corrupt entry
+    /// (process killed mid-write), and we want to render the rest.
+    private func decodeJSONLines<T: Decodable>(_ output: String, as: T.Type) -> [T] {
+        let lines = output.split(separator: "\n", omittingEmptySubsequences: true)
+        return lines.compactMap { line -> T? in
+            guard let data = line.data(using: .utf8) else { return nil }
+            return try? decoder.decode(T.self, from: data)
         }
     }
 

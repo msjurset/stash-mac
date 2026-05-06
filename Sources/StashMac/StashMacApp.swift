@@ -4,13 +4,35 @@ import UserNotifications
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let servicesProvider = ServicesProvider()
+    private var fieldEditorObservers: [NSObjectProtocol] = []
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        // Earliest reliable hook — install the field-editor interceptor on
+        // every NSWindow before the user can focus a text field. Layer 5
+        // of the autofill suppression stack; without this, the empty
+        // rounded ghost popup appears once per session the first time any
+        // AppKit menu/text-input infrastructure activates (including the
+        // first focus on any FilterField).
+        fieldEditorObservers = installFieldEditorInterceptorsForAllWindows()
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Re-sweep in case any windows came up between
+        // applicationWillFinishLaunching and now.
+        for window in NSApp.windows {
+            installFieldEditorInterceptor(on: window)
+        }
         NSApp.servicesProvider = servicesProvider
         NSUpdateDynamicServices()
         UNUserNotificationCenter.current().requestAuthorization(
             options: [.alert, .sound]
         ) { _, _ in }
+    }
+
+    deinit {
+        for token in fieldEditorObservers {
+            NotificationCenter.default.removeObserver(token)
+        }
     }
 }
 
@@ -33,7 +55,9 @@ struct StashMacApp: App {
                 Button("Stash Help") {
                     openWindow(id: "help")
                 }
-                .keyboardShortcut("?", modifiers: .command)
+                // No default shortcut — ⌘? is reserved for homebar in this
+                // user's setup. Rebind via System Settings → Keyboard →
+                // App Shortcuts if you want a hotkey for this menu item.
             }
         }
 

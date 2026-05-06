@@ -45,6 +45,15 @@ struct ItemListView: View {
             .padding(.vertical, 7)
             .background(.bar)
 
+            // Type filter chips. Replaces the per-type sidebar entries
+            // we had before — discoverable in the items pane itself.
+            // Fires `selectFilterType` so it composes correctly with
+            // sidebar tag/collection filters and the search query.
+            typeFilterBar
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(.bar)
+
             Divider()
 
             // Tag suggestions
@@ -147,6 +156,63 @@ struct ItemListView: View {
                 ContextualHelpButton(topic: .searching)
             }
         }
+    }
+
+    // MARK: - Type filter bar
+
+    /// Pill / segmented filter row that lets the user narrow the items
+    /// list to a single type. Replaces the per-type sidebar entries.
+    /// "All" clears `filterType` and shows everything; the others set
+    /// `filterType` to the corresponding `ItemType`. Selection highlight
+    /// is keyed off `store.filterType`, not navigation, so it stays
+    /// correct across sidebar tag / collection picks.
+    ///
+    /// Wrapped in a horizontal `ScrollView` so labels never break onto
+    /// two lines when the pane is narrow — pills stay full-width and
+    /// scroll instead.
+    private var typeFilterBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                typeChip(label: "All", icon: "tray.full", value: nil)
+                ForEach(ItemType.allCases) { t in
+                    typeChip(label: t.label, icon: t.icon, value: t)
+                }
+            }
+        }
+    }
+
+    private func typeChip(label: String, icon: String, value: ItemType?) -> some View {
+        let selected = store.filterType == value
+        return Button {
+            // Mirror the path the sidebar used to take: setting filterType
+            // and refreshing. We don't change `store.navigation` because
+            // the user is still in `.allItems`; the chip just narrows it.
+            store.filterType = value
+            store.refresh()
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.caption2)
+                Text(label)
+                    .font(.caption.weight(selected ? .semibold : .regular))
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(
+                Capsule()
+                    .fill(selected ? Color.accentColor.opacity(0.18) : Color.primary.opacity(0.05))
+            )
+            .overlay(
+                Capsule()
+                    .stroke(selected ? Color.accentColor.opacity(0.5) : Color.clear, lineWidth: 1)
+            )
+            .foregroundStyle(selected ? Color.accentColor : .primary)
+            // Each pill sized to its label; never compress / wrap the
+            // text. Overflow is handled by the parent ScrollView.
+            .fixedSize(horizontal: true, vertical: false)
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - Suggestion logic

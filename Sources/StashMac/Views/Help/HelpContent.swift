@@ -24,6 +24,7 @@ enum HelpTopic: String, CaseIterable, Identifiable {
     case statsAndCheck = "Stats & Health Check"
     case clipboard = "Clipboard Quick-Stash"
     case services = "System Services"
+    case rules = "Rules"
     case keyboard = "Keyboard Shortcuts"
 
     var id: String { rawValue }
@@ -43,6 +44,7 @@ enum HelpTopic: String, CaseIterable, Identifiable {
         case .statsAndCheck: return "chart.bar"
         case .clipboard: return "doc.on.clipboard"
         case .services: return "square.and.arrow.down.on.square"
+        case .rules: return "wand.and.stars"
         case .keyboard: return "keyboard"
         }
     }
@@ -307,6 +309,87 @@ enum HelpTopic: String, CaseIterable, Identifiable {
                 .paragraph("After deploying, the service may take a moment (or one logout/login) to appear. The deploy step runs `pbs -update` to refresh the system's Services index."),
                 .heading("Where to Find Output"),
                 .paragraph("Stashed items show up in your stash like any other entry. Notifications confirm success or report errors; logs are written to /tmp/stash-services.log for troubleshooting."),
+            ]
+
+        case .rules:
+            return [
+                .paragraph("Capture rules let you tag, categorize, retitle, annotate, link, notify, or even drop items automatically as they're stashed. Every `stash add` runs the rules and applies any matching effects before the item is saved. Rules live at ~/.stash/rules.yaml and are managed via the sidebar's Rules entry or the `stash rules` CLI."),
+                .heading("How a rule fires"),
+                .numbered([
+                    "Match conditions are AND-composed — all set conditions on a rule must hold for it to fire.",
+                    "Multiple rules can match the same item; their effects compose by type (tags merge, collection / title / set_note are first-match-wins, append_note stacks, notify and link_to stack).",
+                    "If any matched rule has a `skip` action, the item is dropped: not saved to the database, audit-logged to ~/.stash/skip.log, any pending `notify` actions still fire.",
+                    "Explicit `stash add` flags (-T tags, -c collection, -t title, -n note) take precedence over rule output for those fields.",
+                ]),
+                .heading("Match conditions"),
+                .table(headers: ["Key", "Matches"], rows: [
+                    ["type", "Item type: url, file, snippet, image, email"],
+                    ["domain", "URL host (case-insensitive, suffix-aware: youtube.com matches m.youtube.com)"],
+                    ["url_regex", "Regex on the full URL (named groups become {{.Captures.X}})"],
+                    ["mime_type", "Exact MIME-type match"],
+                    ["mime_type_prefix", "Prefix match (e.g. image/ matches image/png and image/jpeg)"],
+                    ["sender", "Case-insensitive substring on email From: header"],
+                    ["sender_domain", "Domain match on email From: (suffix-aware)"],
+                    ["path_glob", "filepath.Match-style glob on file source path or basename"],
+                    ["content", "Case-insensitive substring on extracted text"],
+                    ["content_regex", "Regex on extracted text (named groups become {{.Captures.X}})"],
+                ]),
+                .heading("Action types"),
+                .table(headers: ["Action", "Effect"], rows: [
+                    ["add_tags", "Apply tags to the item. Additive across rules; deduped against existing tags."],
+                    ["add_collection", "Assign to a collection (auto-created if missing). First-match-wins."],
+                    ["set_title", "Replace the auto-detected title. Templated. First-match-wins."],
+                    ["set_note", "Replace the note field. Templated. First-match-wins."],
+                    ["append_note", "Append to the note field (newline-separated). Templated. Stacks across rules."],
+                    ["notify", "Fire a macOS desktop notification. Templated. Clickable when terminal-notifier is installed."],
+                    ["skip", "Drop the item entirely. Audit-logged. Aborts the add — other effects don't apply."],
+                    ["link_to", "Auto-link the new item to existing items by tag or by id (capped at 50 targets)."],
+                ]),
+                .heading("Template variables"),
+                .paragraph("Set_title, set_note, append_note, and notify are rendered with Go text/template. Available variables:"),
+                .bullet([
+                    "{{.Title}}, {{.URL}}, {{.Domain}}, {{.Type}}, {{.MimeType}}",
+                    "{{.Sender}}, {{.SenderName}}, {{.SenderEmail}}, {{.SenderDomain}}, {{.Subject}} (emails)",
+                    "{{.Filename}} (basename of source path), {{.Date}} (ISO YYYY-MM-DD)",
+                    "{{.Rule.Name}} — name of the rule that fired",
+                    "{{.Captures.X}} — named regex capture groups from url_regex / content_regex",
+                ]),
+                .heading("Examples"),
+                .code("""
+- name: youtube
+  match:
+    domain: youtube.com
+  actions:
+    - add_tags: [video, watch-later]
+
+- name: invoice-pdfs
+  match:
+    mime_type: application/pdf
+    content_regex: "(?i)Total[:\\\\s]+(?P<amount>\\\\$[0-9.,]+)"
+  actions:
+    - add_tags: [invoice, finance]
+    - add_collection: bills
+    - set_title: "Invoice {{.Captures.amount}}"
+    - notify: "Invoice landed: {{.Captures.amount}}"
+
+- name: drop-spam
+  match:
+    type: email
+    sender_domain: noreply.linkedin.com
+  actions:
+    - skip: true
+"""),
+                .heading("CLI"),
+                .table(headers: ["Command", "Purpose"], rows: [
+                    ["stash rules list", "Show all rules with match summary and action chips"],
+                    ["stash rules test <id>", "Preview what rules would do to an existing item (no writes)"],
+                    ["stash rules apply [--dry-run]", "Retroactively run rules over existing items"],
+                    ["stash rules enable/disable <name>", "Toggle a rule's enabled flag"],
+                    ["stash rules save", "Upsert a rule from JSON on stdin (used by the Mac editor)"],
+                    ["stash rules remove <name>", "Delete a rule from the file"],
+                ]),
+                .heading("Notifications on macOS"),
+                .paragraph("`brew install terminal-notifier` makes notify banners clickable — clicking opens the URL (link items) or source file (file/image items). Without it, notifications still fire but aren't clickable."),
             ]
 
         case .keyboard:

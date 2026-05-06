@@ -10,4 +10,6 @@ enum NavigationItem: Hashable {
     case dupes
     case stats
     case check
+    case rules
+    case ruleActivity
 }
