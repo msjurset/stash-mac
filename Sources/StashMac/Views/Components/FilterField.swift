@@ -150,6 +150,22 @@ final class NoAutoFillTextField: NSTextField {
         set {}
     }
 
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        // Layer-5 install at the earliest moment a field's window
+        // is known. AppKit calls this synchronously the instant the
+        // view is added to a window — before any focus event is
+        // possible — so our shared field-editor singleton is in
+        // place by the time becomeFirstResponder fires. This makes
+        // the per-call-site `DispatchQueue.main.async {
+        // installFieldEditorInterceptor(...) }` race patches
+        // unnecessary. Sheets / popovers / new windows are all
+        // covered automatically.
+        if let window {
+            installFieldEditorInterceptor(on: window)
+        }
+    }
+
     override func becomeFirstResponder() -> Bool {
         let ok = super.becomeFirstResponder()
         if ok {

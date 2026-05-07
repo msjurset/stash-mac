@@ -666,13 +666,7 @@ struct RuleDetailView: View {
     }
 
     private func activityEventRow(_ event: RuleEvent) -> some View {
-        let typeColor: Color = {
-            switch event.type {
-            case .fire:  return .green
-            case .skip:  return .red
-            case .retro: return .blue
-            }
-        }()
+        let typeColor = RuleEventTypeBadge.color(for: event.type)
         return HStack(alignment: .top, spacing: 10) {
             Image(systemName: event.type.icon)
                 .font(.title3)
@@ -688,6 +682,7 @@ struct RuleDetailView: View {
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.tertiary)
                 }
+                RuleEventTypeBadge(type: event.type)
                 if !event.source.isEmpty {
                     HStack(alignment: .firstTextBaseline, spacing: 4) {
                         Text("Matched:")

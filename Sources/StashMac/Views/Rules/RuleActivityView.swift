@@ -95,6 +95,8 @@ struct RuleActivityView: View {
                     Text("Fire").tag(RuleEvent.EventType?.some(.fire))
                     Text("Skip").tag(RuleEvent.EventType?.some(.skip))
                     Text("Retro").tag(RuleEvent.EventType?.some(.retro))
+                    Text("Capture").tag(RuleEvent.EventType?.some(.capture))
+                    Text("Error").tag(RuleEvent.EventType?.some(.error))
                 }
                 .labelsHidden()
                 .frame(width: 130)
@@ -177,11 +179,7 @@ private struct EventRow: View {
     let isSelected: Bool
 
     private var typeColor: Color {
-        switch event.type {
-        case .fire:  return .green
-        case .skip:  return .red
-        case .retro: return .blue
-        }
+        RuleEventTypeBadge.color(for: event.type)
     }
 
     var body: some View {
@@ -202,12 +200,7 @@ private struct EventRow: View {
                         .foregroundStyle(.tertiary)
                 }
                 HStack(spacing: 4) {
-                    Text(event.type.label.uppercased())
-                        .font(.caption2.bold())
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 1)
-                        .background(typeColor.opacity(0.18), in: Capsule())
-                        .foregroundStyle(typeColor)
+                    RuleEventTypeBadge(type: event.type)
                     ForEach(event.rules, id: \.self) { rule in
                         Text(rule)
                             .font(.caption.monospaced())

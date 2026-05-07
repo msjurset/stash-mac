@@ -58,12 +58,7 @@ struct RuleActivityDetailView: View {
                     .fontWeight(.semibold)
                     .textSelection(.enabled)
                 HStack(spacing: 8) {
-                    Text(event.type.label.uppercased())
-                        .font(.caption.bold())
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(typeColor(for: event.type).opacity(0.18), in: Capsule())
-                        .foregroundStyle(typeColor(for: event.type))
+                    RuleEventTypeBadge(type: event.type)
                     Text(event.timestamp, format: .dateTime.year().month().day().hour().minute().second())
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
@@ -204,11 +199,7 @@ struct RuleActivityDetailView: View {
     }
 
     private func typeColor(for type: RuleEvent.EventType) -> Color {
-        switch type {
-        case .fire:  return .green
-        case .skip:  return .red
-        case .retro: return .blue
-        }
+        RuleEventTypeBadge.color(for: type)
     }
 
     private func isURL(_ s: String) -> Bool {

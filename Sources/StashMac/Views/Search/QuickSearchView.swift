@@ -305,17 +305,13 @@ struct TagAwareSearchField: NSViewRepresentable {
         field.focusRingType = .none
         field.delegate = context.coordinator
         context.coordinator.installCtrlJKMonitor(on: field)
-        // Install the field-editor interceptor on the sheet's window
-        // *before* we force first-responder. Otherwise the
-        // `didBecomeKeyNotification`-driven install can race the
-        // programmatic focus and the sheet's first focus uses AppKit's
-        // default field editor — which paints the rounded ghost popup
-        // before any of the per-field suppression layers can run.
+        // Layer-5 interceptor wiring is handled by
+        // NoAutoFillTextField.viewDidMoveToWindow itself — no per
+        // call-site install or DispatchQueue.main.async race needed.
+        // We just need to focus the field once SwiftUI has attached
+        // it to the sheet's window.
         DispatchQueue.main.async {
-            if let window = field.window {
-                installFieldEditorInterceptor(on: window)
-                window.makeFirstResponder(field)
-            }
+            field.window?.makeFirstResponder(field)
         }
         return field
     }
