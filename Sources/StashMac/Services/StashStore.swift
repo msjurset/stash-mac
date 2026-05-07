@@ -96,8 +96,22 @@ final class StashStore {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in self?.loadAll() }
+            Task { @MainActor in self?.handleIngest() }
         }
+    }
+
+    /// Auto-refresh path triggered on every successful capture. If the
+    /// user is currently viewing a Smart Collection, re-run that
+    /// specifically so the list reflects newly-captured matches without
+    /// losing the filter. Otherwise fall back to the generic loadAll()
+    /// so other views stay in sync.
+    private func handleIngest() {
+        if case .savedSearch(let ss) = navigation {
+            loadSavedSearches()
+            runSavedSearch(name: ss.name)
+            return
+        }
+        loadAll()
     }
 
     var selectedItem: StashItem? {
@@ -566,6 +580,33 @@ final class StashStore {
                 loadSavedSearches()
             } catch {
                 self.error = error.localizedDescription
+            }
+        }
+    }
+
+    /// Create or update a Smart Collection from the Mac UI. When
+    /// `originalName` differs from `name`, the saved search is
+    /// renamed in place first (atomic UPDATE on saved_searches.name)
+    /// before the upsert applies the rest of the filter changes.
+    /// Calls back on the main actor with `nil` on success or a
+    /// human-readable error string.
+    func saveSearchFromMac(
+        name: String,
+        originalName: String? = nil,
+        query: String,
+        filter: SavedSearch.SearchFilter,
+        completion: @escaping (String?) -> Void
+    ) {
+        Task {
+            do {
+                if let original = originalName, !original.isEmpty, original != name {
+                    try await cli.renameSavedSearch(oldName: original, newName: name)
+                }
+                try await cli.saveSearch(name: name, query: query, filter: filter)
+                loadSavedSearches()
+                completion(nil)
+            } catch {
+                completion(error.localizedDescription)
             }
         }
     }

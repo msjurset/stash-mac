@@ -201,6 +201,49 @@ actor StashCLI {
         _ = try await captureOutput(args: ["search", "delete", "--json", name])
     }
 
+    func renameSavedSearch(oldName: String, newName: String) async throws {
+        _ = try await captureOutput(args: ["search", "rename", "--json", oldName, newName])
+    }
+
+    /// Create or upsert a Smart Collection by name. `stash search save`
+    /// is itself an upsert (ON CONFLICT DO UPDATE), so this also serves
+    /// as the "edit" path.
+    func saveSearch(name: String, query: String, filter: SavedSearch.SearchFilter) async throws {
+        var args = ["search", "save", "--json", "--live"]
+        if let t = filter.type, !t.isEmpty {
+            args += ["--type", t]
+        }
+        if let tags = filter.tags {
+            for tag in tags { args += ["--tag", tag] }
+        }
+        if let xs = filter.excludeTags {
+            for tag in xs { args += ["--exclude-tag", tag] }
+        }
+        if filter.untagged == true {
+            args.append("--untagged")
+        }
+        if let c = filter.collection, !c.isEmpty {
+            args += ["--collection", c]
+        }
+        if let r = filter.recent, !r.isEmpty {
+            args += ["--recent", r]
+        }
+        if let rx = filter.regex, !rx.isEmpty {
+            args += ["--regex", rx]
+        }
+        if let l = filter.limit, l > 0 {
+            args += ["--limit", "\(l)"]
+        }
+        // Positional args: name, then query (only if non-empty —
+        // empty query positional confuses cobra).
+        args.append(name)
+        if !query.isEmpty {
+            args.append("--")
+            args.append(query)
+        }
+        _ = try await captureOutput(args: args)
+    }
+
     // MARK: - Duplicates
 
     func dupes(type: ItemType? = nil, threshold: Double = 0.7) async throws -> [DupeResult] {

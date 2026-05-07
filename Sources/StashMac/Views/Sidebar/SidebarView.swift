@@ -8,6 +8,22 @@ struct SidebarView: View {
     @State private var newTagName = ""
     @State private var tagFilter = ""
     @State private var showCloud = false
+    /// Drives the smart-collection sheet. `.create` opens an empty
+    /// sheet; `.edit(savedSearch)` pre-populates from the existing
+    /// row. `.sheet(item:)` keys off the case so toggling between
+    /// the two re-presents instead of stale-rendering.
+    @State private var smartCollectionSheet: SmartCollectionSheetMode?
+
+    enum SmartCollectionSheetMode: Identifiable, Hashable {
+        case create
+        case edit(SavedSearch)
+        var id: String {
+            switch self {
+            case .create: return "__create__"
+            case .edit(let ss): return "edit-\(ss.id)"
+            }
+        }
+    }
 
     private var filteredTags: [StashTag] {
         if tagFilter.isEmpty { return store.tags }
@@ -50,26 +66,7 @@ struct SidebarView: View {
                         .tag(NavigationItem.ruleActivity)
                 }
 
-                if !store.savedSearches.isEmpty {
-                    Section("Saved Searches") {
-                        ForEach(store.savedSearches) { ss in
-                            HStack {
-                                Label(ss.name, systemImage: "magnifyingglass")
-                                Spacer()
-                                Text(ss.summary)
-                                    .font(.caption2)
-                                    .foregroundStyle(.tertiary)
-                                    .lineLimit(1)
-                            }
-                            .tag(NavigationItem.savedSearch(ss))
-                            .contextMenu {
-                                Button("Delete", role: .destructive) {
-                                    store.deleteSavedSearch(name: ss.name)
-                                }
-                            }
-                        }
-                    }
-                }
+                savedSearchSections
 
                 Section {
                     if showCloud {
@@ -123,6 +120,93 @@ struct SidebarView: View {
             }
             Button("Cancel", role: .cancel) {
                 renamingTag = nil
+            }
+        }
+        .sheet(item: $smartCollectionSheet) { mode in
+            switch mode {
+            case .create:
+                SmartCollectionSheet(editing: nil)
+            case .edit(let ss):
+                SmartCollectionSheet(editing: ss)
+            }
+        }
+    }
+
+    // MARK: - Saved-search / smart-collection sections
+
+    /// Smart Collections section, extracted out of the main `body` so
+    /// ViewBuilder's 10-children limit on the outer `List` doesn't trip
+    /// over the always-shown section.
+    ///
+    /// Plus-button placement is conditional: when the section is empty
+    /// the "+ New Smart Collection…" full-width button lives inside the
+    /// section as the discoverable empty-state. Once at least one row
+    /// exists we tuck a small "+" into the section header's trailing
+    /// edge so each row keeps the full width for its name + params.
+    @ViewBuilder
+    private var savedSearchSections: some View {
+        Section {
+            ForEach(store.savedSearches) { ss in
+                savedSearchRow(ss, icon: "sparkles.rectangle.stack")
+            }
+            if store.savedSearches.isEmpty {
+                Button {
+                    smartCollectionSheet = .create
+                } label: {
+                    Label("New Smart Collection…", systemImage: "plus")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+            }
+        } header: {
+            HStack(spacing: 4) {
+                Text("Smart Collections")
+                Spacer()
+                if !store.savedSearches.isEmpty {
+                    Button {
+                        smartCollectionSheet = .create
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("New Smart Collection")
+                }
+            }
+        }
+    }
+
+    // MARK: - Saved-search / smart-collection row
+
+    @ViewBuilder
+    private func savedSearchRow(_ ss: SavedSearch, icon: String) -> some View {
+        // Stack name above the parameter summary so neither has to
+        // truncate to fit on a single line. Parameter summary is
+        // hidden when empty (it would just be blank padding).
+        HStack(alignment: .center, spacing: 8) {
+            Image(systemName: icon)
+                .frame(width: 16)
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(ss.name)
+                    .lineLimit(1)
+                if !ss.summary.isEmpty {
+                    Text(ss.summary)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
+            }
+        }
+        .tag(NavigationItem.savedSearch(ss))
+        .contextMenu {
+            Button("Edit…") {
+                smartCollectionSheet = .edit(ss)
+            }
+            Divider()
+            Button("Delete", role: .destructive) {
+                store.deleteSavedSearch(name: ss.name)
             }
         }
     }

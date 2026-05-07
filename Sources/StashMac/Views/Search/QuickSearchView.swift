@@ -58,7 +58,17 @@ struct QuickSearchView: View {
 
             Divider()
 
-            if results.isEmpty && !query.isEmpty && tagMatches.isEmpty {
+            if query.isEmpty && tagMatches.isEmpty && results.isEmpty {
+                // Initial empty state — no query yet, nothing to show.
+                // Without this branch the empty `List` below renders as
+                // a 200-tall dark rounded rectangle, which looks like a
+                // phantom popup.
+                Text("Type to search · use tag: to filter")
+                    .font(.callout)
+                    .foregroundStyle(.tertiary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 24)
+            } else if results.isEmpty && !query.isEmpty && tagMatches.isEmpty {
                 ContentUnavailableView.search(text: query)
                     .frame(height: 200)
             } else if tagMatches.isEmpty {
