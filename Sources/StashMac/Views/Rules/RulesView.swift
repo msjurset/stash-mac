@@ -8,6 +8,7 @@ struct RulesView: View {
     @Environment(StashStore.self) private var store
     @State private var filterText: String = ""
     @State private var showDisabled: Bool = true
+    @State private var suggestSheetPresented: Bool = false
 
     private var filteredRules: [Rule] {
         let needle = filterText.trimmingCharacters(in: .whitespaces).lowercased()
@@ -47,6 +48,15 @@ struct RulesView: View {
             }
             ToolbarItem {
                 Button {
+                    suggestSheetPresented = true
+                } label: {
+                    Label("Suggest", systemImage: "sparkles")
+                }
+                .help(suggestHelpText)
+                .disabled(!RuleSuggestionService.shared.isAvailable)
+            }
+            ToolbarItem {
+                Button {
                     store.loadRules()
                 } label: {
                     Label("Refresh", systemImage: "arrow.clockwise")
@@ -55,7 +65,17 @@ struct RulesView: View {
                 .disabled(store.rulesLoading)
             }
         }
+        .sheet(isPresented: $suggestSheetPresented) {
+            SuggestRulesSheet()
+        }
         .task { store.loadRules() }
+    }
+
+    private var suggestHelpText: String {
+        if let reason = RuleSuggestionService.shared.unavailabilityReason {
+            return "Suggest rules from recent tagging — \(reason)"
+        }
+        return "Suggest rules from recent tagging (on-device Apple Intelligence)"
     }
 
     private var filterBar: some View {
