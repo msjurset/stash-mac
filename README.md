@@ -20,6 +20,8 @@ Native macOS app for storing, organizing, and retrieving links, files, snippets,
 - **Keyboard Shortcuts** — ⌘N to add, ⌘K to search, ⌘? for help
 - **Tag Graph** — Force-directed graph of tag co-occurrence with cursor-anchored pinch-zoom (zoom toward where the pointer is, even after panning)
 - **Capture Rules** — Sidebar "Rules" entry plus `stash rules` CLI for declarative tagging, retitling, note-stamping, notifying, linking, or skipping items as they're stashed. Match by domain, MIME, sender, content regex (with named captures); compose action chains; templates with `{{.Title}}` `{{.Sender}}` `{{.Captures.X}}` etc. Rules live at `~/.stash/rules.yaml`
+- **Thumbnails** — Per-item thumbnail tile in the detail view and a 28pt preview in list rows. Auto-generated for files via QuickLook (PDF, video frame, audio album art, code/Office/iWork previews) on capture. Manual override: drop an image file onto the tile, or paste a remote image URL / local path via the "Set from…" menu. Stored at `~/.stash/files/thumbnails/<id>.jpg`
+- **Inline Players** — Audio and video files (and direct-stream URLs like podcast `.mp3` endpoints) render an inline `AVPlayerView` in the detail view. Video gets the native fullscreen toggle; unsupported codecs gracefully fall back to "Open in default app"
 - **Help System** — Menu bar Help (⌘?) with topics for every major feature + contextual ? button on detail, list, and add views
 
 ## Requirements

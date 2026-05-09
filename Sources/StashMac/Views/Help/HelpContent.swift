@@ -152,6 +152,8 @@ enum HelpTopic: String, CaseIterable, Identifiable {
                 .heading("Sections"),
                 .table(headers: ["Section", "Description"], rows: [
                     ["Header", "Type icon, title, and short ID"],
+                    ["Player", "Inline AVKit player for audio/video files and direct-stream URLs (video has fullscreen toggle)"],
+                    ["Thumbnail", "128pt preview tile. Drop an image to override; menu offers Generate, Set from URL/file, and Clear"],
                     ["URL", "Clickable link (for URL items)"],
                     ["Notes", "Your annotation text"],
                     ["Tags", "Tag capsules with # prefix"],
@@ -202,6 +204,7 @@ enum HelpTopic: String, CaseIterable, Identifiable {
                     ["stash bulk tag/delete/collect", "Bulk operations on multiple items"],
                     ["stash search save/list/run/delete", "Saved searches"],
                     ["stash dupes", "Find duplicate items"],
+                    ["stash thumbnail set/clear/path", "Manage per-item thumbnails (manual override + Mac-app pipeline)"],
                 ]),
                 .heading("Binary Location"),
                 .paragraph("The app searches for the stash binary in these locations, using the first one found:"),
