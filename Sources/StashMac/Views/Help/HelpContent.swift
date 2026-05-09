@@ -10,7 +10,7 @@ enum HelpSection {
     case numbered([String])
 }
 
-enum HelpTopic: String, CaseIterable, Identifiable {
+enum HelpTopic: String, CaseIterable, Identifiable, Codable, Hashable {
     case gettingStarted = "Getting Started"
     case addingItems = "Adding Items"
     case itemTypes = "Item Types"
@@ -138,18 +138,29 @@ enum HelpTopic: String, CaseIterable, Identifiable {
 
         case .searching:
             return [
-                .heading("Quick Search"),
-                .paragraph("Press ⌘K to open the quick search overlay. Results update in real time as you type. Click a result or press Return to jump to it."),
+                .heading("Quick Search Panel"),
+                .paragraph("Open the global search panel with ⌘F, ⌘K, or `/`. Results update in real time as you type. Use ↑/↓ (or Ctrl-J/K) to move the highlight, Return to jump to the highlighted result, Escape to dismiss. Selecting a result that lives outside your current sidebar scope automatically switches to All Items so the row is visible and highlighted."),
+                .paragraph("Pressing `/` always opens the panel when no field has focus. When the list filter field has focus *and is empty* (the common state on first launch), `/` opens the panel as well — that way you don't have to click anywhere first. Mid-text `/` stays a literal character so you can include slashes in queries."),
+                .heading("Tag Completion"),
+                .paragraph("Type `tag:` inside the panel to bring up tag suggestions. Tab cycles, Return commits. Repeat for multiple tags. Tag tokens compose with the rest of the free-text query."),
+                .heading("Regex Mode"),
+                .paragraph("Click the * button next to the field (or press ⌘R) to switch to RE2 regex. The pattern matches against title + notes + URL + extracted text. A small popover opens with a syntax cheatsheet that stays visible while you type — click outside the panel to dismiss."),
+                .bullet([
+                    "Prefix the pattern with `!` to negate the match (e.g. `!^https://` for items whose URL doesn't start with https).",
+                    "Tag filters are disabled in regex mode — `tag:` may be a literal in your pattern.",
+                    "The pattern is pre-validated client-side; bad syntax surfaces an inline warning under the field instead of silently empty results.",
+                ]),
                 .heading("List Filter"),
-                .paragraph("The search field at the top of the item list filters items within the current sidebar selection. Press Return to search, or clear the field to show all items."),
+                .paragraph("The search field at the top of the item list filters items within the current sidebar selection. Press Return to search, or clear the field to show all items. Free-text only — for regex use the global panel."),
                 .heading("Combining Filters"),
                 .paragraph("Select a type, tag, or collection in the sidebar first, then use the list search to narrow further. For example, select URLs in the sidebar, then search for \"api\" to find only URL items matching that term."),
             ]
 
         case .itemDetail:
             return [
-                .paragraph("Select an item to view its full details in the right pane."),
-                .heading("Sections"),
+                .paragraph("Selecting an item in the list (single-click) populates the right-hand pane with its full record. The pane is read-only by default; the Edit button at the top opens an inline editor."),
+                .heading("Pane Sections"),
+                .paragraph("The detail pane stacks the following sections, in order. The list below describes what each one shows in the app — these aren't clickable links inside this help window."),
                 .table(headers: ["Section", "Description"], rows: [
                     ["Header", "Type icon, title, and short ID"],
                     ["Player", "Inline AVKit player for audio/video files and direct-stream URLs (video has fullscreen toggle)"],
@@ -270,7 +281,16 @@ enum HelpTopic: String, CaseIterable, Identifiable {
                     "Duplicate content — multiple items sharing identical file content",
                 ]),
                 .paragraph("Results stream in progressively — each broken URL or missing file appears as soon as it's detected, so you don't have to wait for every URL to be tested before seeing findings. URL checks run in parallel, so a single slow or failing request no longer blocks the rest."),
-                .paragraph("Click any issue row to load that item in the detail pane on the right. Right-click for options to open the item or jump to it in All Items."),
+                .paragraph("DNS-resolution failures are retried up to three times with backoff. Persistent DNS-only failures are treated as inconclusive (not flagged) — catches Pi-hole flushes and local-resolver blips that would otherwise mass-flag dozens of healthy URLs."),
+                .heading("Working with Findings"),
+                .bullet([
+                    "Click any issue row to load that item in the detail pane on the right.",
+                    "Each broken-URL row has an arrow.clockwise button that re-probes just that item without rerunning the whole scan.",
+                    "Right-click → Edit URL… commits the new URL with optimistic feedback (\"<new> — rechecking…\"), then resolves to the real status; if the new URL is still broken, the row's detail updates with the new failure.",
+                    "Right-click → Ask Google opens a search for \"What happened to <URL>?\" — useful for hunting down a moved page.",
+                    "Delete and Archive prune the row from the list immediately — no need to rerun the check.",
+                    "Each section has a small clipboard button that copies the section's contents — handy for piping into an external tool (e.g. an LLM chat) for bulk-replacement suggestions.",
+                ]),
             ]
 
         case .clipboard:
@@ -393,25 +413,60 @@ enum HelpTopic: String, CaseIterable, Identifiable {
                 ]),
                 .heading("Notifications on macOS"),
                 .paragraph("`brew install terminal-notifier` makes notify banners clickable — clicking opens the URL (link items) or source file (file/image items). Without it, notifications still fire but aren't clickable."),
+                .heading("Suggest Rules (Apple Intelligence)"),
+                .paragraph("On Apple Silicon Macs with Apple Intelligence enabled, the Rules toolbar's ✨ button asks the on-device language model to characterize patterns in your manual tagging history (last ~100 events from $STASH_DIR/tags.log plus the current item↔tag snapshot) and proposes new rules. Tags already covered by an enabled rule are skipped."),
+                .bullet([
+                    "Each card shows the proposed rule preview, the supporting items, and Add Rule / Skip buttons.",
+                    "Add Rule opens the rule editor pre-populated; Create writes the rule with `enabled: false` so it doesn't tag anything until you flip the toggle and run Apply Now.",
+                    "Skip persists across sessions; the sheet footer shows a count and a Reset button to bring previously-skipped patterns back.",
+                    "The button greys out on Intel Macs or when Apple Intelligence isn't enabled in System Settings.",
+                ]),
             ]
 
         case .keyboard:
             return [
-                .heading("App Shortcuts"),
+                .heading("Global"),
+                .paragraph("Active anywhere in the main window. The plain-key shortcuts (`/`, `?`) defer to whichever editable field has focus — they only fire when you're not actively typing into one."),
                 .table(headers: ["Shortcut", "Action"], rows: [
                     ["⌘N", "Add new item"],
-                    ["⌘K", "Quick search"],
-                    ["⌘?", "Open help"],
+                    ["⌘F", "Open the global search panel"],
+                    ["⌘K", "Open the global search panel (same as ⌘F)"],
+                    ["/",  "Open the global search panel (when no field has focus, or list filter is empty)"],
+                    ["?",  "Open contextual help for the current sidebar section"],
+                ]),
+                .heading("Global Search Panel"),
+                .paragraph("Active while the search panel is open."),
+                .table(headers: ["Shortcut", "Action"], rows: [
+                    ["↑ / ↓",       "Move the result highlight (also: Ctrl-K / Ctrl-J)"],
+                    ["Return",      "Open the highlighted result; falls back to the top hit if you haven't moved the highlight"],
+                    ["Tab",         "Open or cycle the tag completion dropdown"],
+                    ["⌘R",          "Toggle regex mode (RE2 against title + notes + URL + extracted text)"],
+                    ["Escape",      "Dismiss the tag dropdown, then clear the field, then close the panel"],
+                ]),
+                .heading("Item List"),
+                .table(headers: ["Shortcut", "Action"], rows: [
+                    ["Single-click",  "Select an item (Cmd-click extends multi-select)"],
+                    ["Double-click",  "Open the item in its default app (browser, viewer, etc.)"],
+                    ["Spacebar",      "QuickLook preview of the selected item"],
+                    ["Return",        "Search with the current list-filter query"],
+                    ["Right-click",   "Per-item menu: Open, Edit, Tags…, Thumbnail actions, Archive, Delete"],
+                    ["Drag",          "Drag onto a sidebar tag/collection to add membership; drop on a tile within a collection (curated mode) to reorder"],
+                ]),
+                .heading("Item Detail Pane"),
+                .table(headers: ["Shortcut", "Action"], rows: [
+                    ["⌘L",       "Open the item's link / file"],
+                    ["⌘O",       "Same — Open"],
+                    ["⌘E",       "Edit the item"],
+                    ["⌘⌫",      "Delete the item (with confirmation)"],
+                ]),
+                .heading("Rule Detail"),
+                .table(headers: ["Shortcut", "Action"], rows: [
+                    ["⌘E", "Edit the selected rule"],
                 ]),
                 .heading("Sheets & Dialogs"),
                 .table(headers: ["Shortcut", "Action"], rows: [
                     ["Return", "Submit / confirm"],
                     ["Escape", "Cancel / close"],
-                ]),
-                .heading("Item List"),
-                .table(headers: ["Shortcut", "Action"], rows: [
-                    ["Return", "Search with current query"],
-                    ["Right-click", "Open, Edit, or Delete an item"],
                 ]),
             ]
         }
