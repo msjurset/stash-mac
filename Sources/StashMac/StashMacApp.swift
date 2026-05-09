@@ -71,8 +71,11 @@ struct StashMacApp: App {
             }
         }
 
-        WindowGroup("Stash Help", id: "help") {
-            HelpView()
+        // Parameterized so the contextual ? shortcut can land on the
+        // topic that matches the user's current sidebar nav. The
+        // menu-item path passes nil and lands on Getting Started.
+        WindowGroup("Stash Help", id: "help", for: HelpTopic.self) { $topic in
+            HelpView(initialTopic: topic ?? .gettingStarted)
         }
         .defaultSize(width: 800, height: 550)
 

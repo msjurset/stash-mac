@@ -9,6 +9,26 @@ struct QuickSearchView: View {
     @State private var searchTask: Task<Void, Never>?
     @State private var tagMatches: [StashTag] = []
     @State private var tagActiveIndex = 0
+    /// Regex mode: the query is sent through the CLI's `--regex` flag
+    /// (RE2, matched against title+notes+url+extracted text) instead
+    /// of the FTS-backed positional search. Tag filters still apply
+    /// to either; tag-completion suppresses while in regex mode since
+    /// `tag:` tokens look like regex literals.
+    @State private var regexMode = false
+    /// Live status of the regex compile. `nil` = no error or not in
+    /// regex mode; otherwise a short message rendered under the
+    /// search field so the user knows their pattern won't match.
+    @State private var regexError: String?
+    /// Cursor inside the results list, driven by ↑/↓ in the search
+    /// field. -1 means "no cursor yet" (Enter falls back to the
+    /// first row). Reset to 0 whenever results change so the user
+    /// can Enter to commit the top hit immediately.
+    @State private var resultActiveIndex = -1
+    /// Drives the regex-guide popover anchored to the `*` toggle.
+    /// Opens whenever regex mode is enabled (toggle click, ⌘R, etc.)
+    /// and closes when the user disables regex mode or clicks
+    /// outside the popover.
+    @State private var regexGuideShown = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -20,12 +40,25 @@ struct QuickSearchView: View {
                     tagMatches: $tagMatches,
                     onKey: { handleKey($0) }
                 )
+                regexToggle
                 Button("Done") { dismiss() }
                     .keyboardShortcut(.cancelAction)
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
             }
             .padding()
+            if let regexError {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    Text(regexError)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 14)
+                .padding(.bottom, 6)
+            }
 
             // Tag suggestions
             if !tagMatches.isEmpty {
@@ -72,32 +105,8 @@ struct QuickSearchView: View {
                 ContentUnavailableView.search(text: query)
                     .frame(height: 200)
             } else if tagMatches.isEmpty {
-                List(results) { item in
-                    Button {
-                        store.selectedItemID = item.id
-                        dismiss()
-                    } label: {
-                        HStack {
-                            Image(systemName: item.type.icon)
-                                .foregroundStyle(.secondary)
-                                .frame(width: 20)
-                            VStack(alignment: .leading) {
-                                Text(item.title)
-                                    .lineLimit(1)
-                                if let tags = item.tags, !tags.isEmpty {
-                                    Text(tags.map { "#\($0.name)" }.joined(separator: " "))
-                                        .kerning(0.5)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                            Spacer()
-                            Text(item.type.label)
-                                .font(.caption)
-                                .foregroundStyle(.tertiary)
-                        }
-                    }
-                    .buttonStyle(.plain)
+                List(Array(results.enumerated()), id: \.element.id) { idx, item in
+                    resultRow(idx: idx, item: item)
                 }
                 .listStyle(.plain)
                 .frame(minHeight: 200, maxHeight: 400)
@@ -114,6 +123,151 @@ struct QuickSearchView: View {
                 results = []
             }
         }
+        .onChange(of: regexMode) { _, _ in
+            // Toggle re-runs the search so the user sees results
+            // change immediately without re-typing the query.
+            tagMatches = []
+            debounceSearch(query)
+        }
+        .onChange(of: results) { _, _ in
+            // New result set → reset the cursor to the top so Enter
+            // commits the highest-relevance hit.
+            resultActiveIndex = results.isEmpty ? -1 : 0
+        }
+    }
+
+    /// Commit a result selection: focus the item, switch nav to All
+    /// Items if it's not visible in the current scope, dismiss the
+    /// panel.
+    private func commitResult(_ item: StashItem) {
+        store.selectItemByID(item.id)
+        dismiss()
+    }
+
+    /// Single result row. Factored out so the label closure stays
+    /// simple enough for Swift's type checker — inlining all the
+    /// foreground/background ternaries pushed it past its budget.
+    @ViewBuilder
+    private func resultRow(idx: Int, item: StashItem) -> some View {
+        let active = idx == resultActiveIndex
+        let primary: Color = active ? .white : .primary
+        let secondary: Color = active ? Color.white.opacity(0.85) : .secondary
+        let tertiary: Color = active ? Color.white.opacity(0.7) : Color.secondary.opacity(0.7)
+        Button {
+            commitResult(item)
+        } label: {
+            HStack {
+                Image(systemName: item.type.icon)
+                    .foregroundStyle(secondary)
+                    .frame(width: 20)
+                VStack(alignment: .leading) {
+                    Text(item.title)
+                        .lineLimit(1)
+                        .foregroundStyle(primary)
+                    if let tags = item.tags, !tags.isEmpty {
+                        Text(tags.map { "#\($0.name)" }.joined(separator: " "))
+                            .kerning(0.5)
+                            .font(.caption)
+                            .foregroundStyle(secondary)
+                    }
+                }
+                Spacer()
+                Text(item.type.label)
+                    .font(.caption)
+                    .foregroundStyle(tertiary)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(active ? Color.accentColor : Color.clear)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// `*` toggle next to the field. Click toggles regex mode and
+    /// pops the RE2 cheatsheet (with negation) when entering regex
+    /// mode. Cursor returns to the field after the click so the user
+    /// can keep typing without re-grabbing focus. ⌘R also toggles
+    /// (bound via a hidden keyboard shortcut button below).
+    ///
+    /// The popover is hosted by `PersistentPopoverHost` so it stays
+    /// open while the user types in the search field — the default
+    /// SwiftUI popover is `.transient`, which dismisses on any focus
+    /// change.
+    private var regexToggle: some View {
+        Button {
+            toggleRegex()
+        } label: {
+            Image(systemName: "asterisk")
+                .font(.body.weight(.semibold))
+                .foregroundStyle(regexMode ? Color.white : Color.secondary)
+                .frame(width: 22, height: 22)
+                .background(regexMode ? Color.accentColor : Color.clear, in: RoundedRectangle(cornerRadius: 4))
+        }
+        .buttonStyle(.plain)
+        .help(regexMode
+            ? "Regex search active — click to disable (⌘R)"
+            : "Search by RE2 regex pattern — click to enable (⌘R)")
+        .background(
+            PersistentPopoverHost(
+                isPresented: $regexGuideShown,
+                preferredEdge: .minY  // anchor below the toggle
+            ) {
+                RegexGuideView(context: .searchPanel)
+            }
+        )
+        .background(
+            // ⌘R toggles regex mode globally while QuickSearch is up.
+            // Hidden Button so SwiftUI honors the shortcut without
+            // requiring focus on the toggle itself.
+            Button("") { toggleRegex() }
+                .keyboardShortcut("r", modifiers: .command)
+                .hidden()
+        )
+    }
+
+    /// Flip regex mode and open/close the cheatsheet popover. Returns
+    /// first-responder to the search field so typing resumes without
+    /// the user clicking back into it. Walk every visible NSWindow
+    /// because after toggle the popover may take key status briefly;
+    /// we don't filter by isKeyWindow.
+    ///
+    /// `DispatchQueue.main.async` (twice) defers the focus-return
+    /// past both SwiftUI's body re-evaluation AND AppKit's popover
+    /// open animation — re-grabbing focus too early loses the race
+    /// to the popover, leaving the field unfocused.
+    private func toggleRegex() {
+        regexMode.toggle()
+        regexGuideShown = regexMode
+        DispatchQueue.main.async {
+            DispatchQueue.main.async {
+                for window in NSApplication.shared.windows where window.isVisible {
+                    if let field = findSearchField(in: window.contentView) {
+                        window.makeFirstResponder(field)
+                        // Position cursor at end of any existing query.
+                        if let editor = field.currentEditor() {
+                            editor.selectedRange = NSRange(location: field.stringValue.count, length: 0)
+                        }
+                        return
+                    }
+                }
+            }
+        }
+    }
+
+    /// DFS the view hierarchy for the search field (a
+    /// `NoAutoFillTextField` whose placeholder starts with "Search").
+    /// Cheap because the panel is small — at most a few dozen views.
+    private func findSearchField(in view: NSView?) -> NSTextField? {
+        guard let view else { return nil }
+        if let tf = view as? NSTextField,
+           (tf.placeholderString ?? "").lowercased().contains("search") {
+            return tf
+        }
+        for sub in view.subviews {
+            if let f = findSearchField(in: sub) { return f }
+        }
+        return nil
     }
 
     // MARK: - Key handling
@@ -132,12 +286,18 @@ struct QuickSearchView: View {
             advance(key == .tab ? .down : .up)
             return true
         case .arrowDown, .ctrlJ:
-            if tagMatches.isEmpty { return false }
-            advance(.down)
+            if !tagMatches.isEmpty {
+                advance(.down)
+                return true
+            }
+            advanceResult(.down)
             return true
         case .arrowUp, .ctrlK:
-            if tagMatches.isEmpty { return false }
-            advance(.up)
+            if !tagMatches.isEmpty {
+                advance(.up)
+                return true
+            }
+            advanceResult(.up)
             return true
         case .enter:
             if !tagMatches.isEmpty {
@@ -147,10 +307,12 @@ struct QuickSearchView: View {
                 }
                 return true
             }
-            // No dropdown — fire the first result if any, else close sheet.
-            if let first = results.first {
-                store.selectedItemID = first.id
-                dismiss()
+            // No dropdown — commit the highlighted result, falling
+            // back to the first hit when the user hasn't moved the
+            // cursor yet.
+            let idx = resultActiveIndex >= 0 ? resultActiveIndex : 0
+            if idx < results.count {
+                commitResult(results[idx])
                 return true
             }
             return false
@@ -169,6 +331,16 @@ struct QuickSearchView: View {
         }
     }
 
+    private func advanceResult(_ direction: Direction) {
+        guard !results.isEmpty else { return }
+        switch direction {
+        case .down:
+            resultActiveIndex = min(resultActiveIndex + 1, results.count - 1)
+        case .up:
+            resultActiveIndex = max(resultActiveIndex - 1, 0)
+        }
+    }
+
     private enum Direction { case up, down }
 
     private func advance(_ direction: Direction) {
@@ -182,6 +354,13 @@ struct QuickSearchView: View {
     // MARK: - Tag suggestions
 
     private func recomputeSuggestions() {
+        // Tag completion is meaningless in regex mode — `tag:` may be
+        // a literal substring of the user's pattern.
+        if regexMode {
+            tagMatches = []
+            tagActiveIndex = 0
+            return
+        }
         guard let match = query.range(of: #"(?:^|\s)tag:(\S*)$"#, options: .regularExpression) else {
             tagMatches = []
             tagActiveIndex = 0
@@ -255,24 +434,63 @@ struct QuickSearchView: View {
         query = "\(before)\(prefix)tag:\(tagName)"
     }
 
-    /// Parse `tag:xxx` tokens out of the query and pass them as CLI `--tag` flags.
+    /// Parse `tag:xxx` tokens out of the query and pass them as CLI
+    /// `--tag` flags. In regex mode the remainder of the query is the
+    /// RE2 pattern; in free-text mode it's the FTS query. Tag tokens
+    /// apply in either mode so the user can scope a regex by tag.
     private func debounceSearch(_ query: String) {
         searchTask?.cancel()
         guard !query.isEmpty else {
             results = []
+            regexError = nil
             return
         }
-        let tagTokens = query.matches(of: /tag:(\S+)/).map { String($0.output.1) }
-        let textQuery = query
-            .replacing(/tag:\S*/, with: "")
-            .trimmingCharacters(in: .whitespaces)
+        // Tag tokens are only honored in non-regex mode — treating
+        // `tag:` as a tag filter inside an arbitrary regex would
+        // mangle patterns the user actually meant to match (e.g.
+        // "tag:.+" intending "literal `tag:` then anything").
+        let tagTokens: [String]
+        let textQuery: String
+        if regexMode {
+            tagTokens = []
+            textQuery = query
+        } else {
+            tagTokens = query.matches(of: /tag:(\S+)/).map { String($0.output.1) }
+            textQuery = query
+                .replacing(/tag:\S*/, with: "")
+                .trimmingCharacters(in: .whitespaces)
+        }
+
+        // Pre-validate the regex client-side so the user gets fast
+        // feedback on syntax errors instead of an empty result list.
+        // RE2 and NSRegularExpression don't have identical syntax but
+        // the common subset (anchors, groups, character classes,
+        // alternation, quantifiers) covers virtually every practical
+        // pattern; edge-case mismatches will still show up as
+        // "no results" rather than an inline error.
+        if regexMode {
+            if (try? NSRegularExpression(pattern: textQuery)) == nil {
+                regexError = "Invalid regex pattern"
+                results = []
+                return
+            }
+            regexError = nil
+        } else {
+            regexError = nil
+        }
 
         searchTask = Task {
             try? await Task.sleep(for: .milliseconds(200))
             guard !Task.isCancelled else { return }
             do {
                 let found: [StashItem]
-                if textQuery.isEmpty && !tagTokens.isEmpty {
+                if regexMode {
+                    found = try await StashCLI.shared.searchItems(
+                        query: "",
+                        limit: 50,
+                        regex: textQuery
+                    )
+                } else if textQuery.isEmpty && !tagTokens.isEmpty {
                     found = try await StashCLI.shared.listItems(tags: tagTokens, limit: 20)
                 } else {
                     found = try await StashCLI.shared.searchItems(query: textQuery, tags: tagTokens, limit: 20)

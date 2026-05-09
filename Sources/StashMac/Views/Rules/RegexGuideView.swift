@@ -1,14 +1,26 @@
 import SwiftUI
 
+/// Context this guide is being shown in — drives the footer
+/// section. Rule conditions need the named-capture / template
+/// reference; the global search panel needs the negation prefix
+/// reference (the `--regex !` form). The columns above are the
+/// same in both contexts.
+enum RegexGuideContext {
+    case rulesEngine
+    case searchPanel
+}
+
 /// Compact 3-column reference for the RE2 regex flavor used by gostash's
-/// `url_regex` and `content_regex` match conditions. Shown as a popover
-/// anchored to the condition's value field while it's focused; collapses
-/// when focus leaves.
+/// `url_regex` / `content_regex` match conditions and the global search
+/// panel's regex toggle. Shown as a popover anchored to whichever
+/// affordance owns the regex input.
 ///
-/// Sized for ~480×360 — fits the most-used patterns without scrolling.
+/// Sized for ~520×360 — fits the most-used patterns without scrolling.
 /// If users want more, this is the place to add a "More…" link to a
 /// docs page or expand into a sheet.
 struct RegexGuideView: View {
+    var context: RegexGuideContext = .rulesEngine
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
@@ -56,6 +68,16 @@ struct RegexGuideView: View {
 
             Divider()
 
+            footer
+        }
+        .padding(14)
+        .frame(width: 520)
+    }
+
+    @ViewBuilder
+    private var footer: some View {
+        switch context {
+        case .rulesEngine:
             VStack(alignment: .leading, spacing: 4) {
                 Text("Templates")
                     .font(.subheadline)
@@ -77,9 +99,34 @@ struct RegexGuideView: View {
                 + Text(#"set_title: "Invoice {{.Captures.amount}}""#)
                     .font(.caption.monospaced())
             }
+        case .searchPanel:
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Negation")
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                Text("Prefix the pattern with ")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                + Text("!")
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.primary)
+                + Text(" to invert the match — items whose title, notes, URL, or extracted text do NOT match the pattern.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("e.g. ")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                + Text("!^https://")
+                    .font(.caption.monospaced())
+                + Text(" → items whose URL doesn't start with https.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("Tag filters are disabled in regex mode — `tag:` may be a literal in your pattern.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .padding(.top, 4)
+            }
         }
-        .padding(14)
-        .frame(width: 520)
     }
 
     @ViewBuilder

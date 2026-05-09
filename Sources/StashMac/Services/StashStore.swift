@@ -1177,7 +1177,23 @@ final class StashStore {
     }
 
     func selectItemByID(_ id: String) {
+        // Set BOTH the focus id (drives the detail pane) AND the
+        // multi-selection set (drives the list-row highlight). The
+        // List binds to selectedItems, so without setting the Set
+        // the row never lights up after a programmatic selection
+        // (e.g. clicking a result in QuickSearchView).
         selectedItemID = id
+        selectedItems = [id]
+
+        // If the current sidebar nav filters the item out, the row
+        // can't appear — switch to All Items so the result is
+        // visible. Skip when already on allItems or when we can see
+        // the item in the current scope.
+        let visibleHere = items.contains(where: { $0.id == id })
+        if !visibleHere && navigation != .allItems {
+            navigation = .allItems
+        }
+
         if items.first(where: { $0.id == id }) == nil {
             Task {
                 do {

@@ -269,9 +269,15 @@ struct ItemListView: View {
                 ItemRow(item: item, shownThumbnailID: $shownThumbnailID)
                     .listRowBackground(idx.isMultiple(of: 2) ? Color.clear : Color.primary.opacity(0.04))
                     .tag(item.id)
-                    .onTapGesture(count: 2) {
-                        store.openItem(id: item.id)
-                    }
+                    // `.onDrag` interferes with `.onTapGesture(count: 2)` — the
+                    // AppKit drag system intercepts mouseDown before the tap
+                    // count gesture resolves. Use `.simultaneousGesture` so
+                    // the double-click composes alongside drag detection.
+                    .simultaneousGesture(
+                        TapGesture(count: 2).onEnded {
+                            store.openItem(id: item.id)
+                        }
+                    )
                     .onDrag { makeDragProvider(for: item.id) }
                     // Drop on a list row in a collection nav reorders
                     // the curated order. No-op outside collection nav
@@ -314,12 +320,16 @@ struct ItemListView: View {
             ) {
                 ForEach(store.items) { item in
                     ItemTile(item: item)
-                        .onTapGesture(count: 2) {
-                            store.openItem(id: item.id)
-                        }
-                        .onTapGesture {
-                            handleTileClick(item: item)
-                        }
+                        .simultaneousGesture(
+                            TapGesture(count: 2).onEnded {
+                                store.openItem(id: item.id)
+                            }
+                        )
+                        .simultaneousGesture(
+                            TapGesture(count: 1).onEnded {
+                                handleTileClick(item: item)
+                            }
+                        )
                         .onDrag { makeDragProvider(for: item.id) }
                         .contextMenu { itemContextMenu(rightClickedID: item.id, inGridView: true) }
                         .popover(

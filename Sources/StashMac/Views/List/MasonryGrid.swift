@@ -126,8 +126,11 @@ struct MasonryGrid: View {
                     .padding(-2)
                     .opacity(isGhostPreview ? 0.85 : 0)
             )
-            .onTapGesture(count: 2) { onOpen(entry.item) }
-            .onTapGesture { onTap(entry.item) }
+            // `.onDrag` intercepts mouseDown before tap-count resolves —
+            // use simultaneous gestures so double-click and single-click
+            // compose alongside drag detection.
+            .simultaneousGesture(TapGesture(count: 2).onEnded { onOpen(entry.item) })
+            .simultaneousGesture(TapGesture(count: 1).onEnded { onTap(entry.item) })
             .onDrag { dragPayload(entry.item.id) }
             .contextMenu { contextMenuBuilder(entry.item.id) }
             .modifier(ReorderDropModifier(

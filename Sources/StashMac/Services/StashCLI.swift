@@ -51,16 +51,26 @@ actor StashCLI {
         query: String,
         type: ItemType? = nil,
         tags: [String] = [],
-        limit: Int = 50
+        limit: Int = 50,
+        regex: String? = nil
     ) async throws -> [StashItem] {
         // The query goes after `--` so cobra stops walking subcommands —
         // otherwise queries like "delete", "save", "list", or "run"
         // resolve to `stash search delete` etc. and the trailing `-l`
         // becomes an unknown flag.
+        //
+        // Regex mode passes the pattern via `--regex` and skips the
+        // positional query; free-text mode passes the positional query
+        // (FTS-backed). Tag filters work in both modes.
         var args = ["search", "--json", "-l", "\(limit)"]
         if let type { args += ["--type", type.rawValue] }
         for tag in tags { args += ["--tag", tag] }
-        args += ["--", query]
+        if let regex, !regex.isEmpty {
+            args += ["--regex", regex]
+        }
+        if regex == nil || regex!.isEmpty {
+            args += ["--", query]
+        }
         return try await captureJSON(args: args)
     }
 

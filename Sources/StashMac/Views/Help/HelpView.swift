@@ -1,7 +1,12 @@
 import SwiftUI
 
 struct HelpView: View {
-    @State private var selectedTopic: HelpTopic? = .gettingStarted
+    /// Initial topic to land on when the window opens. Defaults to
+    /// Getting Started so the menu-item path (no context) lands on
+    /// a sensible introduction; the contextual `?` keyboard shortcut
+    /// passes the topic that matches the current sidebar nav.
+    var initialTopic: HelpTopic = .gettingStarted
+    @State private var selectedTopic: HelpTopic? = nil
 
     var body: some View {
         HSplitView {
@@ -31,6 +36,17 @@ struct HelpView: View {
             }
         }
         .frame(minWidth: 700, minHeight: 500)
+        .onAppear {
+            // Apply the requested initial topic on first render.
+            // Subsequent opens of the same window with a different
+            // value also re-apply via .onChange below.
+            if selectedTopic == nil {
+                selectedTopic = initialTopic
+            }
+        }
+        .onChange(of: initialTopic) { _, new in
+            selectedTopic = new
+        }
     }
 }
 
