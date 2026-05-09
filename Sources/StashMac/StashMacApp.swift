@@ -1,4 +1,5 @@
 import AppKit
+import Quartz
 import SwiftUI
 import UserNotifications
 
@@ -21,6 +22,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // applicationWillFinishLaunching and now.
         for window in NSApp.windows {
             installFieldEditorInterceptor(on: window)
+        }
+        // Touch the QLPreviewPanel singleton early so its one-time
+        // creation happens during launch — when our interceptors
+        // are fully wired — rather than the first time the user
+        // hits spacebar. Newer panels created by AppKit sometimes
+        // leak the autofill popup once on first instantiation if
+        // the interceptor isn't ready.
+        if let panel = QLPreviewPanel.shared() {
+            installFieldEditorInterceptor(on: panel)
         }
         NSApp.servicesProvider = servicesProvider
         NSUpdateDynamicServices()

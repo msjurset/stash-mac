@@ -32,28 +32,21 @@ struct ItemDetailView: View {
 
                 Divider()
 
-                // Image preview
+                // Unified media area — switches between embed-only,
+                // audio-beside-thumb, video tap-to-play, plain
+                // thumbnail, or hidden, based on item shape. Section
+                // title intentionally absent — the visual labels
+                // itself.
+                MediaSection(item: item)
+
+                // Image preview — full-resolution decoded off-thread
+                // (see ImagePreviewSection) so navigating to a large
+                // image item doesn't stall the runloop on
+                // NSImage(contentsOf:) inside the body.
                 if item.type == .image, let storePath = item.storePath,
-                   let fileURL = FilePathResolver.resolve(storePath: storePath),
-                   let nsImage = NSImage(contentsOf: fileURL) {
+                   let fileURL = FilePathResolver.resolve(storePath: storePath) {
                     DetailSection(title: "Preview") {
-                        Image(nsImage: nsImage)
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .frame(maxWidth: 500, maxHeight: 400)
-                            .clipShape(RoundedRectangle(cornerRadius: 6))
-                            .contentShape(RoundedRectangle(cornerRadius: 6))
-                            .onTapGesture {
-                                ImagePreviewPresenter.present(image: nsImage)
-                            }
-                            .onHover { hovering in
-                                if hovering {
-                                    NSCursor.pointingHand.push()
-                                } else {
-                                    NSCursor.pop()
-                                }
-                            }
-                            .help("Click to open in viewer")
+                        ImagePreviewSection(fileURL: fileURL)
                     }
                 }
 
@@ -64,11 +57,14 @@ struct ItemDetailView: View {
                     }
                 }
 
-                // Notes
+                // Notes — Markdown-rendered. Same `MarkdownText`
+                // component that powers the Extracted Text section
+                // so bullet lists, bold/italic, code spans, links,
+                // and headings all render the same way in both
+                // places. Plain prose still renders as prose.
                 if let notes = item.notes, !notes.isEmpty {
                     DetailSection(title: "Notes") {
-                        Text(notes)
-                            .textSelection(.enabled)
+                        MarkdownText(notes, isSelectable: true)
                     }
                 }
 
@@ -309,7 +305,13 @@ struct ItemDetailView: View {
             LinkItemSheet(sourceItemID: item.id)
         }
         .dropDestination(for: String.self) { items, _ in
-            guard let droppedID = items.first, droppedID != item.id else { return false }
+            // Drag payloads are now comma-joined for multi-select
+            // support; the link path takes one source-of-truth id,
+            // so use the first non-self id from the bundle.
+            let ids = items
+                .flatMap { $0.split(separator: ",").map(String.init) }
+                .filter { !$0.isEmpty && $0 != item.id }
+            guard let droppedID = ids.first else { return false }
             store.linkItems(from: item.id, to: droppedID)
             return true
         }

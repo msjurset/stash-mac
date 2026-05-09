@@ -51,13 +51,13 @@ struct ArchiveContentsView: View {
 
 // MARK: - Archive reading
 
-private struct ArchiveEntry {
+struct ArchiveEntry {
     let name: String
     let size: Int64
     let isDir: Bool
 }
 
-private func listArchive(url: URL, mimeType: String) throws -> [ArchiveEntry] {
+func listArchive(url: URL, mimeType: String) throws -> [ArchiveEntry] {
     if mimeType.contains("gzip") || mimeType.contains("tar") {
         return try listTarGz(url: url)
     }
@@ -188,7 +188,7 @@ struct ArchiveNode: Identifiable {
     }
 }
 
-private func buildTree(from entries: [ArchiveEntry]) -> ArchiveNode {
+func buildTree(from entries: [ArchiveEntry]) -> ArchiveNode {
     var root = ArchiveNode(name: "", isDir: true)
 
     for entry in entries {

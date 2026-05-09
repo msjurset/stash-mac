@@ -17,6 +17,27 @@ struct ItemListView: View {
 
     @State private var state = TagSuggestionState()
 
+    /// Drives the per-row Tags popover. When non-nil, the popover
+    /// is presented anchored to the row whose id matches `id`. The
+    /// payload (`itemIDs`, `initialTags`) is captured at right-click
+    /// time so the picker stays stable even if the underlying list
+    /// reloads while the popover is open.
+    @State private var tagPickerTarget: TagPickerTarget?
+
+    /// Row whose thumbnail popover is currently showing, or nil for
+    /// none. Triggered by clicking the leading icon — single-id
+    /// state so clicking icon B atomically dismisses A's popover
+    /// and opens B's. Re-clicking the same icon toggles closed.
+    /// Clicks elsewhere dismiss via the OS popover default + an
+    /// inside-popover tap gesture.
+    @State private var shownThumbnailID: String?
+
+    struct TagPickerTarget: Equatable {
+        let id: String                 // the right-clicked row id (anchor)
+        let itemIDs: [String]          // items the picker applies to
+        let initialTags: Set<String>   // common tags across `itemIDs`
+    }
+
     var body: some View {
         @Bindable var store = store
         VStack(spacing: 0) {
@@ -88,53 +109,73 @@ struct ItemListView: View {
                 Divider()
             }
 
-            // Item list
-            List(selection: $store.selectedItemID) {
-                HStack {
-                    Text("\(store.items.count) \(store.items.count == 1 ? "item" : "items")")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Button {
-                        store.cycleSortMode()
-                    } label: {
-                        HStack(spacing: 2) {
-                            Text(store.sortMode.rawValue)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                            Image(systemName: store.sortMode.icon)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .help("Sort: \(store.sortMode.rawValue)")
-                }
-                .listRowSeparator(.hidden)
-                ForEach(Array(store.items.enumerated()), id: \.element.id) { idx, item in
-                    ItemRow(item: item)
-                        .listRowBackground(idx.isMultiple(of: 2) ? Color.clear : Color.primary.opacity(0.04))
-                        .tag(item.id)
-                        .contextMenu {
-                            Button("Open") { store.openItem(id: item.id) }
-                            Button("Edit...") {
-                                store.selectedItemID = item.id
-                                showEditSheet = true
-                            }
-                            Divider()
-                            Button("Delete", role: .destructive) {
-                                store.deleteItem(id: item.id)
-                            }
-                        }
-                }
+            // Header bar — count, sort cycle, list/grid toggle. Lives
+            // above both the list and the grid renderings so it stays
+            // visible regardless of view mode.
+            paneHeader
+
+            // Item list, grid, or masonry. Selection is a Set so
+            // Cmd-click / Shift-click multi-select. The detail pane
+            // pivots off `store.selectedItemID`, which is kept in
+            // sync below.
+            //
+            // Collection navigation (sidebar Collections section)
+            // hard-switches to masonry — the visual emphasis matches
+            // the curated, often photo-heavy nature of collections.
+            // The list/grid toggle still works as an escape hatch.
+            if isCollectionNavigation && store.viewMode == .grid {
+                masonryView
+            } else if store.viewMode == .grid {
+                gridView
+            } else {
+                listView
             }
-            .listStyle(.inset)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .onKeyPress(.space) {
+            let targets = quickLookTargets()
+            if targets.isEmpty { return .ignored }
+            QuickLookPreviewer.shared.show(items: targets)
+            return .handled
         }
         .onChange(of: store.searchQuery) { _, _ in
             recomputeSuggestions()
             if state.matches.isEmpty {
                 store.debouncedRefresh()
+            }
+        }
+        .onChange(of: store.navigation) { _, new in
+            // Hard-switch to grid (= masonry, since `gridView` reads
+            // `isCollectionNavigation`) when the user clicks a sidebar
+            // Collection. The toggle is still available so they can
+            // flip back to list within a collection. Also default
+            // sortMode to .curated so the CLI's drag-and-drop order
+            // surfaces in the UI.
+            if case .collection = new {
+                if store.viewMode != .grid {
+                    store.viewMode = .grid
+                }
+                if store.sortMode != .curated {
+                    store.sortMode = .curated
+                }
+            } else if store.sortMode == .curated {
+                // Leaving a collection: .curated is redundant with
+                // newest-first elsewhere, so revert.
+                store.sortMode = .newestFirst
+            }
+        }
+        .onChange(of: store.selectedItems) { _, newSelection in
+            // Detail pane shows the focused row, which we define as
+            // "the only selected row." Multi-select hides the detail
+            // (caller can navigate or shrink the selection back to 1).
+            if newSelection.count == 1 {
+                store.selectedItemID = newSelection.first
+            } else if newSelection.isEmpty {
+                store.selectedItemID = nil
+            } else {
+                if let current = store.selectedItemID,
+                   !newSelection.contains(current) {
+                    store.selectedItemID = nil
+                }
             }
         }
         .background(SearchFieldKeyMonitor(state: state))
@@ -155,6 +196,178 @@ struct ItemListView: View {
             ToolbarItem {
                 ContextualHelpButton(topic: .searching)
             }
+        }
+    }
+
+    /// True when the current navigation is a sidebar Collection.
+    /// Drives the masonry-vs-uniform-grid choice when the user has
+    /// toggled grid mode.
+    private var isCollectionNavigation: Bool {
+        if case .collection = store.navigation { return true }
+        return false
+    }
+
+    private var masonryView: some View {
+        MasonryGrid(
+            items: store.items,
+            onTap: { item in handleTileClick(item: item) },
+            onOpen: { item in store.openItem(id: item.id) },
+            contextMenuBuilder: { id in
+                AnyView(itemContextMenu(rightClickedID: id, inGridView: true))
+            },
+            dragPayload: { id in makeDragProvider(for: id) },
+            onReorderBefore: { droppedIDs, targetID in
+                store.reorderCollectionInsertBefore(
+                    droppedIDs: droppedIDs,
+                    targetID: targetID
+                )
+            }
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var paneHeader: some View {
+        HStack {
+            Text("\(store.items.count) \(store.items.count == 1 ? "item" : "items")")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Button {
+                store.cycleSortMode()
+            } label: {
+                HStack(spacing: 2) {
+                    Text(store.sortMode.rawValue)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Image(systemName: store.sortMode.icon)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .buttonStyle(.plain)
+            .help("Sort: \(store.sortMode.rawValue)")
+            Button {
+                store.toggleViewMode()
+            } label: {
+                Image(systemName: store.viewMode == .grid
+                    ? "list.bullet"
+                    : "square.grid.2x2")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help(store.viewMode == .grid ? "Switch to list" : "Switch to grid")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+    }
+
+    private var listView: some View {
+        @Bindable var store = store
+        return List(selection: $store.selectedItems) {
+            ForEach(Array(store.items.enumerated()), id: \.element.id) { idx, item in
+                ItemRow(item: item, shownThumbnailID: $shownThumbnailID)
+                    .listRowBackground(idx.isMultiple(of: 2) ? Color.clear : Color.primary.opacity(0.04))
+                    .tag(item.id)
+                    .onTapGesture(count: 2) {
+                        store.openItem(id: item.id)
+                    }
+                    .onDrag { makeDragProvider(for: item.id) }
+                    // Drop on a list row in a collection nav reorders
+                    // the curated order. No-op outside collection nav
+                    // (no place to persist a custom order).
+                    .modifier(CollectionRowReorderModifier(
+                        enabled: isCollectionNavigation,
+                        targetID: item.id
+                    ))
+                    .contextMenu { itemContextMenu(rightClickedID: item.id) }
+                    .popover(
+                        isPresented: Binding(
+                            get: { tagPickerTarget?.id == item.id },
+                            set: { newValue in
+                                if !newValue && tagPickerTarget?.id == item.id {
+                                    tagPickerTarget = nil
+                                }
+                            }
+                        ),
+                        arrowEdge: .leading
+                    ) {
+                        if let target = tagPickerTarget,
+                           target.id == item.id {
+                            TagPickerPopover(
+                                itemIDs: target.itemIDs,
+                                initialTags: target.initialTags
+                            )
+                        }
+                    }
+            }
+        }
+        .listStyle(.inset)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var gridView: some View {
+        ScrollView {
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 140, maximum: 200), spacing: 14)],
+                spacing: 14
+            ) {
+                ForEach(store.items) { item in
+                    ItemTile(item: item)
+                        .onTapGesture(count: 2) {
+                            store.openItem(id: item.id)
+                        }
+                        .onTapGesture {
+                            handleTileClick(item: item)
+                        }
+                        .onDrag { makeDragProvider(for: item.id) }
+                        .contextMenu { itemContextMenu(rightClickedID: item.id, inGridView: true) }
+                        .popover(
+                            isPresented: Binding(
+                                get: { tagPickerTarget?.id == item.id },
+                                set: { newValue in
+                                    if !newValue && tagPickerTarget?.id == item.id {
+                                        tagPickerTarget = nil
+                                    }
+                                }
+                            ),
+                            arrowEdge: .leading
+                        ) {
+                            if let target = tagPickerTarget,
+                               target.id == item.id {
+                                TagPickerPopover(
+                                    itemIDs: target.itemIDs,
+                                    initialTags: target.initialTags
+                                )
+                            }
+                        }
+                }
+            }
+            .padding(14)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Tile click handling — modifier-aware multi-select that
+    /// mirrors the List's native Cmd-click toggle behavior. SwiftUI
+    /// LazyVGrid doesn't have a `selection:` binding so we drive
+    /// `store.selectedItems` manually.
+    private func handleTileClick(item: StashItem) {
+        let cmd = NSEvent.modifierFlags.contains(.command)
+        let shift = NSEvent.modifierFlags.contains(.shift)
+        if cmd {
+            if store.selectedItems.contains(item.id) {
+                store.selectedItems.remove(item.id)
+            } else {
+                store.selectedItems.insert(item.id)
+            }
+        } else if shift, let anchor = store.selectedItemID,
+                  let lo = store.items.firstIndex(where: { $0.id == anchor }),
+                  let hi = store.items.firstIndex(where: { $0.id == item.id }) {
+            let range = lo <= hi ? lo...hi : hi...lo
+            store.selectedItems = Set(store.items[range].map(\.id))
+        } else {
+            store.selectedItems = [item.id]
         }
     }
 
@@ -376,6 +589,226 @@ struct ItemListView: View {
         case .up:   state.activeIndex = max(state.activeIndex - 1, 0)
         }
     }
+
+    // MARK: - Drag-and-drop / multi-row context menu
+
+    /// Pure builder: comma-joined id list for the drag payload. If
+    /// the row is in a multi-selection, emit every selected id;
+    /// otherwise emit just the one. SidebarView's tag rows split on
+    /// comma when receiving so a sidebar-tag drop applies to the
+    /// whole batch. Side-effect free — safe to call from view body
+    /// recomputation paths.
+    private func dragIDs(for itemID: String) -> Set<String> {
+        let selected = store.selectedItems
+        if selected.contains(itemID) && selected.count > 1 {
+            return selected
+        }
+        return [itemID]
+    }
+
+    /// Build an `NSItemProvider` for a drag and flip the app-wide
+    /// drag-in-progress flag. Called from `.onDrag { … }` so the side
+    /// effect fires only at *actual* drag start — not on every body
+    /// recomputation, which is what `.draggable(_:)` does (the
+    /// non-autoclosure form evaluates its argument eagerly, so list
+    /// renders were leaving `isDraggingItems = true` and greying the
+    /// sidebar even when no drag was in progress).
+    private func makeDragProvider(for itemID: String) -> NSItemProvider {
+        let ids = dragIDs(for: itemID)
+        store.beginDragTracking(ids: ids)
+        return NSItemProvider(object: ids.joined(separator: ",") as NSString)
+    }
+
+    /// The list row's right-click menu, branched on whether the row
+    /// is part of a multi-selection. Single-row clicks act on that
+    /// row only; multi-row clicks offer "act on all selected" verbs
+    /// for the destructive operations. "Tags…" opens a popover
+    /// anchored to the right-clicked row in either mode.
+    @ViewBuilder
+    private func itemContextMenu(rightClickedID: String, inGridView: Bool = false) -> some View {
+        let selected = store.selectedItems
+        let isMulti = selected.contains(rightClickedID) && selected.count > 1
+
+        if isMulti {
+            Text("\(selected.count) items selected")
+                .foregroundStyle(.secondary)
+            Divider()
+            Button("Tags…") {
+                showTagPicker(forRowID: rightClickedID, itemIDs: Array(selected))
+            }
+            // Bulk thumbnail fetch — grid only because thumbnails are
+            // the whole point of grid view; surfacing it in list view
+            // (which doesn't show thumbnails on rows) reads as
+            // misplaced. Each item's type picks its own path:
+            // URLs go through importThumbnail, image/file types
+            // through generateThumbnail. Snippet/email items skip.
+            if inGridView {
+                let thumbable = thumbnailCapableIDs(in: Array(selected))
+                if !thumbable.isEmpty {
+                    Divider()
+                    Button("Fetch Thumbnails (\(thumbable.count))") {
+                        fetchThumbnails(forIDs: thumbable)
+                    }
+                }
+            }
+            Divider()
+            Button("Archive All") {
+                store.archiveItems(ids: Array(selected))
+            }
+            Button("Delete All…", role: .destructive) {
+                store.deleteItems(ids: Array(selected))
+            }
+        } else {
+            Button("Open") { store.openItem(id: rightClickedID) }
+            Button("Edit...") {
+                store.selectedItemID = rightClickedID
+                showEditSheet = true
+            }
+            Button("Tags…") {
+                showTagPicker(forRowID: rightClickedID, itemIDs: [rightClickedID])
+            }
+            // Per-item thumbnail action — branch on type so the
+            // right verb shows up. Skipped entirely for snippet /
+            // email items (no thumbnail concept). Grid only —
+            // see the multi-select branch above for rationale.
+            if inGridView, let item = store.items.first(where: { $0.id == rightClickedID }) {
+                singleItemThumbnailMenu(for: item)
+            }
+            Divider()
+            Button("Archive") {
+                store.archiveItems(ids: [rightClickedID])
+            }
+            Button("Delete", role: .destructive) {
+                store.deleteItem(id: rightClickedID)
+            }
+        }
+    }
+
+    /// Per-type thumbnail action button for the single-row grid
+    /// context menu. URLs import a thumbnail from the page; image/
+    /// file items generate one from local content. Snippet/email
+    /// items emit nothing — surfacing a thumbnail action for those
+    /// would just be a dead command.
+    @ViewBuilder
+    private func singleItemThumbnailMenu(for item: StashItem) -> some View {
+        switch item.type {
+        case .url:
+            Divider()
+            Button(item.thumbnailPath == nil ? "Import Thumbnail" : "Re-import Thumbnail") {
+                store.importThumbnail(itemID: item.id)
+            }
+        case .image, .file:
+            Divider()
+            Button(item.thumbnailPath == nil ? "Generate Thumbnail" : "Regenerate Thumbnail") {
+                store.generateThumbnail(for: item)
+            }
+        case .snippet, .email:
+            EmptyView()
+        }
+    }
+
+    /// Filters a multi-select id set to just the items whose type
+    /// supports any thumbnail-fetch path. Snippet / email items
+    /// drop out so the bulk count reflects what will actually be
+    /// dispatched.
+    private func thumbnailCapableIDs(in ids: [String]) -> [String] {
+        ids.filter { id in
+            guard let item = store.items.first(where: { $0.id == id }) else { return false }
+            switch item.type {
+            case .url, .image, .file: return true
+            case .snippet, .email:    return false
+            }
+        }
+    }
+
+    /// Bulk dispatcher — runs sequentially in a single Task so the
+    /// CLI subprocess and SQLite writes don't pile up, and so we can
+    /// build a per-item success/failure summary at the end. The old
+    /// fire-and-forget loop spawned N concurrent Tasks; each failure
+    /// overwrote the next via store.error and the user only ever saw
+    /// one. This path tallies and surfaces the count + failed titles.
+    private func fetchThumbnails(forIDs ids: [String]) {
+        let candidates: [StashItem] = ids.compactMap { id in
+            store.items.first(where: { $0.id == id })
+        }.filter { item in
+            switch item.type {
+            case .url, .image, .file: return true
+            case .snippet, .email:    return false
+            }
+        }
+        guard !candidates.isEmpty else { return }
+        Task { @MainActor in
+            var success = 0
+            var failures: [(title: String, error: String)] = []
+            for item in candidates {
+                do {
+                    switch item.type {
+                    case .url:
+                        try await store.importThumbnailAwaitable(itemID: item.id)
+                    case .image, .file:
+                        try await store.generateThumbnailAwaitable(for: item)
+                    case .snippet, .email:
+                        continue
+                    }
+                    success += 1
+                } catch {
+                    failures.append((item.title, error.localizedDescription))
+                }
+            }
+            if !failures.isEmpty {
+                let preview = failures.prefix(3).map { $0.title }.joined(separator: ", ")
+                let suffix = failures.count > 3 ? " (+\(failures.count - 3) more)" : ""
+                store.error = "Fetched \(success) of \(candidates.count) thumbnails. Failed: \(preview)\(suffix)"
+            }
+        }
+    }
+
+    /// Capture the current tag baseline (intersection of tags across
+    /// all target items) and show the popover anchored to
+    /// `rowID`. Deferred one runloop tick because the contextMenu
+    /// hasn't fully dismissed yet — presenting a popover too early
+    /// can race the menu's teardown and the popover never paints.
+    private func showTagPicker(forRowID rowID: String, itemIDs: [String]) {
+        let initial = computeCommonTags(itemIDs: itemIDs)
+        DispatchQueue.main.async {
+            tagPickerTarget = TagPickerTarget(
+                id: rowID,
+                itemIDs: itemIDs,
+                initialTags: initial
+            )
+        }
+    }
+
+    /// Intersection of tags across the given items — only tags that
+    /// every item in the set carries. Toggling such a tag off in the
+    /// picker removes it from all selected items; toggling a new tag
+    /// on adds it to all of them.
+    /// Items the spacebar QuickLook should preview. When a multi-row
+    /// selection is active, all selected rows preview together so the
+    /// user can arrow through them in the panel. With single or no
+    /// selection, falls back to the focused detail row.
+    private func quickLookTargets() -> [StashItem] {
+        if store.selectedItems.count > 1 {
+            let bySelection = store.items.filter { store.selectedItems.contains($0.id) }
+            if !bySelection.isEmpty { return bySelection }
+        }
+        if let focused = store.selectedItem { return [focused] }
+        return []
+    }
+
+    private func computeCommonTags(itemIDs: [String]) -> Set<String> {
+        var common: Set<String>?
+        for id in itemIDs {
+            guard let item = store.items.first(where: { $0.id == id }) else { continue }
+            let tags = Set(item.tagNames)
+            if let existing = common {
+                common = existing.intersection(tags)
+            } else {
+                common = tags
+            }
+        }
+        return common ?? []
+    }
 }
 
 /// Intercepts Tab, Shift-Tab, Ctrl-J/K, arrows, Enter, and Escape in the
@@ -430,6 +863,49 @@ struct SearchFieldKeyMonitor: NSViewRepresentable {
             if let monitor { NSEvent.removeMonitor(monitor) }
             monitor = nil
             super.removeFromSuperview()
+        }
+    }
+}
+
+/// Adds a `.dropDestination` to a list row that, when in collection
+/// navigation, calls back into the store to reorder the curated
+/// collection so dropped ids land just before this row's item.
+/// Reads the store from the environment to avoid wiring a callback
+/// through every layer of the row composition.
+private struct CollectionRowReorderModifier: ViewModifier {
+    @Environment(StashStore.self) private var store
+    let enabled: Bool
+    let targetID: String
+    @State private var isTargeted = false
+
+    func body(content: Content) -> some View {
+        if enabled {
+            content
+                // Top-edge insertion bar — same idea as the masonry
+                // tile: shows "drop will land here, before this row"
+                // without flooding the whole row with a highlight.
+                .overlay(alignment: .top) {
+                    Rectangle()
+                        .fill(Color.accentColor)
+                        .frame(height: 2)
+                        .opacity(isTargeted ? 1 : 0)
+                }
+                .animation(.easeOut(duration: 0.1), value: isTargeted)
+                .dropDestination(for: String.self) { payloads, _ in
+                    let ids = Set(
+                        payloads
+                            .flatMap { $0.split(separator: ",").map(String.init) }
+                            .filter { !$0.isEmpty }
+                    )
+                    guard !ids.isEmpty else { return false }
+                    store.reorderCollectionInsertBefore(
+                        droppedIDs: ids,
+                        targetID: targetID
+                    )
+                    return true
+                } isTargeted: { isTargeted = $0 }
+        } else {
+            content
         }
     }
 }

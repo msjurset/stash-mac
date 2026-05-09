@@ -13,6 +13,18 @@ struct SidebarView: View {
     /// row. `.sheet(item:)` keys off the case so toggling between
     /// the two re-presents instead of stale-rendering.
     @State private var smartCollectionSheet: SmartCollectionSheetMode?
+    /// Drives the unified create sheet for the merged Collections
+    /// section. Bool is enough — the sheet itself owns the
+    /// static-vs-smart toggle.
+    @State private var showCollectionCreateSheet = false
+    /// Per-row hover state for collection drop targets — flips to
+    /// true when a drag enters the row's bounds, used to highlight
+    /// the active drop target.
+    @State private var hoveredCollectionID: Int64?
+    /// Tag-row equivalent of `hoveredCollectionID`. Tracks which tag
+    /// row is the active drop target so we can highlight it during
+    /// drag.
+    @State private var hoveredTagName: String?
 
     enum SmartCollectionSheetMode: Identifiable, Hashable {
         case create
@@ -40,6 +52,7 @@ struct SidebarView: View {
                     Label("All Items", systemImage: "tray.full")
                         .tag(NavigationItem.allItems)
                 }
+                .opacity(ineligibleSectionOpacity)
 
                 // Tools — analytical / maintenance views. They don't
                 // produce or modify items themselves; they're "stuff
@@ -54,6 +67,7 @@ struct SidebarView: View {
                     Label("Health Check", systemImage: "checkmark.shield")
                         .tag(NavigationItem.check)
                 }
+                .opacity(ineligibleSectionOpacity)
 
                 // Rules — automation. Activity is intentionally left as
                 // a sibling rather than nested under Rules so a quick
@@ -65,8 +79,11 @@ struct SidebarView: View {
                     Label("Activity", systemImage: "clock.arrow.circlepath")
                         .tag(NavigationItem.ruleActivity)
                 }
+                .opacity(ineligibleSectionOpacity)
 
-                savedSearchSections
+                // Collections (static + smart, merged). Lives just
+                // above the Tags section per user preference.
+                collectionsSection
 
                 Section {
                     if showCloud {
@@ -76,25 +93,6 @@ struct SidebarView: View {
                     }
                 } header: {
                     tagSectionHeader
-                }
-
-                Section("Collections") {
-                    ForEach(store.collections) { col in
-                        Label(col.name, systemImage: "folder")
-                            .tag(NavigationItem.collection(col))
-                            .contextMenu {
-                                Button("Delete", role: .destructive) {
-                                    store.deleteCollection(name: col.name)
-                                }
-                            }
-                    }
-                    Button {
-                        showAddCollectionSheet = true
-                    } label: {
-                        Label("New Collection", systemImage: "plus")
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
                 }
             }
             .listStyle(.sidebar)
@@ -107,20 +105,25 @@ struct SidebarView: View {
                 }
             }
         }
-        .alert("Rename Tag", isPresented: .init(
+        .sheet(isPresented: .init(
             get: { renamingTag != nil },
             set: { if !$0 { renamingTag = nil } }
         )) {
-            TextField("New name", text: $newTagName)
-            Button("Rename") {
-                if let tag = renamingTag, !newTagName.isEmpty {
-                    store.renameTag(old: tag.name, new: newTagName)
-                }
-                renamingTag = nil
-            }
-            Button("Cancel", role: .cancel) {
-                renamingTag = nil
-            }
+            // Sheet (not alert) so we can use FilterField — SwiftUI's
+            // TextField inside `.alert(...)` on macOS triggers the
+            // phantom autofill / inline-prediction popup that no
+            // modifier can suppress. Banned per CLAUDE.md.
+            RenameTagSheet(
+                originalName: renamingTag?.name ?? "",
+                newName: $newTagName,
+                onCommit: {
+                    if let tag = renamingTag, !newTagName.isEmpty {
+                        store.renameTag(old: tag.name, new: newTagName)
+                    }
+                    renamingTag = nil
+                },
+                onCancel: { renamingTag = nil }
+            )
         }
         .sheet(item: $smartCollectionSheet) { mode in
             switch mode {
@@ -130,51 +133,121 @@ struct SidebarView: View {
                 SmartCollectionSheet(editing: ss)
             }
         }
+        .sheet(isPresented: $showCollectionCreateSheet) {
+            CollectionCreateSheet()
+        }
     }
 
-    // MARK: - Saved-search / smart-collection sections
+    // MARK: - Collections (static + smart, merged)
 
-    /// Smart Collections section, extracted out of the main `body` so
-    /// ViewBuilder's 10-children limit on the outer `List` doesn't trip
-    /// over the always-shown section.
-    ///
-    /// Plus-button placement is conditional: when the section is empty
-    /// the "+ New Smart Collection…" full-width button lives inside the
-    /// section as the discoverable empty-state. Once at least one row
-    /// exists we tuck a small "+" into the section header's trailing
-    /// edge so each row keeps the full width for its name + params.
-    @ViewBuilder
-    private var savedSearchSections: some View {
-        Section {
-            ForEach(store.savedSearches) { ss in
-                savedSearchRow(ss, icon: "sparkles.rectangle.stack")
+    /// Combined Collections section. Static (`folder` icon) and smart
+    /// (`sparkles.rectangle.stack` icon) live side-by-side; static
+    /// rows accept item drops, smart rows don't (they're saved
+    /// queries — adding an item wouldn't even make sense). Single
+    /// `+` button in the header opens the unified create sheet
+    /// where the user picks Static vs Smart via a segmented control.
+    /// Static collections and saved searches both store an `Int64`
+    /// `id` from their respective DB tables, so collection.id=3 and
+    /// savedSearch.id=3 collide when fed into a single Section via
+    /// two sibling `ForEach`. SwiftUI's diffing dedupes one of them,
+    /// rendering whichever ForEach ran first as a duplicate row.
+    /// Namespacing the ids per-source breaks the collision.
+    private enum CollectionEntry: Identifiable, Hashable {
+        case staticCollection(StashCollection)
+        case smartCollection(SavedSearch)
+
+        var id: String {
+            switch self {
+            case .staticCollection(let c): return "static-\(c.id)"
+            case .smartCollection(let s): return "smart-\(s.id)"
             }
-            if store.savedSearches.isEmpty {
+        }
+    }
+
+    private var combinedCollectionEntries: [CollectionEntry] {
+        store.collections.map { .staticCollection($0) }
+            + store.savedSearches.map { .smartCollection($0) }
+    }
+
+    @ViewBuilder
+    private var collectionsSection: some View {
+        Section {
+            ForEach(combinedCollectionEntries) { entry in
+                switch entry {
+                case .staticCollection(let col):
+                    Label(col.name, systemImage: "folder")
+                        .tag(NavigationItem.collection(col))
+                        .listRowBackground(
+                            hoveredCollectionID == col.id
+                                ? Color.accentColor.opacity(0.25)
+                                : nil
+                        )
+                        .dropDestination(for: String.self) { payloads, _ in
+                            let ids = payloads
+                                .flatMap { $0.split(separator: ",").map(String.init) }
+                                .filter { !$0.isEmpty }
+                            guard !ids.isEmpty else { return false }
+                            store.bulkAddToCollection(ids: ids, collection: col.name)
+                            return true
+                        } isTargeted: { isOver in
+                            if isOver {
+                                hoveredCollectionID = col.id
+                            } else if hoveredCollectionID == col.id {
+                                hoveredCollectionID = nil
+                            }
+                        }
+                        .contextMenu {
+                            Button("Delete", role: .destructive) {
+                                store.deleteCollection(name: col.name)
+                            }
+                        }
+                case .smartCollection(let ss):
+                    Label(ss.name, systemImage: "sparkles.rectangle.stack")
+                        .tag(NavigationItem.savedSearch(ss))
+                        .opacity(ineligibleSectionOpacity)
+                        .help(ss.summary.isEmpty ? "Smart Collection" : ss.summary)
+                        .contextMenu {
+                            Button("Edit…") {
+                                smartCollectionSheet = .edit(ss)
+                            }
+                            Divider()
+                            Button("Delete", role: .destructive) {
+                                store.deleteSavedSearch(name: ss.name)
+                            }
+                        }
+                }
+            }
+            if combinedCollectionEntries.isEmpty {
                 Button {
-                    smartCollectionSheet = .create
+                    showCollectionCreateSheet = true
                 } label: {
-                    Label("New Smart Collection…", systemImage: "plus")
+                    Label("New Collection…", systemImage: "plus")
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
             }
         } header: {
             HStack(spacing: 4) {
-                Text("Smart Collections")
+                Text("Collections")
                 Spacer()
-                if !store.savedSearches.isEmpty {
-                    Button {
-                        smartCollectionSheet = .create
-                    } label: {
-                        Image(systemName: "plus")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .help("New Smart Collection")
+                Button {
+                    showCollectionCreateSheet = true
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
+                .buttonStyle(.plain)
+                .help("New Collection")
             }
         }
+    }
+
+    /// Opacity for sections that don't accept item drops. Drops to
+    /// 0.4 during a drag, full opacity otherwise. Cheap visual cue
+    /// that says "these aren't drop targets."
+    private var ineligibleSectionOpacity: Double {
+        store.isDraggingItems ? 0.35 : 1.0
     }
 
     // MARK: - Saved-search / smart-collection row
@@ -253,8 +326,32 @@ struct SidebarView: View {
                 }
             }
             .buttonStyle(.plain)
-            .listRowBackground(selected ? Color.accentColor : nil)
+            .listRowBackground(
+                hoveredTagName == tag.name
+                    ? Color.accentColor.opacity(0.5)
+                    : (selected ? Color.accentColor : nil)
+            )
             .id(tag.name)
+            // Drop destination: drag items from the main list onto a
+            // tag row to apply that tag. Payload is the comma-joined
+            // id list emitted by ItemListView's drag closure (single
+            // id when the dragged row isn't multi-selected, all
+            // selected ids when it is). Hover highlight via
+            // `isTargeted` shows the active drop target during drag.
+            .dropDestination(for: String.self) { payloads, _ in
+                let ids = payloads
+                    .flatMap { $0.split(separator: ",").map(String.init) }
+                    .filter { !$0.isEmpty }
+                guard !ids.isEmpty else { return false }
+                store.bulkAddTag(ids: ids, tag: tag.name)
+                return true
+            } isTargeted: { isOver in
+                if isOver {
+                    hoveredTagName = tag.name
+                } else if hoveredTagName == tag.name {
+                    hoveredTagName = nil
+                }
+            }
             .contextMenu {
                 Button("Rename...") {
                     renamingTag = tag
@@ -364,5 +461,43 @@ struct SidebarView: View {
         case 0.3...: return .primary.opacity(0.8)
         default: return .secondary
         }
+    }
+}
+
+/// Replacement for the deprecated `.alert("Rename Tag")` flow. Lives
+/// in a sheet so the input can use `FilterField` — the only macOS
+/// text-input that has the full five-layer autofill suppression
+/// stack the project requires.
+private struct RenameTagSheet: View {
+    let originalName: String
+    @Binding var newName: String
+    let onCommit: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Rename Tag")
+                .font(.headline)
+            Text("Renaming **\(originalName)** — applies to every item tagged with it.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            FilterField(
+                placeholder: "New name",
+                text: $newName,
+                autoFocus: true,
+                onSubmit: onCommit
+            )
+            .frame(width: 320)
+            HStack {
+                Spacer()
+                Button("Cancel", action: onCancel)
+                    .keyboardShortcut(.cancelAction)
+                Button("Rename", action: onCommit)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(newName.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding(20)
     }
 }

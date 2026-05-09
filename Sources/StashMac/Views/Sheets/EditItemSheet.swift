@@ -6,6 +6,7 @@ struct EditItemSheet: View {
 
     let item: StashItem
     @State private var title: String
+    @State private var url: String
     @State private var note: String
     @State private var extractedText: String
     @State private var newTag = ""
@@ -16,6 +17,7 @@ struct EditItemSheet: View {
     init(item: StashItem) {
         self.item = item
         _title = State(initialValue: item.title)
+        _url = State(initialValue: item.url ?? "")
         _note = State(initialValue: item.notes ?? "")
         _extractedText = State(initialValue: item.extractedText ?? "")
         _collection = State(initialValue: item.collectionNames.first ?? "")
@@ -31,6 +33,13 @@ struct EditItemSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             StashField("Title", text: $title)
+
+            // URL is editable for any item that already has one (URL
+            // captures, files saved from a URL, emails). Hidden when
+            // empty so the field doesn't add noise to snippet edits.
+            if !item.url.isNilOrEmpty || item.type == .url {
+                StashField("URL", text: $url)
+            }
 
             VStack(alignment: .leading, spacing: 4) {
                 Text("Notes")
@@ -130,9 +139,14 @@ struct EditItemSheet: View {
         let t = title != item.title ? title : nil
         let n = note != (item.notes ?? "") ? note : nil
         let e = extractedText != (item.extractedText ?? "") ? extractedText : nil
+        let u = url != (item.url ?? "") ? url : nil
         let c = collection.isEmpty ? nil : collection
 
-        store.editItem(id: item.id, title: t, note: n, extractedText: e, addTags: tagsToAdd, removeTags: tagsToRemove, collection: c)
+        store.editItem(id: item.id, title: t, note: n, extractedText: e, url: u, addTags: tagsToAdd, removeTags: tagsToRemove, collection: c)
         dismiss()
     }
+}
+
+private extension Optional where Wrapped == String {
+    var isNilOrEmpty: Bool { self?.isEmpty ?? true }
 }

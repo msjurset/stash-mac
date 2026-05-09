@@ -129,5 +129,23 @@ func installFieldEditorInterceptorsForAllWindows() -> [NSObjectProtocol] {
         }
     }
 
+    // Belt-and-suspenders: before any user interaction reaches a
+    // text field, re-sweep every window. SwiftUI sometimes creates
+    // panels (sheets, popovers, QLPreviewPanel) whose lifecycle
+    // notifications don't reliably fire `didBecomeKey` /
+    // `didUpdate` before the field-editor warm-up that raises the
+    // phantom popup. Sweeping on `.leftMouseDown` and `.keyDown` is
+    // cheap (idempotent installs) and guarantees coverage.
+    _ = NSEvent.addLocalMonitorForEvents(
+        matching: [.leftMouseDown, .keyDown]
+    ) { event in
+        MainActor.assumeIsolated {
+            for window in NSApp.windows {
+                installFieldEditorInterceptor(on: window)
+            }
+        }
+        return event
+    }
+
     return [didKey, didUpdate]
 }

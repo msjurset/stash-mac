@@ -19,4 +19,19 @@ enum FilePathResolver {
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         return url
     }
+
+    /// Resolves a relative path inside the files dir (e.g. the
+    /// per-item thumbnail at `thumbnails/<id>.jpg`) to an absolute
+    /// URL. Unlike `resolve(storePath:)`, this does not require the
+    /// file to exist — callers (e.g. `ThumbnailService`) need the
+    /// destination URL before writing.
+    static func resolveRelative(_ relPath: String, filesDir: URL? = nil) -> URL? {
+        guard !relPath.isEmpty else { return nil }
+        let base = filesDir ?? defaultFilesDir
+        return base.appendingPathComponent(relPath)
+    }
+
+    /// Returns the files-dir root that all stash artifacts (content
+    /// blobs, thumbnails) live under.
+    static func filesDir() -> URL { defaultFilesDir }
 }

@@ -118,6 +118,7 @@ actor StashCLI {
         title: String? = nil,
         note: String? = nil,
         extractedText: String? = nil,
+        url: String? = nil,
         addTags: [String] = [],
         removeTags: [String] = [],
         collection: String? = nil
@@ -126,14 +127,113 @@ actor StashCLI {
         if let title { args += ["-t", title] }
         if let note { args += ["-n", note] }
         if let extractedText { args += ["-e", extractedText] }
+        if let url { args += ["-u", url] }
         for tag in addTags { args += ["--add-tag", tag] }
         for tag in removeTags { args += ["--remove-tag", tag] }
         if let collection { args += ["-c", collection] }
         return try await captureJSON(args: args)
     }
 
+    /// Copy a single field of an item to the clipboard via the
+    /// `stash copy` subcommand. Used by the Health Check row context
+    /// menu so the Mac doesn't need to re-implement the platform-
+    /// specific clipboard pipe.
+    func copyItemField(id: String, field: String) async throws {
+        _ = try await captureOutput(args: ["copy", id, "--field", field])
+    }
+
+    /// Run a focused URL recheck on a single item via
+    /// `stash check --urls --id <id> --json`. Returns true if the
+    /// URL is still broken, false if it now responds OK. Used by
+    /// stash-mac's Health Check view to verify after a URL edit
+    /// without re-fetching every URL in the library.
+    /// Returns the matching CheckIssue if the URL is still broken
+    /// after re-probing, or nil if it now responds healthily.
+    /// Read recent tag-mutation events from $STASH_DIR/tags.log via
+    /// `stash tag-log --json -l <limit>`. Newest-first. Pass `limit = 0`
+    /// to read everything currently in the file.
+    func recentTagEvents(limit: Int = 100) async throws -> [TagEvent] {
+        var args = ["tag-log", "--json"]
+        if limit > 0 { args += ["-l", String(limit)] }
+        return try await captureJSON(args: args)
+    }
+
+    func recheckURL(id: String) async throws -> CheckIssue? {
+        let result: CheckResult = try await captureJSON(
+            args: ["check", "--urls", "--id", id, "--json"]
+        )
+        return result.brokenUrls?.first(where: { $0.id == id })
+    }
+
     func deleteItem(id: String) async throws {
         _ = try await captureOutput(args: ["delete", "--json", "-y", id])
+    }
+
+    // MARK: - Thumbnails
+
+    /// Set the per-item thumbnail from a local file. Caller is
+    /// responsible for post-processing (saliency crop, sRGB, JPEG
+    /// encode) — the CLI just copies the file into the filestore.
+    /// Returns the relative path stored on the item.
+    @discardableResult
+    func thumbnailSet(id: String, file: String) async throws -> String {
+        struct Resp: Decodable { let thumbnailPath: String }
+        let r: Resp = try await captureJSON(
+            args: ["thumbnail", "set", id, "--file", file, "--json"]
+        )
+        return r.thumbnailPath
+    }
+
+    /// Set the per-item thumbnail from a remote image URL. CLI
+    /// downloads, writes to the filestore, updates the column.
+    @discardableResult
+    func thumbnailSet(id: String, url: String) async throws -> String {
+        struct Resp: Decodable { let thumbnailPath: String }
+        let r: Resp = try await captureJSON(
+            args: ["thumbnail", "set", id, "--url", url, "--json"]
+        )
+        return r.thumbnailPath
+    }
+
+    /// Remove the per-item thumbnail (file + column).
+    func thumbnailClear(id: String) async throws {
+        _ = try await captureOutput(args: ["thumbnail", "clear", id, "--json"])
+    }
+
+    /// Import a thumbnail by fetching a URL — defaults to the item's
+    /// own URL when `from` is nil. Server-side decides whether to
+    /// scrape (HTML) or use directly (image/*). Returns the relative
+    /// path stored on the item plus optional sourcing metadata.
+    struct ThumbnailImportResult: Decodable {
+        let id: String
+        let thumbnailPath: String
+        let source: String?
+        let candidateUrl: String?
+    }
+
+    @discardableResult
+    func thumbnailImport(id: String, from: String? = nil) async throws -> ThumbnailImportResult {
+        var args = ["thumbnail", "import", id, "--json"]
+        if let from, !from.isEmpty { args += ["--from", from] }
+        return try await captureJSON(args: args)
+    }
+
+    /// Run the import in candidates-only mode — returns the ranked
+    /// candidate list without persisting, for the picker sheet.
+    struct ThumbnailCandidate: Decodable, Identifiable, Hashable {
+        let url: String
+        let source: String
+        let width: Int?
+        let height: Int?
+        let score: Int
+
+        var id: String { url }
+    }
+
+    func thumbnailCandidates(id: String, from: String? = nil) async throws -> [ThumbnailCandidate] {
+        var args = ["thumbnail", "import", id, "--candidates", "--json"]
+        if let from, !from.isEmpty { args += ["--from", from] }
+        return try await captureJSON(args: args)
     }
 
     func openItem(id: String) async throws {
@@ -181,6 +281,20 @@ actor StashCLI {
         var args = ["collection", "create", "--json", name]
         if let description { args += ["-d", description] }
         return try await captureJSON(args: args)
+    }
+
+    /// Set the curated order of items in a collection. The full
+    /// desired order is sent via stdin (one id per line) so we don't
+    /// hit argv length limits with large collections. Items in the
+    /// collection but not listed retain their existing positions
+    /// (which may now collide with new positions, ambiguous order).
+    /// The Mac caller is expected to always pass the full list.
+    func collectionReorder(name: String, ids: [String]) async throws {
+        let payload = ids.joined(separator: "\n")
+        _ = try await executeWithStdin(
+            args: ["collection", "reorder", name, "-", "--json"],
+            input: payload
+        )
     }
 
     func deleteCollection(name: String) async throws {
@@ -440,6 +554,23 @@ actor StashCLI {
         _ = try await captureOutput(args: args)
     }
 
+    /// Archive an item (soft-delete — hides from default list/search,
+    /// recoverable via `stash unarchive`). Mirrors the gostash CLI's
+    /// `stash archive <id>...` which accepts one or more IDs.
+    func archiveItems(ids: [String]) async throws {
+        guard !ids.isEmpty else { return }
+        var args = ["archive", "--json"]
+        args += ids
+        _ = try await captureOutput(args: args)
+    }
+
+    func unarchiveItems(ids: [String]) async throws {
+        guard !ids.isEmpty else { return }
+        var args = ["unarchive", "--json"]
+        args += ids
+        _ = try await captureOutput(args: args)
+    }
+
     func bulkCollect(ids: [String], collection: String, remove: Bool = false) async throws {
         var args = ["bulk", "collect", "--json", "-c", collection]
         if remove { args.append("--remove") }
@@ -492,8 +623,9 @@ actor StashCLI {
 
                     if process.terminationStatus != 0 {
                         let errOutput = String(data: errData, encoding: .utf8) ?? ""
-                        let message = errOutput.isEmpty ? output : errOutput
-                        continuation.resume(throwing: CLIError.failed(message.trimmingCharacters(in: .whitespacesAndNewlines)))
+                        let raw = errOutput.isEmpty ? output : errOutput
+                        let message = Self.extractErrorMessage(raw)
+                        continuation.resume(throwing: CLIError.failed(message))
                     } else {
                         continuation.resume(returning: output.trimmingCharacters(in: .whitespacesAndNewlines))
                     }
@@ -536,8 +668,9 @@ actor StashCLI {
 
                     if process.terminationStatus != 0 {
                         let errOutput = String(data: errData, encoding: .utf8) ?? ""
-                        let message = errOutput.isEmpty ? output : errOutput
-                        continuation.resume(throwing: CLIError.failed(message.trimmingCharacters(in: .whitespacesAndNewlines)))
+                        let raw = errOutput.isEmpty ? output : errOutput
+                        let message = Self.extractErrorMessage(raw)
+                        continuation.resume(throwing: CLIError.failed(message))
                     } else {
                         continuation.resume(returning: output.trimmingCharacters(in: .whitespacesAndNewlines))
                     }
@@ -546,6 +679,29 @@ actor StashCLI {
                 }
             }
         }
+    }
+
+    /// Pull a one-line, user-facing error from a CLI's stderr.
+    /// cobra prefixes the actionable message with `Error: `; if we
+    /// see that, return the rest of that line. Otherwise fall back
+    /// to the trimmed first non-empty line. Strips the trailing
+    /// `Usage:`-and-onward block that cobra historically appended
+    /// before we set `SilenceUsage` (defensive in case any stderr
+    /// path bypasses that flag).
+    static func extractErrorMessage(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return "Unknown error" }
+        for line in trimmed.split(separator: "\n", omittingEmptySubsequences: false) {
+            let candidate = String(line).trimmingCharacters(in: .whitespaces)
+            if candidate.isEmpty { continue }
+            if let prefixRange = candidate.range(of: "Error: ") {
+                return String(candidate[prefixRange.upperBound...])
+            }
+            // First non-empty line, before any "Usage:" block.
+            if candidate == "Usage:" { break }
+            return candidate
+        }
+        return trimmed
     }
 }
 

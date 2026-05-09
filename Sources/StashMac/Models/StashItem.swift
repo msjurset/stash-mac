@@ -12,6 +12,7 @@ struct StashItem: Codable, Identifiable, Hashable {
     var extractedText: String?
     var mimeType: String?
     var fileSize: Int64?
+    var thumbnailPath: String?
     var metadata: [String: String]?
     var createdAt: Date
     var updatedAt: Date

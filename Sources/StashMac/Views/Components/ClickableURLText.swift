@@ -87,6 +87,44 @@ struct ClickableURLText: NSViewRepresentable {
             addCursorRect(bounds, cursor: .pointingHand)
         }
 
+        /// NSTextFieldCell installs an I-beam cursor for selectable
+        /// text via its own resetCursorRects. To win the override we
+        /// register a tracking area with `.cursorUpdate +
+        /// .mouseEnteredAndExited + .inVisibleRect + .activeAlways`
+        /// and set the pointing-hand cursor from each callback. Belt
+        /// and suspenders — different macOS revs route the override
+        /// signal through different events; we cover all three.
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            trackingAreas
+                .filter { $0.owner === self }
+                .forEach { removeTrackingArea($0) }
+            let area = NSTrackingArea(
+                rect: .zero,
+                options: [
+                    .cursorUpdate,
+                    .mouseEnteredAndExited,
+                    .inVisibleRect,
+                    .activeAlways,
+                ],
+                owner: self,
+                userInfo: nil
+            )
+            addTrackingArea(area)
+        }
+
+        override func cursorUpdate(with event: NSEvent) {
+            NSCursor.pointingHand.set()
+        }
+
+        override func mouseEntered(with event: NSEvent) {
+            NSCursor.pointingHand.set()
+        }
+
+        override func mouseExited(with event: NSEvent) {
+            NSCursor.arrow.set()
+        }
+
         override func mouseDown(with event: NSEvent) {
             let startLocation = NSEvent.mouseLocation
             DispatchQueue.main.asyncAfter(deadline: .now() + clickDelay) { [weak self] in
