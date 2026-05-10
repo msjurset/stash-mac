@@ -91,20 +91,139 @@ final class StashStore {
     var draggingItemIDs: Set<String> = []
     private var dragMouseUpMonitor: Any?
 
-    func beginDragTracking(ids: Set<String> = []) {
-        draggingItemIDs = ids
-        if dragMouseUpMonitor != nil { return }
-        isDraggingItems = true
-        let monitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseUp) { [weak self] event in
-            Task { @MainActor in self?.endDragTracking() }
+    private var dragEndPollTimer: Timer?
+    /// Tracks whether mouseDown occurred while there was a selection
+    /// — the prerequisite for "this might become an item drag." Only
+    /// `.leftMouseDragged` past a threshold while armed flips the
+    /// drag-tracking flag; a plain click never trips it.
+    private var dragArmed = false
+    /// Cumulative distance the mouse has moved since arming. Drag
+    /// system uses ~6pt as its threshold; we mirror that.
+    private var dragArmedDistance: CGFloat = 0
+    private var dragMonitor: Any?
+
+    /// Install the mouse-event monitor that drives the sidebar
+    /// grey-out cue. `.draggable`'s autoclosure fires on mouseDown
+    /// (before we know whether a drag will actually happen), and
+    /// `.onDrag` doesn't compose with `.draggable`, so we observe
+    /// the raw event stream and decide ourselves: a drag is in
+    /// progress when the mouse moved past a threshold while a
+    /// selection existed at mouseDown time. Idempotent — called by
+    /// `ItemListView.onAppear`.
+    func installItemDragMonitor() {
+        guard dragMonitor == nil else { return }
+        dragMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]
+        ) { [weak self] event in
+            guard let self else { return event }
+            switch event.type {
+            case .leftMouseDown:
+                // Double-click on a row: open the item in its default
+                // app. We do this at the AppKit level because SwiftUI's
+                // `.onTapGesture(count: 2)` either misses non-hittable
+                // child views (text/tags) or captures single clicks
+                // during its tap-count window (breaking row selection
+                // and drag). `event.clickCount == 2` is reliable and
+                // doesn't interfere.
+                //
+                // Scope: only fire when (a) a row is currently focused
+                // (`selectedItemID` is set, meaning the prior tap-1
+                // selected a row in the items list), and (b) no text
+                // field has key focus (a double-click in the filter
+                // field is "select word", not "open item").
+                if event.clickCount == 2,
+                   let id = self.selectedItemID,
+                   !Self.aTextFieldHasFocus(in: event.window) {
+                    Task { @MainActor in self.openItem(id: id) }
+                }
+                // Always arm on mouseDown — we don't gate by selection
+                // here because `addLocalMonitorForEvents` runs BEFORE
+                // SwiftUI processes the click, so `selectedItems` still
+                // reflects the previous state for the row that's about
+                // to be selected. Selection check is deferred to
+                // mouseDragged where SwiftUI has caught up.
+                self.dragArmed = true
+                self.dragArmedDistance = 0
+            case .leftMouseDragged:
+                guard self.dragArmed, !self.isDraggingItems else { break }
+                self.dragArmedDistance += abs(event.deltaX) + abs(event.deltaY)
+                guard self.dragArmedDistance >= 6 else { break }
+                // Threshold met. Flip the grey-out flag without
+                // gating on selection — a single-row drag of an
+                // unselected row never populates `selectedItems`
+                // (the drag uses the row's own id directly), so
+                // gating would skip that case. False-positive flips
+                // from non-row drags inside the items pane (column
+                // divider, etc.) are rare and the timer will clear
+                // them on mouseUp.
+                let ids = self.selectedItems
+                Task { @MainActor in self.beginDragTracking(ids: ids) }
+            case .leftMouseUp:
+                self.dragArmed = false
+                self.dragArmedDistance = 0
+                // isDraggingItems is cleared by the `dragEndPollTimer`
+                // that begin… installs (it polls pressedMouseButtons).
+            default:
+                break
+            }
             return event
         }
-        dragMouseUpMonitor = monitor
+    }
+
+    /// True when a text field (or its field editor) is the first
+    /// responder of `window` (or the key window when nil). Used to
+    /// gate AppKit-level double-click → openItem so we don't open the
+    /// focused row when the user is double-clicking inside the filter
+    /// field to select a word.
+    private static func aTextFieldHasFocus(in window: NSWindow?) -> Bool {
+        let target = window ?? NSApp.keyWindow
+        guard let responder = target?.firstResponder else { return false }
+        if responder is NSTextField { return true }
+        // Field editor case — NSTextView whose delegate is the
+        // owning NSTextField.
+        if let editor = responder as? NSText, editor.delegate is NSTextField {
+            return true
+        }
+        return false
+    }
+
+    func removeItemDragMonitor() {
+        if let m = dragMonitor {
+            NSEvent.removeMonitor(m)
+            dragMonitor = nil
+        }
+        dragArmed = false
+        dragArmedDistance = 0
+    }
+
+    func beginDragTracking(ids: Set<String> = []) {
+        draggingItemIDs = ids
+        if isDraggingItems { return }
+        isDraggingItems = true
+
+        // Poll `NSEvent.pressedMouseButtons` (system mouse state) for
+        // drag-end. AppKit's drag-and-drop loop runs the runloop in
+        // `.eventTracking` mode and swallows leftMouseUp before any
+        // local NSEvent monitor sees it, so the previous monitor
+        // approach left the grey-out stuck after cancelled drags.
+        // Critically, the timer must be added in `.common` modes —
+        // `.scheduledTimer` defaults to `.default`, which is paused
+        // during the drag loop.
+        dragEndPollTimer?.invalidate()
+        let timer = Timer(timeInterval: 0.2, repeats: true) { [weak self] timer in
+            guard NSEvent.pressedMouseButtons == 0 else { return }
+            timer.invalidate()
+            Task { @MainActor in self?.endDragTracking() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        dragEndPollTimer = timer
     }
 
     func endDragTracking() {
         isDraggingItems = false
         draggingItemIDs = []
+        dragEndPollTimer?.invalidate()
+        dragEndPollTimer = nil
         if let m = dragMouseUpMonitor {
             NSEvent.removeMonitor(m)
             dragMouseUpMonitor = nil
@@ -1176,22 +1295,26 @@ final class StashStore {
         }
     }
 
-    func selectItemByID(_ id: String) {
-        // Set BOTH the focus id (drives the detail pane) AND the
-        // multi-selection set (drives the list-row highlight). The
-        // List binds to selectedItems, so without setting the Set
-        // the row never lights up after a programmatic selection
-        // (e.g. clicking a result in QuickSearchView).
+    /// Focus an item by id. Sets BOTH the focus id (drives the
+    /// detail pane) and the multi-selection set (drives the list-row
+    /// highlight). The List binds to selectedItems, so without the
+    /// Set the row never lights up after a programmatic selection.
+    ///
+    /// `revealInList` controls the navigation switch. Default is
+    /// false because Health Check / Dupes / Suggest Rules want to
+    /// show the item in the detail pane WITHOUT yanking the user
+    /// out of those views. Pass true from QuickSearchView's
+    /// commit-result path so a global search hit lands in the list
+    /// where the highlight is visible.
+    func selectItemByID(_ id: String, revealInList: Bool = false) {
         selectedItemID = id
         selectedItems = [id]
 
-        // If the current sidebar nav filters the item out, the row
-        // can't appear — switch to All Items so the result is
-        // visible. Skip when already on allItems or when we can see
-        // the item in the current scope.
-        let visibleHere = items.contains(where: { $0.id == id })
-        if !visibleHere && navigation != .allItems {
-            navigation = .allItems
+        if revealInList {
+            let visibleHere = items.contains(where: { $0.id == id })
+            if !visibleHere && navigation != .allItems {
+                navigation = .allItems
+            }
         }
 
         if items.first(where: { $0.id == id }) == nil {

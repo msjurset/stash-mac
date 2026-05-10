@@ -21,9 +21,15 @@ struct PersistentPopoverHost<Content: View>: NSViewRepresentable {
     @ViewBuilder let content: () -> Content
 
     func makeNSView(context: Context) -> NSView {
-        let v = NSView()
-        v.translatesAutoresizingMaskIntoConstraints = false
-        return v
+        // A bare NSView used purely as the anchor for NSPopover's
+        // `show(relativeTo:of:)`. Don't override autoresizing —
+        // setting `translatesAutoresizingMaskIntoConstraints = false`
+        // without adding constraints leaves the host with no
+        // intrinsic size, which SwiftUI's layout system propagates as
+        // unbounded height through any `.background(...)` use of this
+        // representable. We want this view to follow the size of
+        // whatever it's placed behind.
+        return NSView()
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {

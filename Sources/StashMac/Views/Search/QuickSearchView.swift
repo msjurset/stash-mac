@@ -137,10 +137,10 @@ struct QuickSearchView: View {
     }
 
     /// Commit a result selection: focus the item, switch nav to All
-    /// Items if it's not visible in the current scope, dismiss the
-    /// panel.
+    /// Items if it's not visible in the current scope (so the row
+    /// is highlighted in the list), dismiss the panel.
     private func commitResult(_ item: StashItem) {
-        store.selectItemByID(item.id)
+        store.selectItemByID(item.id, revealInList: true)
         dismiss()
     }
 

@@ -197,6 +197,8 @@ struct ItemListView: View {
                 ContextualHelpButton(topic: .searching)
             }
         }
+        .onAppear { store.installItemDragMonitor() }
+        .onDisappear { store.removeItemDragMonitor() }
     }
 
     /// True when the current navigation is a sidebar Collection.
@@ -215,7 +217,7 @@ struct ItemListView: View {
             contextMenuBuilder: { id in
                 AnyView(itemContextMenu(rightClickedID: id, inGridView: true))
             },
-            dragPayload: { id in makeDragProvider(for: id) },
+            dragString: { id in dragString(for: id) },
             onReorderBefore: { droppedIDs, targetID in
                 store.reorderCollectionInsertBefore(
                     droppedIDs: droppedIDs,
@@ -269,16 +271,16 @@ struct ItemListView: View {
                 ItemRow(item: item, shownThumbnailID: $shownThumbnailID)
                     .listRowBackground(idx.isMultiple(of: 2) ? Color.clear : Color.primary.opacity(0.04))
                     .tag(item.id)
-                    // `.onDrag` interferes with `.onTapGesture(count: 2)` — the
-                    // AppKit drag system intercepts mouseDown before the tap
-                    // count gesture resolves. Use `.simultaneousGesture` so
-                    // the double-click composes alongside drag detection.
-                    .simultaneousGesture(
-                        TapGesture(count: 2).onEnded {
-                            store.openItem(id: item.id)
-                        }
-                    )
-                    .onDrag { makeDragProvider(for: item.id) }
+                    // No row-level tap gesture: SwiftUI's tap detection
+                    // either misses non-hittable areas (icon-only with
+                    // text behind `.allowsHitTesting(false)`) or
+                    // captures single clicks during its tap-count window
+                    // (breaking row selection + drag). Double-click is
+                    // handled at the AppKit level by
+                    // `installItemDragMonitor`'s clickCount detection,
+                    // which works across the entire row regardless of
+                    // child hit-test settings.
+                    .draggable(dragString(for: item.id))
                     // Drop on a list row in a collection nav reorders
                     // the curated order. No-op outside collection nav
                     // (no place to persist a custom order).
@@ -320,17 +322,13 @@ struct ItemListView: View {
             ) {
                 ForEach(store.items) { item in
                     ItemTile(item: item)
-                        .simultaneousGesture(
-                            TapGesture(count: 2).onEnded {
-                                store.openItem(id: item.id)
-                            }
-                        )
-                        .simultaneousGesture(
-                            TapGesture(count: 1).onEnded {
-                                handleTileClick(item: item)
-                            }
-                        )
-                        .onDrag { makeDragProvider(for: item.id) }
+                        .onTapGesture(count: 2) {
+                            store.openItem(id: item.id)
+                        }
+                        .onTapGesture {
+                            handleTileClick(item: item)
+                        }
+                        .draggable(dragString(for: item.id))
                         .contextMenu { itemContextMenu(rightClickedID: item.id, inGridView: true) }
                         .popover(
                             isPresented: Binding(
@@ -616,17 +614,17 @@ struct ItemListView: View {
         return [itemID]
     }
 
-    /// Build an `NSItemProvider` for a drag and flip the app-wide
-    /// drag-in-progress flag. Called from `.onDrag { … }` so the side
-    /// effect fires only at *actual* drag start — not on every body
-    /// recomputation, which is what `.draggable(_:)` does (the
-    /// non-autoclosure form evaluates its argument eagerly, so list
-    /// renders were leaving `isDraggingItems = true` and greying the
-    /// sidebar even when no drag was in progress).
-    private func makeDragProvider(for itemID: String) -> NSItemProvider {
-        let ids = dragIDs(for: itemID)
-        store.beginDragTracking(ids: ids)
-        return NSItemProvider(object: ids.joined(separator: ",") as NSString)
+    /// Pure: comma-joined ids for `.draggable(_:)`. No side effects
+    /// so the modifier's autoclosure-on-mouseDown invocation doesn't
+    /// trigger anything. Sidebar drop targets split this on `,`.
+    ///
+    /// (Earlier passes tried to put the sidebar grey-out side effect
+    /// in this helper, but `.draggable` invokes the autoclosure on
+    /// mouseDown — before SwiftUI knows whether an actual drag will
+    /// happen. Tracking grey-out reliably needs a different signal;
+    /// that feature is parked until we have one.)
+    private func dragString(for itemID: String) -> String {
+        dragIDs(for: itemID).joined(separator: ",")
     }
 
     /// The list row's right-click menu, branched on whether the row

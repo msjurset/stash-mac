@@ -21,13 +21,10 @@ struct MasonryGrid: View {
     /// row's menu so the Tags / Open / Edit / Delete actions are
     /// consistent across all view modes.
     let contextMenuBuilder: (String) -> AnyView
-    /// `NSItemProvider` builder for a tile drag. Caller is expected
-    /// to flip drag-tracking state inside this closure so the side
-    /// effect fires only on actual drag start (not on every body
-    /// recomputation, which is what `.draggable(_:)` produces). The
-    /// returned provider carries the comma-joined-id payload that
-    /// sidebar / tag drops split on.
-    let dragPayload: (String) -> NSItemProvider
+    /// Pure: comma-joined ids for `.draggable(_:)`. Side-effect free
+    /// because the modifier may invoke this on mouseDown, before any
+    /// drag actually starts. Sidebar drops split on `,`.
+    let dragString: (String) -> String
     /// Triggered when items are dropped on a tile — caller reorders
     /// the curated collection so the dropped ids land just before
     /// the target id. Nil means drag-reorder is disabled (e.g. the
@@ -126,12 +123,9 @@ struct MasonryGrid: View {
                     .padding(-2)
                     .opacity(isGhostPreview ? 0.85 : 0)
             )
-            // `.onDrag` intercepts mouseDown before tap-count resolves —
-            // use simultaneous gestures so double-click and single-click
-            // compose alongside drag detection.
-            .simultaneousGesture(TapGesture(count: 2).onEnded { onOpen(entry.item) })
-            .simultaneousGesture(TapGesture(count: 1).onEnded { onTap(entry.item) })
-            .onDrag { dragPayload(entry.item.id) }
+            .onTapGesture(count: 2) { onOpen(entry.item) }
+            .onTapGesture { onTap(entry.item) }
+            .draggable(dragString(entry.item.id))
             .contextMenu { contextMenuBuilder(entry.item.id) }
             .modifier(ReorderDropModifier(
                 tileID: entry.item.id,
