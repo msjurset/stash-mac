@@ -159,6 +159,455 @@ actor StashCLI {
     /// without re-fetching every URL in the library.
     /// Returns the matching CheckIssue if the URL is still broken
     /// after re-probing, or nil if it now responds healthily.
+    /// Result of `stash export --json`. Mirrors `archive.ExportResult`.
+    struct ExportResult: Codable {
+        let path: String
+        let itemCount: Int
+        let blobCount: Int
+        let totalBytes: Int64
+    }
+
+    /// Selection criteria for an export. Exactly one case wins.
+    enum ExportScope {
+        case ids([String])
+        case tag(String)
+        case collection(String)
+        case all
+    }
+
+    /// Wrap `stash export` — bundles the requested items into a zip
+    /// archive at `outPath`. Long ID lists are piped via stdin so we
+    /// never blow argv limits on large multi-selects.
+    func exportItems(
+        scope: ExportScope,
+        outPath: String,
+        includeArchived: Bool = false
+    ) async throws -> ExportResult {
+        var args = ["export", "--json", "--out", outPath]
+        if includeArchived { args.append("--include-archived") }
+        switch scope {
+        case .ids(let ids):
+            args += ["-"]  // ids on stdin, one per line
+            return try await captureJSONWithStdin(args: args, input: ids.joined(separator: "\n"))
+        case .tag(let name):
+            args += ["--tag", name]
+        case .collection(let name):
+            args += ["--collection", name]
+        case .all:
+            args.append("--all")
+        }
+        return try await captureJSON(args: args)
+    }
+
+    /// Result of `stash import archive --json`. Mirrors
+    /// `archive.ImportSummary`. Two CLI paths emit this shape:
+    /// `import archive` (with full conflict policy → fills `replaced`
+    /// and `reassigned`) and `import apply` (manifest-driven → only
+    /// imports/skips, the other counters are absent). Decode is
+    /// defensive so a missing `replaced`/`reassigned` from `import
+    /// apply` doesn't trip "data is missing".
+    struct ImportSummary: Codable {
+        let imported: Int
+        let skipped: Int
+        let replaced: Int
+        let reassigned: Int
+        let errors: [String]?
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            imported = try c.decodeIfPresent(Int.self, forKey: .imported) ?? 0
+            skipped = try c.decodeIfPresent(Int.self, forKey: .skipped) ?? 0
+            replaced = try c.decodeIfPresent(Int.self, forKey: .replaced) ?? 0
+            reassigned = try c.decodeIfPresent(Int.self, forKey: .reassigned) ?? 0
+            errors = try c.decodeIfPresent([String].self, forKey: .errors)
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case imported, skipped, replaced, reassigned, errors
+        }
+    }
+
+    /// Conflict policy for imports. Mirrors `archive.ConflictPolicy`.
+    enum ImportPolicy: String { case newID = "new-id", skip, replace }
+
+    /// Result of `stash import {chrome|firefox|bookmarks} --json`.
+    struct BookmarkImportSummary: Codable {
+        let imported: Int
+        let skipped: Int
+        let total: Int
+        let path: String?
+        let source: String?
+    }
+
+    /// Bookmark source for `importBookmarks(...)`. Each source maps
+    /// to a `stash import <subcommand>`; multiple sources can map
+    /// to the same subcommand when the file format is shared (the
+    /// Chromium-family browsers all use the same JSON, so they all
+    /// route to `import chrome`).
+    ///
+    /// - `.chrome / .edge / .brave / .arc / .vivaldi / .opera /
+    ///   .chromium` → `import chrome` (Chromium JSON format).
+    /// - `.firefox` → `import firefox` (places.sqlite read-only).
+    /// - `.safari`  → `import safari` (binary plist; needs FDA).
+    /// - `.pocket`  → `import pocket` (Pocket HTML export).
+    /// - `.netscapeHTML` → `import bookmarks` (generic HTML export).
+    enum BookmarkSource: String, CaseIterable, Identifiable {
+        case chrome, edge, brave, arc, vivaldi, opera, chromium
+        case firefox
+        case safari
+        case pocket
+        case pinterest
+        case raindrop
+        case netscapeHTML
+
+        var id: String { rawValue }
+
+        /// CLI subcommand under `stash import` that handles this
+        /// source. Chromium-family all share `chrome` since the
+        /// on-disk format is identical.
+        var cliSubcommand: String {
+            switch self {
+            case .chrome, .edge, .brave, .arc, .vivaldi, .opera, .chromium:
+                return "chrome"
+            case .firefox:       return "firefox"
+            case .safari:        return "safari"
+            case .pocket:        return "pocket"
+            case .pinterest:     return "pinterest"
+            case .raindrop:      return "raindrop"
+            case .netscapeHTML:  return "bookmarks"
+            }
+        }
+
+        /// Display name in the Mac importer's source picker.
+        var displayName: String {
+            switch self {
+            case .chrome:        return "Chrome"
+            case .edge:          return "Edge"
+            case .brave:         return "Brave"
+            case .arc:           return "Arc"
+            case .vivaldi:       return "Vivaldi"
+            case .opera:         return "Opera"
+            case .chromium:      return "Chromium"
+            case .firefox:       return "Firefox"
+            case .safari:        return "Safari"
+            case .pocket:        return "Pocket"
+            case .pinterest:     return "Pinterest"
+            case .raindrop:      return "Raindrop.io"
+            case .netscapeHTML:  return "HTML export"
+            }
+        }
+    }
+
+    // MARK: - Bookmark preview + apply (multi-phase importer)
+
+    /// One bookmark discovered by `import <source> --dry-run --json`.
+    /// Carries enough context for the Mac importer's tree UI to
+    /// render the original folder hierarchy and let the user edit
+    /// tags before committing.
+    ///
+    /// Decoding is defensive: every optional list / string defaults
+    /// to an empty value if the JSON key is null or missing. The
+    /// Go side emits both shapes for nil slices depending on
+    /// version — older builds emitted `null`, newer ones emit `[]`
+    /// — and we shouldn't fail import discovery on either.
+    struct BookmarkPreviewItem: Codable, Hashable, Identifiable {
+        let url: String
+        let title: String
+        let folderPath: [String]
+        let defaultTags: [String]
+        let createdAt: String?
+        let notes: String?
+        /// CLI dry-run sets this to true when the URL is already in
+        /// the stash — the Mac importer uses it to default-uncheck
+        /// the row and prepend a "DUPLICATE" badge so the user can
+        /// review and re-pick if they want to overwrite (a future
+        /// `--policy replace` would honor the pick).
+        let alreadyInStash: Bool
+
+        var id: String { url }
+
+        enum CodingKeys: String, CodingKey {
+            case url, title
+            case folderPath = "folder_path"
+            case defaultTags = "default_tags"
+            case createdAt = "created_at"
+            case notes
+            case alreadyInStash = "already_in_stash"
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            url = try c.decode(String.self, forKey: .url)
+            title = try c.decodeIfPresent(String.self, forKey: .title) ?? url
+            folderPath = try c.decodeIfPresent([String].self, forKey: .folderPath) ?? []
+            defaultTags = try c.decodeIfPresent([String].self, forKey: .defaultTags) ?? []
+            createdAt = try c.decodeIfPresent(String.self, forKey: .createdAt)
+            notes = try c.decodeIfPresent(String.self, forKey: .notes)
+            alreadyInStash = try c.decodeIfPresent(Bool.self, forKey: .alreadyInStash) ?? false
+        }
+    }
+
+    /// Result of a preview discovery — the full bookmark set the CLI
+    /// would import, plus the source label + path it was read from.
+    /// Same defensive decode as the item type: a missing or null
+    /// `bookmarks` array decodes as empty rather than failing.
+    struct BookmarkPreview: Codable {
+        let source: String
+        let path: String
+        let bookmarks: [BookmarkPreviewItem]
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            source = try c.decodeIfPresent(String.self, forKey: .source) ?? ""
+            path = try c.decodeIfPresent(String.self, forKey: .path) ?? ""
+            bookmarks = try c.decodeIfPresent([BookmarkPreviewItem].self, forKey: .bookmarks) ?? []
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case source, path, bookmarks
+        }
+    }
+
+    /// One item the user has approved for import. Tags here are the
+    /// final list (possibly edited from `default_tags`).
+    struct BookmarkApplyItem: Codable {
+        let url: String
+        let title: String
+        let tags: [String]?
+        let createdAt: String?
+        let notes: String?
+
+        enum CodingKeys: String, CodingKey {
+            case url, title, tags, notes
+            case createdAt = "created_at"
+        }
+    }
+
+    /// Manifest piped to `import apply --json` on stdin.
+    struct BookmarkApplyManifest: Codable {
+        let collection: String?
+        let items: [BookmarkApplyItem]
+    }
+
+    /// Run `stash import <source> --dry-run --json <path>` and decode
+    /// the result. Paired with `applyBookmarkManifest` for the
+    /// preview → curated-commit flow.
+    ///
+    /// Uses a dedicated decoder with **no** key strategy because the
+    /// preview structs use explicit `CodingKeys` to map the
+    /// snake_case JSON keys. The shared `decoder` property has
+    /// `.convertFromSnakeCase` set, which has interacted oddly with
+    /// explicit CodingKeys in past sessions — the safe route is to
+    /// take the strategy out of the picture entirely for this path.
+    func previewBookmarks(source: BookmarkSource, path: String) async throws -> BookmarkPreview {
+        let output = try await captureOutput(args: ["import", source.cliSubcommand, "--dry-run", "--json", path])
+        guard let data = output.data(using: .utf8) else {
+            throw CLIError.failed("Invalid UTF-8 output from import preview")
+        }
+        let plainDecoder = JSONDecoder()
+        return try plainDecoder.decode(BookmarkPreview.self, from: data)
+    }
+
+    /// Browser sources for `import history`. Mirrors `BookmarkSource`
+    /// but only includes the variants that have a local history DB
+    /// — Pocket / Pinterest / Raindrop / generic-HTML aren't browsers.
+    enum HistoryBrowser: String, CaseIterable, Identifiable {
+        case chrome, edge, brave, arc, vivaldi, opera, chromium
+        case firefox
+        case safari
+
+        var id: String { rawValue }
+
+        var displayName: String {
+            switch self {
+            case .chrome: return "Chrome"
+            case .edge: return "Edge"
+            case .brave: return "Brave"
+            case .arc: return "Arc"
+            case .vivaldi: return "Vivaldi"
+            case .opera: return "Opera"
+            case .chromium: return "Chromium"
+            case .firefox: return "Firefox"
+            case .safari: return "Safari"
+            }
+        }
+    }
+
+    /// Run `stash import history <browser> --since N --dry-run --json`
+    /// and decode the result. Reuses `BookmarkPreview` since the row
+    /// shape (url / title / created_at / already_in_stash) is
+    /// identical — the importer just leaves `folder_path` empty
+    /// and uses `created_at` for last-visited.
+    func previewBrowserHistory(browser: HistoryBrowser, sinceDays: Int) async throws -> BookmarkPreview {
+        let output = try await captureOutput(args: [
+            "import", "history", browser.rawValue,
+            "--since", String(sinceDays),
+            "--dry-run", "--json",
+        ])
+        guard let data = output.data(using: .utf8) else {
+            throw CLIError.failed("Invalid UTF-8 output from import history")
+        }
+        return try JSONDecoder().decode(BookmarkPreview.self, from: data)
+    }
+
+    /// Pipe a manifest of curated items into `stash import apply --json`.
+    /// Same dedup-by-URL semantics as the single-shot importBookmarks
+    /// path; the difference is the user's hand-picked subset + edited
+    /// per-item tags rather than the full file.
+    func applyBookmarkManifest(_ manifest: BookmarkApplyManifest) async throws -> ImportSummary {
+        let data = try JSONEncoder().encode(manifest)
+        guard let json = String(data: data, encoding: .utf8) else {
+            throw CLIError.failed("encode manifest: invalid UTF-8")
+        }
+        return try await captureJSONWithStdin(
+            args: ["import", "apply", "--json"],
+            input: json
+        )
+    }
+
+    func importBookmarks(
+        source: BookmarkSource,
+        path: String,
+        extraTags: [String] = [],
+        collection: String? = nil
+    ) async throws -> BookmarkImportSummary {
+        var args = ["import", source.cliSubcommand, "--json", path]
+        for tag in extraTags { args += ["--tag", tag] }
+        if let collection, !collection.isEmpty { args += ["--collection", collection] }
+        return try await captureJSON(args: args)
+    }
+
+    // MARK: - Fetch URL (image/file discovery picker)
+
+    /// One downloadable resource discovered on a page. Mirrors
+    /// `pageCandidate` in `cmd/stash/fetch_url.go`.
+    struct FetchURLCandidate: Codable, Identifiable, Hashable {
+        let url: String
+        let label: String
+        let mime: String?
+        let size: Int64?
+        let kind: String   // "image" | "link"
+
+        var id: String { url }
+    }
+
+    /// Result of `stash fetch-url --list <url> --json`. Either a page
+    /// scrape with multiple candidates or a single-file direct
+    /// download. Decoded via the shared "type" tag.
+    enum FetchURLDiscovery {
+        case page(pageURL: String, title: String?, candidates: [FetchURLCandidate])
+        case direct(url: String, title: String?, mime: String, size: Int64)
+    }
+
+    /// One stashed item produced by a `--pick` call. Mirrors
+    /// `pickedItem` in `cmd/stash/fetch_url.go`.
+    struct FetchURLPickedItem: Codable, Identifiable {
+        let id: String
+        let url: String
+        let title: String
+        let type: String
+    }
+
+    /// Result of `stash fetch-url --pick … --json`.
+    struct FetchURLPickResult: Codable {
+        let imported: [FetchURLPickedItem]
+        let linkedTo: String?
+        let errors: [String]?
+
+        enum CodingKeys: String, CodingKey {
+            case imported
+            case linkedTo = "linked_to"
+            case errors
+        }
+    }
+
+    /// Run `stash fetch-url --list <url> --json` and decode the
+    /// discriminated result. `allLinks` widens the picker to include
+    /// hyperlinks (not just images), mirroring the Chrome extension's
+    /// "include all links" toggle.
+    func fetchURLDiscover(url: String, allLinks: Bool = false) async throws -> FetchURLDiscovery {
+        var args = ["fetch-url", "--list", "--json", url]
+        if allLinks { args.append("--all-links") }
+        let output = try await captureOutput(args: args)
+        guard let raw = output.data(using: .utf8) else {
+            throw CLIError.failed("Invalid UTF-8 output from fetch-url")
+        }
+        struct TaggedPeek: Codable { let type: String }
+        let peek = try JSONDecoder().decode(TaggedPeek.self, from: raw)
+        switch peek.type {
+        case "page":
+            // The CLI emits `"candidates": null` (not `[]`) when no
+            // images / links are discovered — decode as optional and
+            // default to an empty array so 0-candidate pages render
+            // as "0 candidates found" rather than a decode error.
+            struct PageWire: Codable {
+                let pageURL: String
+                let pageTitle: String?
+                let candidates: [FetchURLCandidate]?
+                enum CodingKeys: String, CodingKey {
+                    case pageURL = "page_url"
+                    case pageTitle = "page_title"
+                    case candidates
+                }
+            }
+            let p = try JSONDecoder().decode(PageWire.self, from: raw)
+            return .page(pageURL: p.pageURL, title: p.pageTitle, candidates: p.candidates ?? [])
+        case "direct":
+            struct DirectWire: Codable {
+                let url: String
+                let title: String?
+                let mime: String
+                let size: Int64
+            }
+            let d = try JSONDecoder().decode(DirectWire.self, from: raw)
+            return .direct(url: d.url, title: d.title, mime: d.mime, size: d.size)
+        default:
+            throw NSError(
+                domain: "StashCLI",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Unknown fetch-url result type: \(peek.type)"]
+            )
+        }
+    }
+
+    /// Run `stash fetch-url --pick <picks…> --json <pageURL>`. Each
+    /// pick URL becomes its own item; `linkSource = true` cross-links
+    /// every picked item with the source page's URL item, mirroring
+    /// the "stash link items together" intent for batch captures.
+    func fetchURLPick(
+        pageURL: String,
+        picks: [String],
+        linkSource: Bool = false,
+        archive: Bool = false,
+        tags: [String] = [],
+        collection: String? = nil
+    ) async throws -> FetchURLPickResult {
+        var args = ["fetch-url", "--json"]
+        for p in picks { args += ["--pick", p] }
+        if linkSource { args.append("--link-source") }
+        if archive { args.append("--archive") }
+        for tag in tags { args += ["--tag", tag] }
+        if let collection, !collection.isEmpty { args += ["--collection", collection] }
+        args.append(pageURL)
+        return try await captureJSON(args: args)
+    }
+
+    /// Wrap `stash import archive` — read items out of a zip
+    /// produced by `exportItems` and add them to the local stash.
+    func importArchive(
+        path: String,
+        policy: ImportPolicy = .newID,
+        stripTags: Bool = false,
+        stripCollections: Bool = false,
+        stripArchived: Bool = false
+    ) async throws -> ImportSummary {
+        var args = ["import", "archive", "--json", "--policy", policy.rawValue, path]
+        if stripTags { args.append("--strip-tags") }
+        if stripCollections { args.append("--strip-collections") }
+        if stripArchived { args.append("--strip-archived") }
+        return try await captureJSON(args: args)
+    }
+
     /// Read recent tag-mutation events from $STASH_DIR/tags.log via
     /// `stash tag-log --json -l <limit>`. Newest-first. Pass `limit = 0`
     /// to read everything currently in the file.

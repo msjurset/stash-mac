@@ -102,6 +102,7 @@ final class StashStore {
     private var dragArmedDistance: CGFloat = 0
     private var dragMonitor: Any?
 
+
     /// Install the mouse-event monitor that drives the sidebar
     /// grey-out cue. `.draggable`'s autoclosure fires on mouseDown
     /// (before we know whether a drag will actually happen), and
@@ -133,7 +134,8 @@ final class StashStore {
                 // field is "select word", not "open item").
                 if event.clickCount == 2,
                    let id = self.selectedItemID,
-                   !Self.aTextFieldHasFocus(in: event.window) {
+                   !Self.aTextFieldHasFocus(in: event.window),
+                   Self.clickIsInItemsList(event) {
                     Task { @MainActor in self.openItem(id: id) }
                 }
                 // Always arm on mouseDown — we don't gate by selection
@@ -168,6 +170,26 @@ final class StashStore {
             }
             return event
         }
+    }
+
+    /// True if the mouseDown event landed on something inside the
+    /// items list (an `NSTableView` ancestor). Used to gate the
+    /// AppKit-level double-click → `openItem` path so a double-click
+    /// in the detail pane (e.g. on Notes) doesn't silently launch
+    /// Preview.app for the currently selected item. Uses AppKit
+    /// hit-testing rather than tracking a SwiftUI frame because any
+    /// SwiftUI overlay added for frame tracking risks intercepting
+    /// list clicks (icon-tap thumbnail popover, drag-arming).
+    private static func clickIsInItemsList(_ event: NSEvent) -> Bool {
+        guard let hit = event.window?.contentView?.hitTest(event.locationInWindow) else {
+            return false
+        }
+        var v: NSView? = hit
+        while let cur = v {
+            if cur is NSTableView { return true }
+            v = cur.superview
+        }
+        return false
     }
 
     /// True when a text field (or its field editor) is the first
@@ -283,6 +305,79 @@ final class StashStore {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor in self?.handleIngest() }
+        }
+    }
+
+    /// Run an export through the CLI and post the result to the
+    /// `lastExportResult` slot for the success banner UI. Errors land
+    /// in `self.error` for the standard alert path.
+    func exportItems(scope: StashCLI.ExportScope, to outPath: String, includeArchived: Bool = false) {
+        Task {
+            do {
+                let result = try await cli.exportItems(
+                    scope: scope,
+                    outPath: outPath,
+                    includeArchived: includeArchived
+                )
+                lastExportResult = result
+            } catch {
+                self.error = "Export failed: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    /// Holds the most recent successful export so the UI can render
+    /// a "Reveal in Finder / Open archive" toast. Cleared by the
+    /// banner's dismiss action.
+    var lastExportResult: StashCLI.ExportResult?
+
+    /// Run an import through the CLI and refresh the items list on
+    /// success so the new rows appear immediately. Errors land in
+    /// `self.error`; non-fatal per-item errors are surfaced in the
+    /// banner alongside the success count.
+    func importArchive(path: String, policy: StashCLI.ImportPolicy = .newID) {
+        Task {
+            do {
+                let summary = try await cli.importArchive(path: path, policy: policy)
+                lastImportSummary = summary
+                loadAll()
+            } catch {
+                self.error = "Import failed: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    /// Holds the most recent successful import for the success
+    /// banner. Same lifecycle as `lastExportResult`.
+    var lastImportSummary: StashCLI.ImportSummary?
+
+    /// Run a `fetch-url --pick` through the CLI and refresh once the
+    /// items land. The picker sheet drives the UI; this just wires
+    /// the call + post-import reload + error surfacing.
+    func fetchURLPick(
+        pageURL: String,
+        picks: [String],
+        linkSource: Bool,
+        archive: Bool,
+        tags: [String],
+        collection: String?
+    ) async -> StashCLI.FetchURLPickResult? {
+        do {
+            let result = try await cli.fetchURLPick(
+                pageURL: pageURL,
+                picks: picks,
+                linkSource: linkSource,
+                archive: archive,
+                tags: tags,
+                collection: collection
+            )
+            await MainActor.run { loadAll() }
+            return result
+        } catch {
+            await MainActor.run {
+                self.error = "Fetch failed: \(error.localizedDescription)"
+            }
+            return nil
         }
     }
 

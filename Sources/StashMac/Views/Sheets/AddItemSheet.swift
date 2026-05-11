@@ -13,6 +13,10 @@ struct AddItemSheet: View {
     @State private var selectedTab: Tab = .url
     @State private var urlString = ""
     @State private var filePath = ""
+    /// URL paired with the File tab's "or fetch from a URL" row.
+    /// Clicking Discover routes this through the FetchURLSheet
+    /// rather than the local `stash add` path.
+    @State private var fileFetchURL = ""
     @State private var snippetText = ""
     @State private var title = ""
     @State private var tagsString = ""
@@ -51,6 +55,16 @@ struct AddItemSheet: View {
                             StashField("File Path", text: $filePath)
                             Button("Browse...") { browseFile() }
                                 .padding(.top, 18)
+                        }
+                        HStack {
+                            StashField(
+                                "Or fetch files from a URL",
+                                text: $fileFetchURL,
+                                prompt: "https://example.com/article"
+                            )
+                            Button("Discover…") { fetchFromURL() }
+                                .padding(.top, 18)
+                                .disabled(fileFetchURL.trimmingCharacters(in: .whitespaces).isEmpty)
                         }
                     case .snippet:
                         VStack(alignment: .leading, spacing: 4) {
@@ -140,5 +154,21 @@ struct AddItemSheet: View {
         if panel.runModal() == .OK, let url = panel.url {
             filePath = url.path
         }
+    }
+
+    /// Hand off to FetchURLSheet pre-populated with the URL the user
+    /// typed into the File tab's "or fetch from a URL" row. Posts the
+    /// notification (ContentView listens) and dismisses this sheet —
+    /// SwiftUI on macOS doesn't reliably stack two modal sheets, so
+    /// we route through dismissal rather than presenting a child.
+    private func fetchFromURL() {
+        let trimmed = fileFetchURL.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return }
+        NotificationCenter.default.post(
+            name: .stashOpenFetchURL,
+            object: nil,
+            userInfo: ["url": trimmed]
+        )
+        dismiss()
     }
 }

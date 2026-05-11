@@ -660,6 +660,10 @@ struct ItemListView: View {
                 }
             }
             Divider()
+            Button("Export Selected (\(selected.count))…") {
+                exportSelection(ids: Array(selected))
+            }
+            Divider()
             Button("Archive All") {
                 store.archiveItems(ids: Array(selected))
             }
@@ -675,12 +679,31 @@ struct ItemListView: View {
             Button("Tags…") {
                 showTagPicker(forRowID: rightClickedID, itemIDs: [rightClickedID])
             }
+            // "Fetch Files from URL…" — only on URL items with a real
+            // URL value. Posts the same notification as the toolbar /
+            // detail-pane button, with the item's URL as the seed so
+            // FetchURLSheet auto-runs Discover on appear.
+            if let item = store.items.first(where: { $0.id == rightClickedID }),
+               item.type == .url,
+               let url = item.url, !url.isEmpty {
+                Button("Fetch Files from URL…") {
+                    NotificationCenter.default.post(
+                        name: .stashOpenFetchURL,
+                        object: nil,
+                        userInfo: ["url": url]
+                    )
+                }
+            }
             // Per-item thumbnail action — branch on type so the
             // right verb shows up. Skipped entirely for snippet /
             // email items (no thumbnail concept). Grid only —
             // see the multi-select branch above for rationale.
             if inGridView, let item = store.items.first(where: { $0.id == rightClickedID }) {
                 singleItemThumbnailMenu(for: item)
+            }
+            Divider()
+            Button("Export…") {
+                exportSelection(ids: [rightClickedID])
             }
             Divider()
             Button("Archive") {
@@ -690,6 +713,24 @@ struct ItemListView: View {
                 store.deleteItem(id: rightClickedID)
             }
         }
+    }
+
+    /// Surface a Save panel and kick off `stash export` with the
+    /// selected IDs. Default filename is `stash-export-N-items-DATE.zip`
+    /// for multi-select, `stash-export-<title-slug>-DATE.zip` for
+    /// single-item exports so the file is identifiable in Finder.
+    private func exportSelection(ids: [String]) {
+        let label: String
+        if ids.count == 1, let item = store.items.first(where: { $0.id == ids[0] }) {
+            label = item.title
+        } else {
+            label = "\(ids.count)-items"
+        }
+        let suggested = ExportPanels.suggestedFilename(forScopeLabel: label)
+        guard let outPath = ExportPanels.chooseExportDestination(suggestedName: suggested) else {
+            return
+        }
+        store.exportItems(scope: .ids(ids), to: outPath)
     }
 
     /// Per-type thumbnail action button for the single-row grid

@@ -69,6 +69,37 @@ struct StashMacApp: App {
                 // user's setup. Rebind via System Settings → Keyboard →
                 // App Shortcuts if you want a hotkey for this menu item.
             }
+            // File ▸ Import Archive… — pairs with the right-click
+            // export surfaces on selections / tags / collections.
+            // File ▸ Import Bookmarks… — auto-discovers the active
+            // Chrome / Firefox profile but lets the user override.
+            CommandGroup(after: .importExport) {
+                Button("Import Archive…") {
+                    if let path = ExportPanels.chooseImportSource() {
+                        store.importArchive(path: path)
+                    }
+                }
+                .keyboardShortcut("i", modifiers: [.command, .shift])
+                Button("Import Bookmarks…") {
+                    NotificationCenter.default.post(
+                        name: .stashOpenImportBookmarks,
+                        object: nil
+                    )
+                }
+                Button("Import Browser History…") {
+                    NotificationCenter.default.post(
+                        name: .stashOpenImportHistory,
+                        object: nil
+                    )
+                }
+                Button("Fetch Files via URL…") {
+                    NotificationCenter.default.post(
+                        name: .stashOpenFetchURL,
+                        object: nil
+                    )
+                }
+                .keyboardShortcut("u", modifiers: [.command, .shift])
+            }
         }
 
         // Parameterized so the contextual ? shortcut can land on the
@@ -86,4 +117,20 @@ struct StashMacApp: App {
         }
         .menuBarExtraStyle(.menu)
     }
+}
+
+extension Notification.Name {
+    /// Posted by the File ▸ Import Bookmarks… menu item; ContentView
+    /// listens and flips its local sheet state. Notification routing
+    /// avoids putting a `.sheet` on the WindowGroup body, which on
+    /// macOS 15 silently breaks `.popover` presentations elsewhere
+    /// (most visibly: the per-row icon thumbnail popover in the
+    /// items list).
+    static let stashOpenImportBookmarks = Notification.Name("stash.openImportBookmarks")
+    /// Posted by the File ▸ Import Browser History… menu item;
+    /// ContentView listens and presents the history-import sheet.
+    static let stashOpenImportHistory = Notification.Name("stash.openImportHistory")
+    /// Posted by the File ▸ Fetch from URL… menu item; ContentView
+    /// listens and presents the fetch-URL picker sheet.
+    static let stashOpenFetchURL = Notification.Name("stash.openFetchURL")
 }

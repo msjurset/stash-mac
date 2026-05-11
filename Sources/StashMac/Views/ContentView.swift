@@ -1,6 +1,17 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// Identifiable payload for `.sheet(item:)` presentation of
+/// `FetchURLSheet`. Couples the open-flag and the seed URL into a
+/// single state value so SwiftUI can't evaluate the sheet content
+/// closure before the URL is set (which it did when we used two
+/// separate @State writes — `initialURL` arrived as nil and the
+/// user had to retype).
+struct FetchURLTrigger: Identifiable {
+    let id = UUID()
+    let url: String?
+}
+
 struct ContentView: View {
     @Environment(StashStore.self) private var store
     @Environment(\.openWindow) private var openWindow
@@ -8,6 +19,14 @@ struct ContentView: View {
     @State private var showAddCollectionSheet = false
     @State private var showEditSheet = false
     @State private var showQuickSearch = false
+    @State private var showImportBookmarksSheet = false
+    @State private var showImportHistorySheet = false
+    /// Combined "is the fetch sheet open?" + "with what URL?" state.
+    /// Using `.sheet(item:)` instead of `.sheet(isPresented:)` so the
+    /// URL travels into the content closure inseparably from the
+    /// "open" flag — avoids a race where SwiftUI evaluates the sheet
+    /// before a separate `initialURL` @State write has propagated.
+    @State private var fetchURLTrigger: FetchURLTrigger?
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
     var body: some View {
@@ -85,6 +104,24 @@ struct ContentView: View {
         .sheet(isPresented: $showQuickSearch) {
             QuickSearchView()
         }
+        .sheet(isPresented: $showImportBookmarksSheet) {
+            ImportBookmarksSheet()
+        }
+        .sheet(isPresented: $showImportHistorySheet) {
+            ImportHistorySheet()
+        }
+        .sheet(item: $fetchURLTrigger) { trigger in
+            FetchURLSheet(initialURL: trigger.url)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .stashOpenImportBookmarks)) { _ in
+            showImportBookmarksSheet = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .stashOpenImportHistory)) { _ in
+            showImportHistorySheet = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .stashOpenFetchURL)) { note in
+            fetchURLTrigger = FetchURLTrigger(url: note.userInfo?["url"] as? String)
+        }
         .toolbar {
             // Hide on Rules — that view owns its own "+ New Rule" button.
             // Also hide on Rule Activity — that's a read-only feed; "Add
@@ -107,6 +144,12 @@ struct ContentView: View {
         ))
         .keyboardShortcut("k", modifiers: .command) {
             showQuickSearch = true
+        }
+        // ⌘R reloads from the CLI so external mutations (CLI edits,
+        // browser-extension stashes, file-system changes) reflect in
+        // the current view without forcing the user to re-navigate.
+        .keyboardShortcut("r", modifiers: .command) {
+            store.loadAll()
         }
         .frame(minWidth: 900, minHeight: 500)
         .alert(

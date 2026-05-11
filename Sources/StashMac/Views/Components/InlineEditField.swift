@@ -24,6 +24,13 @@ import AppKit
 struct InlineEditField: View {
     @Binding var text: String
     var placeholder: String = ""
+    /// Whether the field should grab first responder when it appears.
+    /// Default is `true` so the click-off-saves contract works even
+    /// when the parent flipped into edit mode via a button rather
+    /// than a click directly inside the field — without focus, the
+    /// click-outside monitor's `makeFirstResponder(nil)` has nothing
+    /// to resign and `controlTextDidEndEditing` never fires.
+    var autoFocus: Bool = true
     /// Called when the field loses focus or the user presses Enter.
     var onCommit: () -> Void
     /// Called when the user presses Escape.
@@ -42,6 +49,7 @@ struct InlineEditField: View {
             FilterField(
                 placeholder: placeholder,
                 text: $text,
+                autoFocus: autoFocus,
                 onSubmit: onCommit,
                 onKey: { key in
                     if key == .escape {

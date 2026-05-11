@@ -197,6 +197,10 @@ struct SidebarView: View {
                             }
                         }
                         .contextMenu {
+                            Button("Export Collection…") {
+                                exportCollection(col.name)
+                            }
+                            Divider()
                             Button("Delete", role: .destructive) {
                                 store.deleteCollection(name: col.name)
                             }
@@ -324,6 +328,10 @@ struct SidebarView: View {
                         .font(.caption)
                         .foregroundStyle(selected ? Color.white.opacity(0.7) : Color.secondary)
                 }
+                // Whole-row hit target so left-click and right-click
+                // register from the empty space between label and
+                // count, not just on the text glyphs.
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .listRowBackground(
@@ -356,6 +364,10 @@ struct SidebarView: View {
                 Button("Rename...") {
                     renamingTag = tag
                     newTagName = tag.name
+                }
+                Divider()
+                Button("Export Tag…") {
+                    exportTag(tag.name)
                 }
             }
         }
@@ -395,6 +407,10 @@ struct SidebarView: View {
                             Button("Rename...") {
                                 renamingTag = tag
                                 newTagName = tag.name
+                            }
+                            Divider()
+                            Button("Export Tag…") {
+                                exportTag(tag.name)
                             }
                         }
                 }
@@ -461,6 +477,20 @@ struct SidebarView: View {
         case 0.3...: return .primary.opacity(0.8)
         default: return .secondary
         }
+    }
+
+    /// Surface a Save panel and run `stash export --tag <name>`.
+    private func exportTag(_ name: String) {
+        let suggested = ExportPanels.suggestedFilename(forScopeLabel: "tag-\(name)")
+        guard let outPath = ExportPanels.chooseExportDestination(suggestedName: suggested) else { return }
+        store.exportItems(scope: .tag(name), to: outPath)
+    }
+
+    /// Surface a Save panel and run `stash export --collection <name>`.
+    private func exportCollection(_ name: String) {
+        let suggested = ExportPanels.suggestedFilename(forScopeLabel: "collection-\(name)")
+        guard let outPath = ExportPanels.chooseExportDestination(suggestedName: suggested) else { return }
+        store.exportItems(scope: .collection(name), to: outPath)
     }
 }
 

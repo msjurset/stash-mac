@@ -9,6 +9,12 @@ struct ItemDetailView: View {
     @State private var isFetchingContent = false
     @State private var isAddingTag = false
     @State private var newTagText = ""
+    /// Inline-edit mode for the title. Double-click on the title
+    /// flips this; commit / cancel routes through InlineEditField
+    /// (X-inside-the-field + click-off saves, per the project's
+    /// inline-edit convention).
+    @State private var isEditingTitle = false
+    @State private var titleDraft = ""
 
     var body: some View {
         ScrollView {
@@ -19,10 +25,7 @@ struct ItemDetailView: View {
                         .font(.title2)
                         .foregroundStyle(.secondary)
                     VStack(alignment: .leading) {
-                        Text(item.title)
-                            .font(.title2)
-                            .fontWeight(.semibold)
-                            .textSelection(.enabled)
+                        titleView
                         Text(item.type.label.dropLast() + " \u{2022} " + item.shortID)
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -53,19 +56,33 @@ struct ItemDetailView: View {
                 // URL
                 if let urlString = item.url, !urlString.isEmpty {
                     DetailSection(title: "URL") {
-                        ClickableURLText(urlString: urlString)
+                        VStack(alignment: .leading, spacing: 8) {
+                            ClickableURLText(urlString: urlString)
+                            // Single-click affordance to walk the page
+                            // for images / files. Routes through the
+                            // same FetchURLSheet as the toolbar /
+                            // File menu, just pre-populated.
+                            Button {
+                                NotificationCenter.default.post(
+                                    name: .stashOpenFetchURL,
+                                    object: nil,
+                                    userInfo: ["url": urlString]
+                                )
+                            } label: {
+                                Label("Fetch Files from this URL…", systemImage: "tray.and.arrow.down")
+                            }
+                            .controlSize(.small)
+                            .help("Discover images and files on this page and stash them as separate items.")
+                        }
                     }
                 }
 
-                // Notes — Markdown-rendered. Same `MarkdownText`
-                // component that powers the Extracted Text section
-                // so bullet lists, bold/italic, code spans, links,
-                // and headings all render the same way in both
-                // places. Plain prose still renders as prose.
+                // Notes — Markdown-rendered, with double-click to
+                // open a full popout editor (mirrors Extracted Text).
+                // Long notes truncate to 500 chars with Show More;
+                // single click toggles expand when truncated.
                 if let notes = item.notes, !notes.isEmpty {
-                    DetailSection(title: "Notes") {
-                        MarkdownText(notes, isSelectable: true)
-                    }
+                    NotesView(text: notes, itemID: item.id)
                 }
 
                 // Tags
@@ -333,6 +350,68 @@ struct ItemDetailView: View {
             try? await Task.sleep(for: .seconds(3))
             isFetchingContent = false
         }
+    }
+
+    /// Detail-view title: read-only Text by default with a hover-
+    /// revealed pencil button that flips into edit mode. Avoided
+    /// View-mode title is plain Text; `ClickCatcher` lifts double-
+    /// click into edit mode at the AppKit level so the second
+    /// mouseDown is consumed before SwiftUI's gesture recognizer can
+    /// cascade it onto the image preview's single-tap handler. The
+    /// edit-mode `InlineEditField` auto-focuses on appear so the
+    /// click-outside monitor inside it can resign first responder
+    /// (and fire commitTitleEdit) when the user clicks away.
+    @ViewBuilder
+    private var titleView: some View {
+        if isEditingTitle {
+            InlineEditField(
+                text: $titleDraft,
+                placeholder: "Title",
+                onCommit: commitTitleEdit,
+                onCancel: cancelTitleEdit
+            )
+            .font(.title2)
+            .fontWeight(.semibold)
+        } else {
+            Text(item.title)
+                .font(.title2)
+                .fontWeight(.semibold)
+                .textSelection(.enabled)
+                .background(ClickCatcher(onDoubleClick: startTitleEdit))
+                .help("Double-click to edit")
+        }
+    }
+
+    private func startTitleEdit() {
+        titleDraft = item.title
+        isEditingTitle = true
+    }
+
+    private func commitTitleEdit() {
+        let trimmed = titleDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Empty title is meaningless — silently drop the edit and
+        // bail back to read mode rather than letting the user save
+        // a blank title that's hard to recover.
+        guard !trimmed.isEmpty else {
+            isEditingTitle = false
+            return
+        }
+        // No-op if unchanged.
+        if trimmed != item.title {
+            store.editItem(
+                id: item.id,
+                title: trimmed,
+                note: nil,
+                addTags: [],
+                removeTags: [],
+                collection: nil
+            )
+        }
+        isEditingTitle = false
+    }
+
+    private func cancelTitleEdit() {
+        isEditingTitle = false
     }
 
 }

@@ -1,7 +1,7 @@
 import SwiftUI
 import AppKit
 
-struct ExtractedTextView: View {
+struct NotesView: View {
     @Environment(StashStore.self) private var store
     let text: String
     let itemID: String
@@ -17,17 +17,13 @@ struct ExtractedTextView: View {
     }
 
     var body: some View {
-        DetailSection(title: "Extracted Text") {
+        DetailSection(title: "Notes") {
             VStack(alignment: .leading, spacing: 8) {
                 MarkdownText(displayText, isSelectable: true)
                     .padding(10)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(.quaternary)
                     .clipShape(RoundedRectangle(cornerRadius: 6))
-                    // NSEvent monitor handles both single- and double-click
-                    // *before* AppKit, so selectable text doesn't swallow
-                    // them for cursor-positioning or word-selection while
-                    // drag-to-select still works.
                     .background(ClickCatcher(
                         onSingleClick: {
                             if isTruncated {
@@ -57,13 +53,10 @@ struct ExtractedTextView: View {
         showEditor = true
     }
 
-    /// Popout editor. Dismiss (click-off or Escape) saves any change back
-    /// to the CLI via `store.editItem`. No inner chrome — the whole popover
-    /// reads as a single tinted editor box.
     private var editorPopover: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("Edit Extracted Text")
+                Text("Edit Notes")
                     .font(.headline)
                 Spacer()
                 Text("Click away to save")
@@ -73,7 +66,7 @@ struct ExtractedTextView: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
             Divider()
-            TransparentTextEditor(text: $editedText)
+            NotesTextEditor(text: $editedText)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(width: 780, height: 520)
@@ -83,8 +76,8 @@ struct ExtractedTextView: View {
                 store.editItem(
                     id: itemID,
                     title: nil,
-                    note: nil,
-                    extractedText: editedText,
+                    note: editedText,
+                    extractedText: nil,
                     addTags: [],
                     removeTags: [],
                     collection: nil
@@ -94,11 +87,7 @@ struct ExtractedTextView: View {
     }
 }
 
-/// NSTextView-backed editor with a transparent background so the popover's
-/// tinted background shows through. SwiftUI's `TextEditor` + popover +
-/// `scrollContentBackground(.hidden)` combo has intermittent rendering bugs
-/// (empty popover body); wrapping NSTextView avoids them.
-private struct TransparentTextEditor: NSViewRepresentable {
+private struct NotesTextEditor: NSViewRepresentable {
     @Binding var text: String
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -134,8 +123,8 @@ private struct TransparentTextEditor: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     @MainActor class Coordinator: NSObject, NSTextViewDelegate {
-        var parent: TransparentTextEditor
-        init(_ parent: TransparentTextEditor) { self.parent = parent }
+        var parent: NotesTextEditor
+        init(_ parent: NotesTextEditor) { self.parent = parent }
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
             parent.text = textView.string
