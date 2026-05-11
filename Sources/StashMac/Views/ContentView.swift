@@ -272,15 +272,21 @@ struct SearchKeyMonitor: NSViewRepresentable {
                 let plainKey = event.modifierFlags.intersection(.deviceIndependentFlagsMask) == []
                 let onlyShift = event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .shift
 
-                // "?" (Shift-/) opens contextual help. Always literal
-                // when a text field has focus — even an empty one,
-                // since `?` isn't a recognized search prefix and the
-                // user may genuinely want to type it. Different rule
-                // from "/" which has the empty-field carveout.
-                if (withModifiers == "?" || (chars == "/" && onlyShift)) && !Self.isTextFieldActive(for: event) {
-                    if let onHelp = self.onHelp {
-                        DispatchQueue.main.async { onHelp() }
-                        return nil
+                // "?" (Shift-/) opens contextual help. Mirrors "/"'s
+                // empty-field carveout: fires when nothing has focus
+                // OR when the focused field is empty. Mid-text "?"
+                // keeps its literal meaning so users can include
+                // question marks in queries. The carveout matters in
+                // particular for the list-filter field, which is
+                // usually focused with empty text right after launch,
+                // and where a typed "?" otherwise reaches the CLI's
+                // FTS5 query and trips a syntax error.
+                if withModifiers == "?" || (chars == "/" && onlyShift) {
+                    if !Self.isTextFieldActive(for: event) || Self.isFocusedFieldEmpty(for: event) {
+                        if let onHelp = self.onHelp {
+                            DispatchQueue.main.async { onHelp() }
+                            return nil
+                        }
                     }
                 }
 
