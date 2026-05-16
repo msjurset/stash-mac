@@ -20,7 +20,7 @@ final class TagSuggestionState {
 
 struct ItemListView: View {
     @Environment(StashStore.self) private var store
-    @Environment(GeminiPrefsStore.self) private var geminiPrefs
+    @Environment(AIPrefsStore.self) private var aiPrefs
     @Binding var showEditSheet: Bool
 
     @State private var state = TagSuggestionState()
@@ -761,12 +761,14 @@ struct ItemListView: View {
             if inGridView, let item = store.items.first(where: { $0.id == rightClickedID }) {
                 singleItemThumbnailMenu(for: item)
             }
-            // Identify with Gemini — image items only, key configured.
-            if geminiPrefs.hasKey,
+            // Identify with the active AI provider — image items
+            // only, key configured. Menu label tracks the picker in
+            // Settings → AI so the user sees which backend will run.
+            if aiPrefs.hasKey,
                let item = store.items.first(where: { $0.id == rightClickedID }),
                item.type == .image {
-                Button("Identify with Gemini") {
-                    store.identifyImageItem(id: rightClickedID, with: geminiPrefs)
+                Button("Identify with \(aiPrefs.activeProvider.displayName)") {
+                    store.identifyImageItem(id: rightClickedID, with: aiPrefs)
                 }
             }
             Divider()

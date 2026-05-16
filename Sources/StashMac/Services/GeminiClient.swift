@@ -1,23 +1,24 @@
 import Foundation
 
-/// Minimal REST client for Google's Generative Language API. Mirrors
-/// the droid_stash `GeminiClient` shape so the prompts and parser
-/// behave identically across devices — a "Identify with Gemini"
+/// Minimal REST client for Google's Generative Language API — the
+/// `AIProvider` implementation for `.gemini`. Mirrors the
+/// droid_stash Gemini client shape so the prompts and parser
+/// behave identically across devices: a "Identify with Gemini"
 /// action on the Mac produces the same Title/Notes split that the
 /// phone does.
 ///
 /// Each device holds its own key (stored in UserDefaults); no
 /// server round-trip to the phone is needed and Mac use works
 /// offline of the user's home LAN.
-struct GeminiClient {
-    /// What the Mac action ultimately wants: a Title (single line)
-    /// and a Notes blob (multi-line prose). The parser handles
-    /// "TITLE: ..." + "NOTES: ..." formatted responses, with
-    /// fallbacks for "Common Name:" / free-form output.
-    struct IdentifyResult: Equatable {
-        var title: String?
-        var notes: String
-    }
+struct GeminiProvider: AIProvider {
+    var id: AIProviderID { .gemini }
+    var displayName: String { "Google Gemini" }
+    var keyPlaceholder: String { "AIza…" }
+    var keyURL: URL { URL(string: "https://aistudio.google.com/app/apikey")! }
+    var defaultPrompt: String { Self.defaultPromptText }
+
+    var model: String = "gemini-2.5-flash"
+    var urlSession: URLSession = .shared
 
     enum GeminiError: LocalizedError {
         case missingKey
@@ -28,7 +29,7 @@ struct GeminiClient {
         var errorDescription: String? {
             switch self {
             case .missingKey:
-                return "Set a Gemini API key in Settings → Gemini first."
+                return "Set a Gemini API key in Settings → AI first."
             case .http(let status, let body):
                 let snippet = body.count > 200 ? String(body.prefix(200)) + "…" : body
                 return "Gemini HTTP \(status): \(snippet)"
@@ -39,9 +40,6 @@ struct GeminiClient {
             }
         }
     }
-
-    var model: String = "gemini-2.5-flash"
-    var urlSession: URLSession = .shared
 
     /// Cheap key-validity probe — sends a tiny text-only generate.
     func testKey(_ apiKey: String) async throws {
@@ -58,7 +56,7 @@ struct GeminiClient {
         bytes: Data,
         mimeType: String,
         promptText: String
-    ) async throws -> IdentifyResult {
+    ) async throws -> AIIdentifyResult {
         struct IdBody: Encodable { let contents: [Content] }
         let base64 = bytes.base64EncodedString()
         let body = IdBody(
@@ -167,7 +165,7 @@ struct GeminiClient {
     ///
     /// If no title marker matches, title returns nil and the entire
     /// response goes in notes.
-    static func parseResponse(_ raw: String) -> IdentifyResult {
+    static func parseResponse(_ raw: String) -> AIIdentifyResult {
         let titleMarkers = ["TITLE", "Title", "Common Name", "Common name", "Name", "Subject"]
         let notesMarkers = ["NOTES", "Notes", "Description", "Details"]
 
@@ -198,7 +196,7 @@ struct GeminiClient {
             notesText = joined.isEmpty ? raw : joined
         }
 
-        return IdentifyResult(
+        return AIIdentifyResult(
             title: title?.isEmpty == false ? title : nil,
             notes: notesText
         )
@@ -219,6 +217,22 @@ struct GeminiClient {
         }
         return nil
     }
+
+    // MARK: - Default prompt
+
+    /// Default identify prompt — mirrors the Android client's default
+    /// so cross-device output stays consistent. User can override in
+    /// Settings → AI.
+    static let defaultPromptText: String = """
+Identify the main subject in this photo.
+
+Respond with exactly these two lines, no preamble, no markdown:
+
+TITLE: <common name; include scientific name in parentheses when applicable>
+NOTES: <natural prose, three to six sentences. Open by naming the subject in plain language — e.g. "This is the YYYY mushroom (Scientificus nameus), also known as XXXX..." or "This is the eastern bluebird (Sialia sialis), a small thrush native to..." Then cover, where relevant: notable visual characteristics; habitat, range, or season; edibility / toxicity / safety; species commonly confused with it; what specific features visible in this photo helped identify it; and any other interesting facts a curious naturalist would want to know. Be generous with detail — the user will trim what they don't want.>
+
+If you can't identify confidently, write TITLE: Unknown and explain your best guess and the reasoning in NOTES.
+"""
 }
 
 private extension String {
@@ -236,20 +250,4 @@ private extension String {
         }
         return s
     }
-}
-
-/// Default identify prompt — mirrors the Android client's default
-/// so cross-device output stays consistent. User can override in
-/// Settings → Gemini.
-enum GeminiDefaultPrompt {
-    static let value: String = """
-Identify the main subject in this photo.
-
-Respond with exactly these two lines, no preamble, no markdown:
-
-TITLE: <common name; include scientific name in parentheses when applicable>
-NOTES: <natural prose, three to six sentences. Open by naming the subject in plain language — e.g. "This is the YYYY mushroom (Scientificus nameus), also known as XXXX..." or "This is the eastern bluebird (Sialia sialis), a small thrush native to..." Then cover, where relevant: notable visual characteristics; habitat, range, or season; edibility / toxicity / safety; species commonly confused with it; what specific features visible in this photo helped identify it; and any other interesting facts a curious naturalist would want to know. Be generous with detail — the user will trim what they don't want.>
-
-If you can't identify confidently, write TITLE: Unknown and explain your best guess and the reasoning in NOTES.
-"""
 }

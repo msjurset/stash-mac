@@ -1,53 +1,125 @@
 import Foundation
 import SwiftUI
 
-/// User-editable preferences for the Mac-side Gemini integration.
-/// Stored in `UserDefaults` (the Mac is a single-user trust domain —
-/// no need for Keychain ceremony here).
+/// User-editable preferences for the Mac-side AI integrations.
+/// Provider-aware: each registered `AIProvider` keeps its own key
+/// and prompt, and the user picks which one is active. The active
+/// provider's settings drive the right-click "Identify with …"
+/// action.
 ///
-/// Two values:
-///   - `apiKey`: Google AI Studio key. Empty disables the action.
-///   - `promptText`: editable identification prompt. Defaults to
-///     `GeminiDefaultPrompt.value`; "Reset to default" restores.
+/// Stored in `UserDefaults` (the Mac is a single-user trust domain
+/// — no need for Keychain ceremony here). The persistence keys are
+/// scoped per-provider so they can co-exist:
+///
+///   - `ai.activeProvider`        → raw value of `AIProviderID`
+///   - `ai.<id>.apiKey`           → API key
+///   - `ai.<id>.prompt`           → editable identify prompt
+///
+/// Legacy single-provider keys (`stashGeminiKey`, `stashGeminiPrompt`)
+/// are migrated transparently on first launch after the upgrade so
+/// users don't have to re-paste their key.
 @Observable
 @MainActor
-final class GeminiPrefsStore {
-    private let keyDefaults = "stashGeminiKey"
-    private let promptDefaults = "stashGeminiPrompt"
+final class AIPrefsStore {
+    private(set) var activeID: AIProviderID
+    private var apiKeys: [AIProviderID: String]
+    private var prompts: [AIProviderID: String]
 
-    private(set) var apiKey: String
-    private(set) var promptText: String
+    var activeProvider: AIProvider { AIProviderRegistry.provider(for: activeID) }
+    var apiKey: String { apiKeys[activeID] ?? "" }
+    var promptText: String {
+        prompts[activeID] ?? activeProvider.defaultPrompt
+    }
+    var hasKey: Bool { !apiKey.isEmpty }
+
+    private let defaults = UserDefaults.standard
+    private let activeKey = "ai.activeProvider"
+    // Legacy single-provider keys preserved for one-shot migration.
+    private let legacyKeyKey = "stashGeminiKey"
+    private let legacyPromptKey = "stashGeminiPrompt"
 
     init() {
-        self.apiKey = UserDefaults.standard.string(forKey: keyDefaults) ?? ""
-        self.promptText = UserDefaults.standard.string(forKey: promptDefaults)
-            ?? GeminiDefaultPrompt.value
+        // Active provider — default to Gemini if unset or unknown.
+        if let raw = UserDefaults.standard.string(forKey: "ai.activeProvider"),
+           let parsed = AIProviderID(rawValue: raw) {
+            self.activeID = parsed
+        } else {
+            self.activeID = .gemini
+        }
+
+        // Per-provider storage. Read every provider so the user can
+        // flip the picker without losing any pre-configured keys.
+        var keys: [AIProviderID: String] = [:]
+        var prompts: [AIProviderID: String] = [:]
+        for id in AIProviderID.allCases {
+            keys[id] = UserDefaults.standard.string(forKey: "ai.\(id.rawValue).apiKey") ?? ""
+            prompts[id] = UserDefaults.standard.string(forKey: "ai.\(id.rawValue).prompt") ?? ""
+        }
+        self.apiKeys = keys
+        self.prompts = prompts
+
+        // One-shot migration from the previous single-provider keys.
+        migrateLegacyIfNeeded()
     }
 
-    func setKey(_ value: String) {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        apiKey = trimmed
-        if trimmed.isEmpty {
-            UserDefaults.standard.removeObject(forKey: keyDefaults)
-        } else {
-            UserDefaults.standard.set(trimmed, forKey: keyDefaults)
+    private func migrateLegacyIfNeeded() {
+        if (apiKeys[.gemini] ?? "").isEmpty,
+           let legacy = defaults.string(forKey: legacyKeyKey),
+           !legacy.isEmpty {
+            apiKeys[.gemini] = legacy
+            defaults.set(legacy, forKey: "ai.gemini.apiKey")
+            defaults.removeObject(forKey: legacyKeyKey)
+        }
+        if (prompts[.gemini] ?? "").isEmpty,
+           let legacy = defaults.string(forKey: legacyPromptKey),
+           !legacy.isEmpty {
+            prompts[.gemini] = legacy
+            defaults.set(legacy, forKey: "ai.gemini.prompt")
+            defaults.removeObject(forKey: legacyPromptKey)
         }
     }
 
-    func setPrompt(_ value: String) {
+    /// Switch the active provider. The Settings UI re-reads `apiKey`
+    /// / `promptText` afterwards so the editor fields reflect the
+    /// newly-selected provider's stored values.
+    func setActiveProvider(_ id: AIProviderID) {
+        activeID = id
+        defaults.set(id.rawValue, forKey: activeKey)
+    }
+
+    func setKey(_ value: String, for id: AIProviderID? = nil) {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let target = id ?? activeID
+        apiKeys[target] = trimmed
         if trimmed.isEmpty {
-            resetPrompt()
+            defaults.removeObject(forKey: "ai.\(target.rawValue).apiKey")
         } else {
-            promptText = trimmed
-            UserDefaults.standard.set(trimmed, forKey: promptDefaults)
+            defaults.set(trimmed, forKey: "ai.\(target.rawValue).apiKey")
         }
     }
 
-    func resetPrompt() {
-        promptText = GeminiDefaultPrompt.value
-        UserDefaults.standard.removeObject(forKey: promptDefaults)
+    func setPrompt(_ value: String, for id: AIProviderID? = nil) {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let target = id ?? activeID
+        if trimmed.isEmpty {
+            resetPrompt(for: target)
+        } else {
+            prompts[target] = trimmed
+            defaults.set(trimmed, forKey: "ai.\(target.rawValue).prompt")
+        }
     }
 
-    var hasKey: Bool { !apiKey.isEmpty }
+    func resetPrompt(for id: AIProviderID? = nil) {
+        let target = id ?? activeID
+        prompts[target] = AIProviderRegistry.provider(for: target).defaultPrompt
+        defaults.removeObject(forKey: "ai.\(target.rawValue).prompt")
+    }
+
+    /// Per-provider accessor used by the Settings UI when displaying
+    /// the not-currently-active providers (e.g. so swapping the
+    /// picker reveals each provider's pre-configured key).
+    func apiKey(for id: AIProviderID) -> String { apiKeys[id] ?? "" }
+    func prompt(for id: AIProviderID) -> String {
+        prompts[id] ?? AIProviderRegistry.provider(for: id).defaultPrompt
+    }
 }

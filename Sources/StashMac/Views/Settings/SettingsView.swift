@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// Root of the Stash Settings scene (⌘,). Tabs: Capture (existing
-/// ingest-related toggles), Appearance (theme picker), and Gemini
-/// (API key + identify prompt).
+/// ingest-related toggles), Appearance (theme picker), and AI
+/// (provider picker + API key + identify prompt).
 struct SettingsView: View {
     var body: some View {
         TabView {
@@ -16,12 +16,12 @@ struct SettingsView: View {
                     Label("Appearance", systemImage: "paintpalette")
                 }
                 .frame(minWidth: 560, minHeight: 420)
-            GeminiPrefsView()
+            AIPrefsView()
                 .tabItem {
-                    Label("Gemini", systemImage: "sparkles")
+                    Label("AI", systemImage: "sparkles")
                 }
-                .frame(minWidth: 560, minHeight: 480)
+                .frame(minWidth: 560, minHeight: 540)
         }
-        .frame(width: 640, height: 540)
+        .frame(width: 640, height: 580)
     }
 }

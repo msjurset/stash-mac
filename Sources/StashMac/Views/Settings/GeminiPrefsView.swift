@@ -1,11 +1,12 @@
 import SwiftUI
 
-/// Settings tab for the Mac-side Gemini integration. Same shape as
-/// the Android Settings → Gemini section: API key field with
-/// reveal/hide toggle, editable prompt with Reset to default, and a
-/// Test button that does a cheap key-validity round trip.
-struct GeminiPrefsView: View {
-    @Environment(GeminiPrefsStore.self) private var prefs
+/// Settings tab for the Mac-side AI integration. Provider-agnostic:
+/// the active provider is picked at the top of the pane, and the
+/// API-key field + prompt editor below operate on whatever's
+/// currently selected. New providers (Claude, OpenAI, …) plug in via
+/// `AIProviderRegistry` and appear here automatically.
+struct AIPrefsView: View {
+    @Environment(AIPrefsStore.self) private var prefs
 
     @State private var keyField: String = ""
     @State private var keyRevealed = false
@@ -21,6 +22,16 @@ struct GeminiPrefsView: View {
 
     var body: some View {
         Form {
+            Section {
+                providerPicker
+            } header: {
+                Text("Provider")
+            } footer: {
+                Text("Each provider keeps its own key and prompt. Switching here only changes which one the right-click → Identify menu uses.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section {
                 keyRow
                 HStack(spacing: 8) {
@@ -43,14 +54,14 @@ struct GeminiPrefsView: View {
                         }
                     }
                     Spacer()
-                    Link("Get a key →", destination: URL(string: "https://aistudio.google.com/app/apikey")!)
+                    Link("Get a key →", destination: prefs.activeProvider.keyURL)
                         .font(.caption)
                 }
                 statusLine
             } header: {
                 Text("API key")
             } footer: {
-                Text("Used to identify image items via right-click → Identify with Gemini. The key never leaves this Mac.")
+                Text("Used to identify image items via right-click → Identify with \(prefs.activeProvider.displayName). The key never leaves this Mac.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -74,12 +85,12 @@ struct GeminiPrefsView: View {
                         prefs.resetPrompt()
                         promptDraft = prefs.promptText
                     }
-                    .disabled(prefs.promptText == GeminiDefaultPrompt.value)
+                    .disabled(prefs.promptText == prefs.activeProvider.defaultPrompt)
                 }
             } header: {
                 Text("Identify prompt")
             } footer: {
-                Text("Sent to Gemini with every photo. The default asks for `TITLE:` and `NOTES:` lines so the response slots into the item's Title and Notes fields. Edit freely — the parser handles `Common Name:` / free-form fallbacks too.")
+                Text("Sent to \(prefs.activeProvider.displayName) with every photo. The default asks for `TITLE:` and `NOTES:` lines so the response slots into the item's Title and Notes fields. Edit freely — the parser handles `Common Name:` / free-form fallbacks too.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -92,6 +103,28 @@ struct GeminiPrefsView: View {
         }
     }
 
+    private var providerPicker: some View {
+        Picker(selection: Binding(
+            get: { prefs.activeID },
+            set: { newID in
+                prefs.setActiveProvider(newID)
+                // Repopulate the editors so they reflect the
+                // newly-selected provider's stored values.
+                keyField = prefs.apiKey
+                promptDraft = prefs.promptText
+                testStatus = .idle
+            }
+        )) {
+            ForEach(AIProviderID.allCases) { id in
+                Text(AIProviderRegistry.provider(for: id).displayName).tag(id)
+            }
+        } label: {
+            EmptyView()
+        }
+        .labelsHidden()
+        .pickerStyle(.segmented)
+    }
+
     private var keyRow: some View {
         HStack(spacing: 6) {
             if keyRevealed {
@@ -99,15 +132,24 @@ struct GeminiPrefsView: View {
                 // to keep the phantom autofill popup suppressed. Never swap
                 // back to SwiftUI's `TextField` here.
                 FilterField(
-                    placeholder: "AIza…",
+                    placeholder: prefs.activeProvider.keyPlaceholder,
                     text: $keyField,
                     isBordered: true,
                     backgroundColor: .textBackgroundColor
                 )
                 .frame(height: 22)
             } else {
-                SecureField("AIza…", text: $keyField)
-                    .textFieldStyle(.roundedBorder)
+                // Use the `prompt:` parameter so the placeholder renders
+                // INSIDE the field. `.labelsHidden()` keeps Form's grouped
+                // style from promoting the title string into a left-side
+                // row label.
+                SecureField(
+                    "",
+                    text: $keyField,
+                    prompt: Text(prefs.activeProvider.keyPlaceholder)
+                )
+                .textFieldStyle(.roundedBorder)
+                .labelsHidden()
             }
             Button {
                 keyRevealed.toggle()
@@ -145,7 +187,7 @@ struct GeminiPrefsView: View {
         guard !trimmed.isEmpty else { return }
         testStatus = .pending
         do {
-            try await GeminiClient().testKey(trimmed)
+            try await prefs.activeProvider.testKey(trimmed)
             testStatus = .ok
         } catch {
             testStatus = .failed(describe(error))

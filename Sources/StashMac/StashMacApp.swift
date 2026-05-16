@@ -52,7 +52,7 @@ struct StashMacApp: App {
     @State private var store = StashStore()
     @State private var clipboardMonitor = ClipboardMonitor()
     @State private var selectionGrabber = SelectionGrabber()
-    @State private var geminiPrefs = GeminiPrefsStore()
+    @State private var aiPrefs = AIPrefsStore()
     @Environment(\.openWindow) private var openWindow
 
     /// Read from the same `@AppStorage` key the Appearance settings
@@ -65,7 +65,7 @@ struct StashMacApp: App {
         WindowGroup(id: "main") {
             ContentView()
                 .environment(store)
-                .environment(geminiPrefs)
+                .environment(aiPrefs)
                 .preferredColorScheme(appTheme.colorScheme)
         }
         .defaultSize(width: 1100, height: 700)
@@ -125,7 +125,7 @@ struct StashMacApp: App {
         Settings {
             SettingsView()
                 .environment(store)
-                .environment(geminiPrefs)
+                .environment(aiPrefs)
                 .preferredColorScheme(appTheme.colorScheme)
         }
 

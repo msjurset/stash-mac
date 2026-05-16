@@ -1924,20 +1924,20 @@ final class StashStore {
     }
 
     /// IDs currently being identified (right-click → Identify with
-    /// Gemini). The detail pane reads this to show a small spinner
-    /// next to the title while the call's in flight.
+    /// the active AI provider). The detail pane reads this to show a
+    /// small spinner next to the title while the call's in flight.
     var identifyingItemIDs: Set<String> = []
 
-    /// Right-click → Identify with Gemini on an image item.
+    /// Right-click → Identify with <provider> on an image item.
     /// Reads the image bytes from the local file store, sends them
-    /// to Google with the user's configured prompt + key, parses
-    /// the response, then updates the item:
+    /// to the active AI provider with the user's configured prompt
+    /// + key, parses the response, then updates the item:
     ///   - Title is filled only when currently blank (don't clobber
     ///     a user-typed value).
     ///   - Notes gets the new prose appended below any existing
     ///     notes, separated by a blank line.
     /// All errors land in `self.error` via the standard alert path.
-    func identifyImageItem(id: String, with prefs: GeminiPrefsStore) {
+    func identifyImageItem(id: String, with prefs: AIPrefsStore) {
         guard let item = items.first(where: { $0.id == id })
                 ?? fetchedItem.flatMap({ $0.id == id ? $0 : nil })
         else {
@@ -1945,12 +1945,13 @@ final class StashStore {
             return
         }
         guard item.type == .image else {
-            self.error = "Identify with Gemini only works on image items."
+            self.error = "Identify only works on image items."
             return
         }
+        let provider = prefs.activeProvider
         let key = prefs.apiKey
         guard !key.isEmpty else {
-            self.error = "Set a Gemini API key in Settings → Gemini first."
+            self.error = "Set a \(provider.displayName) API key in Settings → AI first."
             return
         }
         guard let storePath = item.storePath, !storePath.isEmpty,
@@ -1963,13 +1964,13 @@ final class StashStore {
         let prompt = prefs.promptText
 
         identifyingItemIDs.insert(id)
-        flashMessage = "Identifying \(shortID(id)) with Gemini…"
+        flashMessage = "Identifying \(shortID(id)) with \(provider.displayName)…"
 
         Task { [weak self] in
             defer { Task { @MainActor in self?.identifyingItemIDs.remove(id) } }
             do {
                 let bytes = try Data(contentsOf: url)
-                let result = try await GeminiClient().identify(
+                let result = try await provider.identify(
                     apiKey: key,
                     bytes: bytes,
                     mimeType: mime,
@@ -1979,14 +1980,14 @@ final class StashStore {
             } catch {
                 await MainActor.run {
                     self?.flashMessage = nil
-                    self?.error = "Gemini identify failed: \(error.localizedDescription)"
+                    self?.error = "\(provider.displayName) identify failed: \(error.localizedDescription)"
                 }
             }
         }
     }
 
     @MainActor
-    private func applyIdentifyResult(itemID: String, result: GeminiClient.IdentifyResult) async {
+    private func applyIdentifyResult(itemID: String, result: AIIdentifyResult) async {
         guard let item = items.first(where: { $0.id == itemID })
                 ?? fetchedItem.flatMap({ $0.id == itemID ? $0 : nil })
         else { return }
@@ -2012,7 +2013,7 @@ final class StashStore {
             refresh()
         } catch {
             flashMessage = nil
-            self.error = "Couldn't save Gemini result: \(error.localizedDescription)"
+            self.error = "Couldn't save identify result: \(error.localizedDescription)"
         }
     }
 
