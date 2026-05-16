@@ -95,7 +95,6 @@ struct TagPickerPopover: View {
             FilterField(
                 placeholder: "Add a new tag…",
                 text: $newTagText,
-                autoFocus: true,
                 onSubmit: commitNewTag
             )
         }
@@ -109,10 +108,16 @@ struct TagPickerPopover: View {
             Image(systemName: "line.3.horizontal.decrease")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
+            // autoFocus on the filter field, not the add-new-tag field
+            // above. The 90% case for opening Tags is "filter to find
+            // the tag I want to toggle" — starting focus on the add
+            // field meant users had to click into the filter every
+            // time before typing.
             FilterField(
                 placeholder: "Filter…",
                 text: $filterText,
-                font: .preferredFont(forTextStyle: .caption1)
+                font: .preferredFont(forTextStyle: .caption1),
+                autoFocus: true
             )
             // Clear button inset INSIDE the field's right edge — same
             // pattern as the macOS native search field. Overlay with

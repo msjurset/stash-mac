@@ -20,6 +20,7 @@ final class TagSuggestionState {
 
 struct ItemListView: View {
     @Environment(StashStore.self) private var store
+    @Environment(GeminiPrefsStore.self) private var geminiPrefs
     @Binding var showEditSheet: Bool
 
     @State private var state = TagSuggestionState()
@@ -759,6 +760,14 @@ struct ItemListView: View {
             // see the multi-select branch above for rationale.
             if inGridView, let item = store.items.first(where: { $0.id == rightClickedID }) {
                 singleItemThumbnailMenu(for: item)
+            }
+            // Identify with Gemini — image items only, key configured.
+            if geminiPrefs.hasKey,
+               let item = store.items.first(where: { $0.id == rightClickedID }),
+               item.type == .image {
+                Button("Identify with Gemini") {
+                    store.identifyImageItem(id: rightClickedID, with: geminiPrefs)
+                }
             }
             Divider()
             Button("Share…") {

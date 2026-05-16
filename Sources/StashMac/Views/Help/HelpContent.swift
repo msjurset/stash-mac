@@ -25,6 +25,7 @@ enum HelpTopic: String, CaseIterable, Identifiable, Codable, Hashable {
     case clipboard = "Clipboard Quick-Stash"
     case services = "System Services"
     case rules = "Rules"
+    case geminiIdentify = "Identify with Gemini"
     case keyboard = "Keyboard Shortcuts"
 
     var id: String { rawValue }
@@ -45,6 +46,7 @@ enum HelpTopic: String, CaseIterable, Identifiable, Codable, Hashable {
         case .clipboard: return "doc.on.clipboard"
         case .services: return "square.and.arrow.down.on.square"
         case .rules: return "wand.and.stars"
+        case .geminiIdentify: return "sparkles"
         case .keyboard: return "keyboard"
         }
     }
@@ -420,6 +422,31 @@ enum HelpTopic: String, CaseIterable, Identifiable, Codable, Hashable {
                     "Add Rule opens the rule editor pre-populated; Create writes the rule with `enabled: false` so it doesn't tag anything until you flip the toggle and run Apply Now.",
                     "Skip persists across sessions; the sheet footer shows a count and a Reset button to bring previously-skipped patterns back.",
                     "The button greys out on Intel Macs or when Apple Intelligence isn't enabled in System Settings.",
+                ]),
+            ]
+
+        case .geminiIdentify:
+            return [
+                .paragraph("Stash can ask Google's Gemini to identify the subject of an image item — handy for birds, plants, products, screenshots from the field, anything where you'd rather not type out a title and notes by hand. The integration is opt-in: nothing leaves the Mac until you add an API key in Settings."),
+                .heading("Setup"),
+                .numbered([
+                    "Open Settings (⌘,) → Gemini tab.",
+                    "Paste a Google AI Studio API key into the field and click Save. The key is stored in UserDefaults and never leaves this Mac except in outbound requests to generativelanguage.googleapis.com.",
+                    "Optionally click Test to verify the key with a small round trip.",
+                    "Edit the identify prompt if you want different output shape — the parser handles `TITLE:` / `NOTES:` markers as well as `Common Name:` / `Subject:` fallbacks.",
+                ]),
+                .heading("Using It"),
+                .bullet([
+                    "Right-click any image item in the list or grid and choose Identify with Gemini.",
+                    "Title is filled only when it's currently blank — Gemini doesn't overwrite a title you typed yourself.",
+                    "Notes are appended (separated by a blank line) so repeat identifies on the same item don't lose earlier output.",
+                    "A flash message reports progress (\"Identifying abc123… with Gemini\") and completion (\"Identified ✓\").",
+                ]),
+                .heading("Notes"),
+                .bullet([
+                    "The menu item only appears for image-type items when an API key is configured.",
+                    "Get a key at https://aistudio.google.com/app/apikey — the free tier is plenty for casual identification.",
+                    "Mac and Android Stash share the same prompt shape but maintain independent keys / drafts.",
                 ]),
             ]
 
