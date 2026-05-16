@@ -91,14 +91,21 @@ struct ItemRow: View {
                     NSCursor.pop()
                 }
             }
-            .onTapGesture {
-                guard hasThumbnail else { return }
-                if isPopoverShown {
-                    shownThumbnailID = nil
-                } else {
-                    shownThumbnailID = item.id
+            // `.highPriorityGesture` instead of `.onTapGesture`:
+            // SwiftUI's `List(selection:)` swallows clicks on the
+            // already-selected row (the first item gets default
+            // selection on appear, so its icon never received the tap).
+            // High-priority runs before List's selection handler.
+            .highPriorityGesture(
+                TapGesture().onEnded {
+                    guard hasThumbnail else { return }
+                    if isPopoverShown {
+                        shownThumbnailID = nil
+                    } else {
+                        shownThumbnailID = item.id
+                    }
                 }
-            }
+            )
             .popover(
                 isPresented: Binding(
                     get: { isPopoverShown },

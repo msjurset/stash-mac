@@ -54,10 +54,17 @@ struct StashMacApp: App {
     @State private var selectionGrabber = SelectionGrabber()
     @Environment(\.openWindow) private var openWindow
 
+    /// Read from the same `@AppStorage` key the Appearance settings
+    /// pane writes to. Re-renders the WindowGroup body when the user
+    /// flips the picker, so theme changes take effect live with no
+    /// relaunch.
+    @AppStorage("appTheme") private var appTheme: AppTheme = .system
+
     var body: some Scene {
         WindowGroup(id: "main") {
             ContentView()
                 .environment(store)
+                .preferredColorScheme(appTheme.colorScheme)
         }
         .defaultSize(width: 1100, height: 700)
         .commands {
@@ -107,8 +114,17 @@ struct StashMacApp: App {
         // menu-item path passes nil and lands on Getting Started.
         WindowGroup("Stash Help", id: "help", for: HelpTopic.self) { $topic in
             HelpView(initialTopic: topic ?? .gettingStarted)
+                .preferredColorScheme(appTheme.colorScheme)
         }
         .defaultSize(width: 800, height: 550)
+
+        // Settings scene. The Settings menu item under "Stash" (⌘,)
+        // opens this automatically — SwiftUI handles the routing.
+        Settings {
+            SettingsView()
+                .environment(store)
+                .preferredColorScheme(appTheme.colorScheme)
+        }
 
         MenuBarExtra("Stash", image: clipboardMonitor.isWatching ? "MenuBarIcon" : "MenuBarIconIdle") {
             ClipboardMenuView()

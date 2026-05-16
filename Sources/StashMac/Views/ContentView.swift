@@ -51,6 +51,8 @@ struct ContentView: View {
                 RulesView()
             case .ruleActivity:
                 RuleActivityView()
+            case .inbox:
+                InboxView()
             default:
                 ItemListView(showEditSheet: $showEditSheet)
             }
@@ -76,12 +78,15 @@ struct ContentView: View {
                 DetailRouter(showEditSheet: $showEditSheet)
             case .savedSearch:
                 DetailRouter(showEditSheet: $showEditSheet)
+            case .inbox:
+                InboxDetailView()
             default:
                 DetailRouter(showEditSheet: $showEditSheet)
             }
         }
         .onAppear {
             store.loadAll()
+            store.startFeedPollTimer()
         }
         .onChange(of: store.navigation) { _, newValue in
             store.handleNavigationChange(newValue ?? .allItems)
@@ -184,6 +189,7 @@ struct ContentView: View {
         case .dupes:                    return .duplicates
         case .stats, .check:            return .statsAndCheck
         case .rules, .ruleActivity:     return .rules
+        case .inbox:                    return .gettingStarted
         }
     }
 

@@ -114,6 +114,37 @@ struct TagPickerPopover: View {
                 text: $filterText,
                 font: .preferredFont(forTextStyle: .caption1)
             )
+            // Clear button inset INSIDE the field's right edge — same
+            // pattern as the macOS native search field. Overlay with
+            // trailing alignment so the button paints on top of the
+            // field, and reserve a bit of trailing padding on the
+            // text so typed values don't run under the X.
+            .overlay(alignment: .trailing) {
+                if !filterText.isEmpty {
+                    Button {
+                        filterText = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Clear filter")
+                    .padding(.trailing, 2)
+                    // The FilterField's NSTextField sets an I-beam over
+                    // its tracking area, which bleeds through to the X
+                    // overlay since the button sits on top of the field.
+                    // Push an arrow cursor while hovering so the user
+                    // gets the standard "this is clickable" feedback.
+                    .onHover { hovering in
+                        if hovering {
+                            NSCursor.arrow.push()
+                        } else {
+                            NSCursor.pop()
+                        }
+                    }
+                }
+            }
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 3)

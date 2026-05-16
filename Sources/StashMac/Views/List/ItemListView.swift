@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// Shared mutable state that the event monitor reads directly — no SwiftUI
 /// render cycle needed, so it's always current when a key event arrives.
@@ -9,6 +10,12 @@ final class TagSuggestionState {
     var activeIndex = 0
     /// Returns `true` if the event was consumed.
     var onKey: ((SuggestKey) -> Bool)?
+    /// True while the items-list search FilterField is the first
+    /// responder. The window-wide keyDown monitor checks this
+    /// before forwarding Tab/Arrow/Enter — without it, focus in
+    /// ANY NSTextView (e.g. the detail-pane tag input) would
+    /// route those keys into the items-list search's tag-cycler.
+    var isSearchFocused: Bool = false
 }
 
 struct ItemListView: View {
@@ -48,7 +55,9 @@ struct ItemListView: View {
                 FilterField(
                     placeholder: "Search items... (tag: to filter)",
                     text: $store.searchQuery,
-                    onSubmit: { store.refresh() }
+                    onSubmit: { store.refresh() },
+                    onBeginEditing: { state.isSearchFocused = true },
+                    onEndEditing:   { state.isSearchFocused = false }
                 )
                 if !store.searchQuery.isEmpty {
                     Button {
@@ -79,33 +88,44 @@ struct ItemListView: View {
 
             // Tag suggestions
             if !state.matches.isEmpty {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(state.matches.enumerated()), id: \.element.id) { idx, tag in
-                        Button {
-                            commitTag(tag.name)
-                        } label: {
-                            HStack {
-                                Image(systemName: "tag")
-                                    .foregroundStyle(.secondary)
-                                    .frame(width: 16)
-                                Text("tag:\(tag.name)")
-                                Spacer()
-                                if let count = tag.count {
-                                    Text("\(count)")
-                                        .foregroundStyle(.tertiary)
-                                        .font(.caption)
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            ForEach(Array(state.matches.enumerated()), id: \.element.id) { idx, tag in
+                                Button {
+                                    commitTag(tag.name)
+                                } label: {
+                                    HStack {
+                                        Image(systemName: "tag")
+                                            .foregroundStyle(.secondary)
+                                            .frame(width: 16)
+                                        Text("tag:\(tag.name)")
+                                        Spacer()
+                                        if let count = tag.count {
+                                            Text("\(count)")
+                                                .foregroundStyle(.tertiary)
+                                                .font(.caption)
+                                        }
+                                    }
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 4)
+                                    .background(idx == state.activeIndex ? Color.accentColor.opacity(0.2) : .clear)
+                                    .contentShape(Rectangle())
                                 }
+                                .buttonStyle(.plain)
+                                .id(idx)
                             }
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 4)
-                            .background(idx == state.activeIndex ? Color.accentColor.opacity(0.2) : .clear)
-                            .contentShape(Rectangle())
                         }
-                        .buttonStyle(.plain)
+                        .padding(.vertical, 2)
+                    }
+                    .frame(maxHeight: 240)
+                    .background(.bar)
+                    .onChange(of: state.activeIndex) { _, newIdx in
+                        withAnimation(.easeOut(duration: 0.12)) {
+                            proxy.scrollTo(newIdx, anchor: .center)
+                        }
                     }
                 }
-                .padding(.vertical, 2)
-                .background(.bar)
                 Divider()
             }
 
@@ -135,6 +155,18 @@ struct ItemListView: View {
             let targets = quickLookTargets()
             if targets.isEmpty { return .ignored }
             QuickLookPreviewer.shared.show(items: targets)
+            return .handled
+        }
+        // ⌘-Return on the items list opens the current selection — same
+        // behavior as double-click and the context menu "Open" action.
+        // Plain Return is intentionally left alone since inline-rename
+        // and detail-pane field handlers may want it. Multi-select opens
+        // each in turn.
+        .onKeyPress(keys: [.return]) { press in
+            guard press.modifiers.contains(.command) else { return .ignored }
+            let ids = Array(store.selectedItems)
+            if ids.isEmpty { return .ignored }
+            for id in ids { store.openItem(id: id) }
             return .handled
         }
         .onChange(of: store.searchQuery) { _, _ in
@@ -266,11 +298,13 @@ struct ItemListView: View {
 
     private var listView: some View {
         @Bindable var store = store
-        return List(selection: $store.selectedItems) {
+        return ScrollViewReader { proxy in
+            List(selection: $store.selectedItems) {
             ForEach(Array(store.items.enumerated()), id: \.element.id) { idx, item in
                 ItemRow(item: item, shownThumbnailID: $shownThumbnailID)
                     .listRowBackground(idx.isMultiple(of: 2) ? Color.clear : Color.primary.opacity(0.04))
                     .tag(item.id)
+                    .id(item.id)
                     // No row-level tap gesture: SwiftUI's tap detection
                     // either misses non-hittable areas (icon-only with
                     // text behind `.allowsHitTesting(false)`) or
@@ -309,9 +343,33 @@ struct ItemListView: View {
                         }
                     }
             }
+            }
+            .listStyle(.inset)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // QuickSearch / Health Check / other "reveal" callers set
+            // store.pendingRevealID. Scroll to it once the items have
+            // populated, then clear the signal so the same id can be
+            // re-requested later.
+            .onChange(of: store.pendingRevealID) { _, id in
+                guard let id else { return }
+                scrollToPending(id, proxy: proxy)
+            }
+            .onChange(of: store.items) { _, _ in
+                if let id = store.pendingRevealID {
+                    scrollToPending(id, proxy: proxy)
+                }
+            }
         }
-        .listStyle(.inset)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func scrollToPending(_ id: String, proxy: ScrollViewProxy) {
+        guard store.items.contains(where: { $0.id == id }) else { return }
+        DispatchQueue.main.async {
+            withAnimation(.easeOut(duration: 0.18)) {
+                proxy.scrollTo(id, anchor: .center)
+            }
+            store.pendingRevealID = nil
+        }
     }
 
     private var gridView: some View {
@@ -471,8 +529,6 @@ struct ItemListView: View {
                 let matches = partial.isEmpty || lower.contains(partial)
                 return matches && !existing.contains(lower)
             }
-            .prefix(8)
-            .map { $0 }
         state.activeIndex = 0
     }
 
@@ -660,6 +716,9 @@ struct ItemListView: View {
                 }
             }
             Divider()
+            Button("Share \(selected.count) Item\(selected.count == 1 ? "" : "s")…") {
+                shareItems(ids: Array(selected))
+            }
             Button("Export Selected (\(selected.count))…") {
                 exportSelection(ids: Array(selected))
             }
@@ -702,6 +761,9 @@ struct ItemListView: View {
                 singleItemThumbnailMenu(for: item)
             }
             Divider()
+            Button("Share…") {
+                shareItems(ids: [rightClickedID])
+            }
             Button("Export…") {
                 exportSelection(ids: [rightClickedID])
             }
@@ -712,6 +774,29 @@ struct ItemListView: View {
             Button("Delete", role: .destructive) {
                 store.deleteItem(id: rightClickedID)
             }
+        }
+    }
+
+    /// Show the macOS Share Sheet seeded with `SharePayload.build`
+    /// for the given items. Anchored to the key window since
+    /// context menus aren't bound to a SwiftUI view.
+    private func shareItems(ids: [String]) {
+        let items = store.items.filter { ids.contains($0.id) }
+        let payload = SharePayload.build(for: items)
+        guard !payload.isEmpty else {
+            NSSound.beep()
+            return
+        }
+        let picker = NSSharingServicePicker(items: payload)
+        if let window = NSApp.keyWindow,
+           let content = window.contentView {
+            let anchor = NSRect(
+                x: content.bounds.midX - 1,
+                y: content.bounds.midY - 1,
+                width: 2,
+                height: 2
+            )
+            picker.show(relativeTo: anchor, of: content, preferredEdge: .minY)
         }
     }
 
@@ -883,6 +968,14 @@ struct SearchFieldKeyMonitor: NSViewRepresentable {
             monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
                 guard let self, let state = self.state else { return event }
                 guard self.window?.firstResponder is NSTextView else { return event }
+                // Only forward Tab / Arrow / Enter to the items-list
+                // search's tag-cycler when ITS field is focused.
+                // Without this guard, focus in any other NSTextView
+                // (the detail-pane tag input, the title inline editor,
+                // a sheet's FilterField) would hijack those keys into
+                // the items-list autocomplete and yank focus visually.
+                let focused = MainActor.assumeIsolated { state.isSearchFocused }
+                guard focused else { return event }
 
                 let ctrl = event.modifierFlags.contains(.control)
                 let shift = event.modifierFlags.contains(.shift)

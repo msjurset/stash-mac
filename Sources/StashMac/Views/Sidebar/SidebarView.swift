@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SidebarView: View {
     @Environment(StashStore.self) private var store
+    @Environment(\.openSettings) private var openSettings
     @Binding var selection: NavigationItem?
     @Binding var showAddCollectionSheet: Bool
     @State private var renamingTag: StashTag?
@@ -37,6 +38,12 @@ struct SidebarView: View {
         }
     }
 
+    /// Inbox sidebar badge count = read/watch queue + unread feed
+    /// candidates + resurface picks. Recomputed from store every render.
+    private var inboxBadge: Int {
+        store.queueItems.count + store.feedCandidates.count + store.resurfaceItems.count
+    }
+
     private var filteredTags: [StashTag] {
         if tagFilter.isEmpty { return store.tags }
         return store.tags.filter { $0.name.localizedCaseInsensitiveContains(tagFilter) }
@@ -49,6 +56,19 @@ struct SidebarView: View {
                 // into a chip bar at the top of ItemListView so the
                 // sidebar isn't 12 rows of clutter.
                 Section("Library") {
+                    HStack {
+                        Label("Inbox", systemImage: "tray.and.arrow.down")
+                        Spacer()
+                        if inboxBadge > 0 {
+                            Text("\(inboxBadge)")
+                                .font(.caption2)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 1)
+                                .background(.tint.opacity(0.25), in: Capsule())
+                                .foregroundStyle(.tint)
+                        }
+                    }
+                    .tag(NavigationItem.inbox)
                     Label("All Items", systemImage: "tray.full")
                         .tag(NavigationItem.allItems)
                 }
@@ -97,6 +117,30 @@ struct SidebarView: View {
             }
             .listStyle(.sidebar)
             .navigationTitle("Stash")
+            .safeAreaInset(edge: .bottom) {
+                // Gear → Settings (⌘,). Plain bottom-of-sidebar
+                // action button per the project's CLAUDE.md
+                // pattern (toolbar items in sidebars cause >> overflow
+                // even with ample space, so we use safeAreaInset).
+                // Gear sits on the right edge to match recruit-mac
+                // and other apps in the workspace.
+                HStack {
+                    Spacer()
+                    Button {
+                        openSettings()
+                    } label: {
+                        Image(systemName: "gearshape")
+                            .font(.body)
+                            .foregroundStyle(.secondary)
+                            .frame(width: 22, height: 22)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Settings (⌘,)")
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Color(NSColor.underPageBackgroundColor))
+            }
             .onChange(of: store.filterTags) { _, newTags in
                 if let tagName = newTags.first {
                     withAnimation {
@@ -334,6 +378,7 @@ struct SidebarView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .pointingHandCursor()
             .listRowBackground(
                 hoveredTagName == tag.name
                     ? Color.accentColor.opacity(0.5)
@@ -403,6 +448,7 @@ struct SidebarView: View {
                         .onTapGesture {
                             store.filterByTag(tag.name, additive: NSEvent.modifierFlags.contains(.command))
                         }
+                        .pointingHandCursor()
                         .contextMenu {
                             Button("Rename...") {
                                 renamingTag = tag

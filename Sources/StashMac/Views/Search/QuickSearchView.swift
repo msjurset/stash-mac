@@ -29,6 +29,27 @@ struct QuickSearchView: View {
     /// and closes when the user disables regex mode or clicks
     /// outside the popover.
     @State private var regexGuideShown = false
+    /// Browse mode shown when the query is empty — Recent (most
+    /// recently committed queries first) or Frequent (most-clicked
+    /// first). Persisted in UserDefaults so reopening the panel
+    /// lands on the same view the user left on.
+    @State private var browseMode: BrowseMode = BrowseMode.load()
+    /// Rollup loaded from `stash search-history list`. Reloaded on
+    /// view appear and whenever `browseMode` flips.
+    @State private var history: [SearchHistoryEntry] = []
+
+    enum BrowseMode: String, CaseIterable, Identifiable {
+        case recent, frequent
+        var id: String { rawValue }
+        var label: String { self == .recent ? "Recent" : "Frequent" }
+        static func load() -> BrowseMode {
+            BrowseMode(rawValue: UserDefaults.standard.string(forKey: "QuickSearchBrowseMode") ?? "recent")
+                ?? .recent
+        }
+        func save() {
+            UserDefaults.standard.set(rawValue, forKey: "QuickSearchBrowseMode")
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -63,53 +84,75 @@ struct QuickSearchView: View {
             // Tag suggestions
             if !tagMatches.isEmpty {
                 Divider()
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(tagMatches.enumerated()), id: \.element.id) { idx, tag in
-                        Button {
-                            commitTag(tag.name)
-                        } label: {
-                            HStack {
-                                Label("tag:\(tag.name)", systemImage: "tag")
-                                    .font(.body)
-                                Spacer()
-                                if let count = tag.count {
-                                    Text("\(count)")
-                                        .foregroundStyle(.secondary)
-                                        .font(.caption)
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            ForEach(Array(tagMatches.enumerated()), id: \.element.id) { idx, tag in
+                                Button {
+                                    commitTag(tag.name)
+                                } label: {
+                                    HStack {
+                                        Label("tag:\(tag.name)", systemImage: "tag")
+                                            .font(.body)
+                                        Spacer()
+                                        if let count = tag.count {
+                                            Text("\(count)")
+                                                .foregroundStyle(.secondary)
+                                                .font(.caption)
+                                        }
+                                    }
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 6)
+                                    .background(idx == tagActiveIndex ? Color.accentColor.opacity(0.2) : .clear)
+                                    .contentShape(Rectangle())
                                 }
+                                .buttonStyle(.plain)
+                                .id(idx)
                             }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(idx == tagActiveIndex ? Color.accentColor.opacity(0.2) : .clear)
-                            .contentShape(Rectangle())
                         }
-                        .buttonStyle(.plain)
+                        .padding(.vertical, 4)
+                    }
+                    .frame(maxHeight: 280)
+                    .onChange(of: tagActiveIndex) { _, newIdx in
+                        // Keep the keyboard-active row visible when
+                        // the user arrows / Tabs past the bottom of
+                        // the visible window.
+                        withAnimation(.easeOut(duration: 0.12)) {
+                            proxy.scrollTo(newIdx, anchor: .center)
+                        }
                     }
                 }
-                .padding(.vertical, 4)
             }
 
             Divider()
 
+            // Browse-mode toggles — always visible just under the
+            // search divider. Greyed out while a search query is
+            // active because results take priority over history.
+            browseToggleBar
+
             if query.isEmpty && tagMatches.isEmpty && results.isEmpty {
-                // Initial empty state — no query yet, nothing to show.
-                // Without this branch the empty `List` below renders as
-                // a 200-tall dark rounded rectangle, which looks like a
-                // phantom popup.
-                Text("Type to search · use tag: to filter")
-                    .font(.callout)
-                    .foregroundStyle(.tertiary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 24)
+                historyPane
             } else if results.isEmpty && !query.isEmpty && tagMatches.isEmpty {
                 ContentUnavailableView.search(text: query)
                     .frame(height: 200)
             } else if tagMatches.isEmpty {
-                List(Array(results.enumerated()), id: \.element.id) { idx, item in
-                    resultRow(idx: idx, item: item)
+                ScrollViewReader { proxy in
+                    List(Array(results.enumerated()), id: \.element.id) { idx, item in
+                        resultRow(idx: idx, item: item)
+                            .id(idx)
+                    }
+                    .listStyle(.plain)
+                    .frame(minHeight: 200, maxHeight: 400)
+                    .onChange(of: resultActiveIndex) { _, newIdx in
+                        // Keep the keyboard-active result visible when
+                        // arrows / Ctrl-J/K push it past the bottom edge.
+                        guard newIdx >= 0 else { return }
+                        withAnimation(.easeOut(duration: 0.12)) {
+                            proxy.scrollTo(newIdx, anchor: .center)
+                        }
+                    }
                 }
-                .listStyle(.plain)
-                .frame(minHeight: 200, maxHeight: 400)
             }
         }
         .frame(width: 500)
@@ -134,12 +177,138 @@ struct QuickSearchView: View {
             // commits the highest-relevance hit.
             resultActiveIndex = results.isEmpty ? -1 : 0
         }
+        .task {
+            await reloadHistory()
+        }
+        .onChange(of: browseMode) { _, mode in
+            mode.save()
+            Task { await reloadHistory() }
+        }
+    }
+
+    /// Pair of icon toggles in the upper-right of the panel, just
+    /// below the search-field divider. They flip `browseMode` between
+    /// `.recent` and `.frequent` and grey out (disabled) whenever the
+    /// search field has any text — results take priority over history
+    /// in that case.
+    @ViewBuilder
+    private var browseToggleBar: some View {
+        HStack(spacing: 6) {
+            Spacer()
+            browseToggleButton(mode: .recent,
+                               icon: "clock",
+                               tooltip: "Recent searches")
+            browseToggleButton(mode: .frequent,
+                               icon: "chart.bar",
+                               tooltip: "Frequent searches")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .disabled(!query.isEmpty)
+        .opacity(query.isEmpty ? 1.0 : 0.4)
+    }
+
+    private func browseToggleButton(mode: BrowseMode, icon: String, tooltip: String) -> some View {
+        let active = (browseMode == mode)
+        return Button {
+            browseMode = mode
+        } label: {
+            Image(systemName: icon)
+                .font(.body.weight(.semibold))
+                .foregroundStyle(active ? Color.primary : Color.secondary)
+                .frame(width: 22, height: 22)
+        }
+        .buttonStyle(.plain)
+        .help(tooltip)
+    }
+
+    /// Recent / Frequent panes shown when the search field is empty.
+    /// Same role as the Chrome extension's view-toggle: pick a
+    /// previously-committed query to re-run it. A row click populates
+    /// `query`, which kicks off `onChange(of: query)` → live search.
+    @ViewBuilder
+    private var historyPane: some View {
+        VStack(spacing: 0) {
+            if history.isEmpty {
+                Text("No saved searches yet — click a result to record one.")
+                    .font(.callout)
+                    .foregroundStyle(.tertiary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 24)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(history) { entry in
+                            historyRow(entry)
+                        }
+                    }
+                }
+                .frame(minHeight: 160, maxHeight: 320)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func historyRow(_ entry: SearchHistoryEntry) -> some View {
+        Button {
+            query = entry.query
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: browseMode == .recent ? "clock" : "chart.bar")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 16)
+                Text(entry.query)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer()
+                Text(browseMode == .recent
+                     ? entry.lastUsedAt.formatted(.relative(presentation: .numeric))
+                     : "\(entry.count)×")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .monospacedDigit()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .pointingHandCursor()
+        .contextMenu {
+            Button("Delete from history", role: .destructive) {
+                Task {
+                    try? await StashCLI.shared.deleteSearchHistoryEntry(query: entry.query)
+                    await reloadHistory()
+                }
+            }
+        }
+    }
+
+    private func reloadHistory() async {
+        do {
+            history = try await StashCLI.shared.listSearchHistory(
+                sort: browseMode.rawValue,
+                limit: 30
+            )
+        } catch {
+            history = []
+        }
     }
 
     /// Commit a result selection: focus the item, switch nav to All
     /// Items if it's not visible in the current scope (so the row
-    /// is highlighted in the list), dismiss the panel.
+    /// is highlighted in the list), dismiss the panel. The query at
+    /// click time is logged so the Recent / Frequent panes have
+    /// something to populate next visit; empty queries are skipped
+    /// (clicking a result from the unfiltered "list everything" path
+    /// isn't a "search" worth replaying).
     private func commitResult(_ item: StashItem) {
+        let committed = query.trimmingCharacters(in: .whitespaces)
+        if !committed.isEmpty {
+            Task {
+                try? await StashCLI.shared.recordSearchClick(query: committed, itemID: item.id)
+            }
+        }
         store.selectItemByID(item.id, revealInList: true)
         dismiss()
     }
@@ -182,6 +351,39 @@ struct QuickSearchView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .pointingHandCursor()
+        .contextMenu { resultContextMenu(for: item) }
+    }
+
+    /// Right-click menu for a Quick Search result. Open launches the
+    /// item's default handler (URL → browser, file → Finder default)
+    /// the same way double-clicking or the items-list context menu
+    /// does — distinct from the left-click "commit" path, which
+    /// selects + reveals without launching.
+    @ViewBuilder
+    private func resultContextMenu(for item: StashItem) -> some View {
+        Button("Open") {
+            store.openItem(id: item.id)
+            dismiss()
+        }
+        if let url = item.url, !url.isEmpty {
+            Button("Copy URL") {
+                let pb = NSPasteboard.general
+                pb.clearContents()
+                pb.setString(url, forType: .string)
+            }
+        }
+        Button("Reveal in List") {
+            store.selectItemByID(item.id, revealInList: true)
+            dismiss()
+        }
+        Divider()
+        Button("Archive") {
+            store.archiveItems(ids: [item.id])
+        }
+        Button("Delete", role: .destructive) {
+            store.deleteItem(id: item.id)
+        }
     }
 
     /// `*` toggle next to the field. Click toggles regex mode and
@@ -381,12 +583,11 @@ struct QuickSearchView: View {
             existing.remove(partial)
         }
 
-        tagMatches = Array(store.tags
+        tagMatches = store.tags
             .filter { tag in
                 let lower = tag.name.lowercased()
                 return (partial.isEmpty || lower.contains(partial)) && !existing.contains(lower)
             }
-            .prefix(8))
         tagActiveIndex = 0
     }
 

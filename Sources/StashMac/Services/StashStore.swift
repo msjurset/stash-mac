@@ -7,6 +7,27 @@ final class StashStore {
     var tags: [StashTag] = []
     var collections: [StashCollection] = []
 
+    /// Inbox state — feed candidates pulled from watched sources, the
+    /// "to read & watch" queue (items tagged read-later / watch-later),
+    /// and the resurface picks computed from forgotten stash items.
+    /// All three sections of the Inbox scene read from these arrays.
+    var feedCandidates: [FeedCandidate] = []
+    var queueItems: [StashItem] = []
+    var resurfaceItems: [StashItem] = []
+    /// Mirror of the InboxView's highlighted row so the detail pane
+    /// (`InboxDetailView`) can render a preview without sharing state
+    /// directly across NavigationSplitView columns. At most one is
+    /// non-nil at a time; both nil = nothing selected (empty inbox).
+    var inboxSelectedCandidate: FeedCandidate?
+    var inboxSelectedResurfaceItem: StashItem?
+    /// Wall-clock of the last successful feed poll. Drives "Last
+    /// polled X min ago" in the Inbox header.
+    var lastFeedPoll: Date?
+    /// In-app polling timer interval. Sourced from UserDefaults so
+    /// the user can change it in Settings; default 30 minutes when
+    /// unset. 0 means "never poll from the app" (use Runbook instead).
+    private var feedPollTimer: Timer?
+
     var searchQuery = ""
     var filterType: ItemType?
     var filterTags: Set<String> = []
@@ -92,14 +113,11 @@ final class StashStore {
     private var dragMouseUpMonitor: Any?
 
     private var dragEndPollTimer: Timer?
-    /// Tracks whether mouseDown occurred while there was a selection
-    /// — the prerequisite for "this might become an item drag." Only
-    /// `.leftMouseDragged` past a threshold while armed flips the
-    /// drag-tracking flag; a plain click never trips it.
+    /// Tracks whether mouseDown occurred in the items pane — the
+    /// prerequisite for "this might become an item drag." First
+    /// `.leftMouseDragged` after arming flips the drag-tracking flag;
+    /// a plain click clears it on mouseUp without ever flipping.
     private var dragArmed = false
-    /// Cumulative distance the mouse has moved since arming. Drag
-    /// system uses ~6pt as its threshold; we mirror that.
-    private var dragArmedDistance: CGFloat = 0
     private var dragMonitor: Any?
 
 
@@ -138,33 +156,47 @@ final class StashStore {
                    Self.clickIsInItemsList(event) {
                     Task { @MainActor in self.openItem(id: id) }
                 }
-                // Always arm on mouseDown — we don't gate by selection
-                // here because `addLocalMonitorForEvents` runs BEFORE
-                // SwiftUI processes the click, so `selectedItems` still
-                // reflects the previous state for the row that's about
-                // to be selected. Selection check is deferred to
-                // mouseDragged where SwiftUI has caught up.
+                // mouseDown is an unambiguous "new user gesture starting"
+                // signal that arrives BEFORE AppKit's drag-and-drop loop
+                // hijacks the event stream. If we still think a drag is
+                // in progress here, the previous drag's mouseUp was
+                // swallowed by AppKit's tracking loop and our 200ms
+                // polling timer hasn't fired yet — that's the stale-
+                // state leak that caused the next single-row drag to
+                // skip `beginDragTracking` (guard `!isDraggingItems`)
+                // and inherit the prior drag's `draggingItemIDs`.
+                if self.isDraggingItems {
+                    Task { @MainActor in self.endDragTracking() }
+                }
                 self.dragArmed = true
-                self.dragArmedDistance = 0
             case .leftMouseDragged:
+                // First mouseDragged after arming is enough to flip the
+                // grey-out flag — we don't accumulate distance any more
+                // because SwiftUI's `.draggable` hands off to AppKit's
+                // drag session after only 2–3 pixels of movement on
+                // single-row drags, before a 6-pixel accumulator could
+                // possibly trip. False-positives from click-jitter are
+                // cleared on mouseUp (or 200ms later via the poll
+                // timer if AppKit ate the mouseUp).
                 guard self.dragArmed, !self.isDraggingItems else { break }
-                self.dragArmedDistance += abs(event.deltaX) + abs(event.deltaY)
-                guard self.dragArmedDistance >= 6 else { break }
-                // Threshold met. Flip the grey-out flag without
-                // gating on selection — a single-row drag of an
-                // unselected row never populates `selectedItems`
-                // (the drag uses the row's own id directly), so
-                // gating would skip that case. False-positive flips
-                // from non-row drags inside the items pane (column
-                // divider, etc.) are rare and the timer will clear
-                // them on mouseUp.
+                // Capture the selection snapshot now; the dragged set
+                // is empty for an unselected-row drag (the `.draggable`
+                // payload uses the row's own id directly), which is
+                // fine — only the grey-out flag matters for sidebar
+                // dim-out, and `draggingItemIDs` is consumed only by
+                // the masonry-grid drop preview which falls back
+                // gracefully when empty.
                 let ids = self.selectedItems
                 Task { @MainActor in self.beginDragTracking(ids: ids) }
             case .leftMouseUp:
                 self.dragArmed = false
-                self.dragArmedDistance = 0
-                // isDraggingItems is cleared by the `dragEndPollTimer`
-                // that begin… installs (it polls pressedMouseButtons).
+                // isDraggingItems is cleared either here implicitly
+                // (when AppKit lets us see the mouseUp — i.e. no real
+                // drag started) by the timer, or proactively on the
+                // next mouseDown if AppKit's drag loop swallowed it.
+                if self.isDraggingItems {
+                    Task { @MainActor in self.endDragTracking() }
+                }
             default:
                 break
             }
@@ -215,7 +247,6 @@ final class StashStore {
             dragMonitor = nil
         }
         dragArmed = false
-        dragArmedDistance = 0
     }
 
     func beginDragTracking(ids: Set<String> = []) {
@@ -251,7 +282,61 @@ final class StashStore {
             dragMouseUpMonitor = nil
         }
     }
-    var navigation: NavigationItem? = .allItems
+    var navigation: NavigationItem? = StashStore.initialNavigation() {
+        didSet {
+            if let nav = navigation {
+                UserDefaults.standard.set(nav.persistenceKey, forKey: "stashNavigation")
+            }
+        }
+    }
+    /// One-shot signal set on first launch and consumed by
+    /// `loadAll()` after the lookup arrays (tags/collections/saved
+    /// searches) are populated. Only set for parameterized cases
+    /// (tag/collection/savedSearch/type) that can't be resolved
+    /// until the CLI lookups finish — top-level cases are restored
+    /// eagerly in `initialNavigation()` so there's no flash.
+    private var pendingRestoreNavigationKey: String? = StashStore.initialPendingKey()
+
+    /// Top-level (no-data-needed) cases are restored eagerly here so
+    /// the user lands on the section they quit from without a flash
+    /// of All Items first. Parameterized cases (tag/collection/
+    /// savedSearch/type) return `.allItems` here and rely on
+    /// `loadAll()` to upgrade once the lookup arrays are populated.
+    private static func initialNavigation() -> NavigationItem {
+        guard let key = UserDefaults.standard.string(forKey: "stashNavigation") else {
+            return .allItems
+        }
+        // Resolve without lookup data; only top-level cases succeed.
+        if let nav = NavigationItem.from(
+            persistenceKey: key,
+            tags: [],
+            collections: [],
+            savedSearches: []
+        ) {
+            return nav
+        }
+        return .allItems
+    }
+
+    /// Returns the persisted key only when it references a
+    /// parameterized case that requires lookup data. Eagerly-
+    /// resolvable keys are already applied in `initialNavigation()`,
+    /// so leaving the pending slot empty for those avoids
+    /// re-asserting the same value after `loadAll`.
+    private static func initialPendingKey() -> String? {
+        guard let key = UserDefaults.standard.string(forKey: "stashNavigation") else {
+            return nil
+        }
+        if NavigationItem.from(
+            persistenceKey: key,
+            tags: [],
+            collections: [],
+            savedSearches: []
+        ) != nil {
+            return nil
+        }
+        return key
+    }
     var selectedItemID: String? {
         didSet {
             if let id = selectedItemID {
@@ -259,6 +344,11 @@ final class StashStore {
             }
         }
     }
+    /// One-shot signal: when set, ItemListView's ScrollViewReader
+    /// scrolls the matching row into view and clears the value.
+    /// Cleared instead of left set so the same id can be re-requested
+    /// later (e.g. user re-commits the same result from QuickSearch).
+    var pendingRevealID: String?
     /// Rules loaded from the CLI. Populated lazily by `loadRules()`; the
     /// rules sidebar entry kicks off the first load. Both `RulesView` (the
     /// list) and `RuleDetailView` (the form) read from this.
@@ -351,6 +441,7 @@ final class StashStore {
     /// banner. Same lifecycle as `lastExportResult`.
     var lastImportSummary: StashCLI.ImportSummary?
 
+
     /// Run a `fetch-url --pick` through the CLI and refresh once the
     /// items land. The picker sheet drives the UI; this just wires
     /// the call + post-import reload + error surfacing.
@@ -358,6 +449,7 @@ final class StashStore {
         pageURL: String,
         picks: [String],
         linkSource: Bool,
+        clique: Bool = false,
         archive: Bool,
         tags: [String],
         collection: String?
@@ -367,6 +459,7 @@ final class StashStore {
                 pageURL: pageURL,
                 picks: picks,
                 linkSource: linkSource,
+                clique: clique,
                 archive: archive,
                 tags: tags,
                 collection: collection
@@ -413,6 +506,21 @@ final class StashStore {
                 tagGraphData = try await cli.tagGraph()
                 savedSearches = try await cli.listSavedSearches()
                 applySortMode()
+                // Restore the section the user was on at last quit.
+                // We do this after the lookup arrays are populated so
+                // tag/collection/savedSearch cases can resolve their
+                // backing object. One-shot — consume on first run.
+                if let key = pendingRestoreNavigationKey {
+                    pendingRestoreNavigationKey = nil
+                    if let restored = NavigationItem.from(
+                        persistenceKey: key,
+                        tags: tags,
+                        collections: collections,
+                        savedSearches: savedSearches
+                    ), restored != navigation {
+                        navigation = restored
+                    }
+                }
                 // Mark all existing items as seen on first load
                 if !UserDefaults.standard.bool(forKey: "initialSeenDone2") {
                     let allItems = try await cli.listItems(limit: 100000)
@@ -1410,6 +1518,7 @@ final class StashStore {
             if !visibleHere && navigation != .allItems {
                 navigation = .allItems
             }
+            pendingRevealID = id
         }
 
         if items.first(where: { $0.id == id }) == nil {
@@ -1627,9 +1736,190 @@ final class StashStore {
             filterTags = [t.name]
         case .collection(let c):
             filterCollection = c.name
-        case .tagGraph, .stats, .check, .dupes, .savedSearch, .rules, .ruleActivity:
+        case .tagGraph, .stats, .check, .dupes, .savedSearch, .rules, .ruleActivity, .inbox:
             break
         }
         refresh()
+    }
+
+    // MARK: - Inbox
+
+    /// Load all three Inbox sections in parallel (feed candidates,
+    /// read/watch queue, resurface picks). Idempotent; safe to call
+    /// on view appear and after polls/triage actions.
+    ///
+    /// Queue slice is intentionally tiny — top 2 newest + bottom 1
+    /// oldest = 3 max. Recent commitments stay visible *and* an old
+    /// debt rotates back as a nag. The "Show all" header link opens
+    /// the full list filtered to both queue tags.
+    func loadInbox() {
+        Task {
+            do {
+                async let cands = cli.listFeedCandidates(state: "unread", limit: 200)
+                async let queueAll = cli.listReadWatchQueue(limit: 500)
+                async let picks = cli.pickResurfaceItems(limit: 8)
+                self.feedCandidates = try await cands
+                self.queueItems     = pickQueueSlice(try await queueAll)
+                self.resurfaceItems = try await picks
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
+    }
+
+    /// Compose the inbox queue from a full sorted-newest-first list:
+    /// 2 newest + 1 oldest, deduped, capped at 3 total. Returns the
+    /// full list verbatim when there are <=3 items overall.
+    private func pickQueueSlice(_ all: [StashItem]) -> [StashItem] {
+        guard all.count > 3 else { return all }
+        let newest = Array(all.prefix(2))
+        let oldest = all.last!
+        // Dedup just in case the oldest happens to be in the newest
+        // slice (impossible at count > 3 but cheap insurance).
+        if newest.contains(where: { $0.id == oldest.id }) {
+            return newest
+        }
+        return newest + [oldest]
+    }
+
+    /// Switch the items list to All Items filtered by the queue tags
+    /// (OR semantics — items with either tag are shown). Used by the
+    /// Inbox's "Show all" link to take the user from the tiny slice
+    /// to the full list.
+    ///
+    /// Sets the search query rather than `filterTags` directly so the
+    /// active filter is visible in the search box — `fetchFilteredItems`
+    /// extracts `tag:...` tokens and merges them into the tag filter at
+    /// query time. Navigation change runs first; SwiftUI's `.onChange`
+    /// fires `applyNavigation(.allItems)` which clears filters, so the
+    /// query set is deferred to the next main-actor tick to land
+    /// AFTER that reset.
+    func showReadWatchList() {
+        navigation = .allItems
+        Task { @MainActor in
+            filterTags = []
+            filterType = nil
+            filterCollection = nil
+            searchQuery = "tag:read-later tag:watch-later"
+            refresh()
+        }
+    }
+
+    /// "Mark done" for a queue item: removes whichever of the queue
+    /// tags (`read-later`, `watch-later`) the item currently has, then
+    /// reloads the Inbox so the row drops out.
+    func markQueueItemDone(_ item: StashItem) {
+        let queueTags = ["read-later", "watch-later"]
+        let toRemove = (item.tags ?? []).map(\.name).filter { queueTags.contains($0) }
+        guard !toRemove.isEmpty else {
+            self.loadInbox()
+            return
+        }
+        Task {
+            do {
+                _ = try await cli.editItem(id: item.id, removeTags: toRemove)
+                self.loadInbox()
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
+    }
+
+    /// Fire `stash feeds refresh` and re-load the Inbox. Used by the
+    /// auto-poll timer, the manual refresh button, and (optionally)
+    /// the menubar quick-action.
+    func pollFeeds() {
+        Task {
+            do {
+                try await cli.refreshFeeds()
+                self.lastFeedPoll = Date()
+                self.loadInbox()
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
+    }
+
+    /// Install / restart the in-app polling timer. Reads
+    /// `feedPollIntervalMinutes` from UserDefaults; 0 means disabled
+    /// (the user delegated polling to Runbook). Default is 30
+    /// minutes when unset.
+    func startFeedPollTimer() {
+        feedPollTimer?.invalidate()
+        feedPollTimer = nil
+        let stored = UserDefaults.standard.object(forKey: "feedPollIntervalMinutes") as? Int
+        let minutes = stored ?? 30
+        guard minutes > 0 else { return }
+        let timer = Timer(timeInterval: TimeInterval(minutes * 60), repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.pollFeeds() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        feedPollTimer = timer
+        // Fire one immediate poll so a fresh launch fills the inbox
+        // without waiting for the first interval to elapse.
+        pollFeeds()
+    }
+
+    func stopFeedPollTimer() {
+        feedPollTimer?.invalidate()
+        feedPollTimer = nil
+    }
+
+    /// Triage actions used by InboxView; thin wrappers around StashCLI
+    /// that refresh the local cache after a successful CLI call.
+
+    func stashCandidate(_ c: FeedCandidate, extraTags: [String] = []) {
+        Task {
+            do {
+                _ = try await cli.stashFeedCandidate(id: c.id, extraTags: extraTags)
+                self.loadInbox()
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
+    }
+
+    func dismissCandidate(_ c: FeedCandidate) {
+        Task {
+            do {
+                try await cli.dismissFeedCandidate(id: c.id)
+                self.loadInbox()
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
+    }
+
+    func snoozeCandidate(_ c: FeedCandidate, duration: String) {
+        Task {
+            do {
+                try await cli.snoozeFeedCandidate(id: c.id, duration: duration)
+                self.loadInbox()
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
+    }
+
+    func dismissResurface(_ item: StashItem) {
+        Task {
+            do {
+                try await cli.dismissResurfaceItem(id: item.id)
+                self.loadInbox()
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
+    }
+
+    func snoozeResurface(_ item: StashItem, duration: String) {
+        Task {
+            do {
+                try await cli.snoozeResurfaceItem(id: item.id, duration: duration)
+                self.loadInbox()
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
     }
 }

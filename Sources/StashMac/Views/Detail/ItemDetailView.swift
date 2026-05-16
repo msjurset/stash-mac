@@ -26,9 +26,26 @@ struct ItemDetailView: View {
                         .foregroundStyle(.secondary)
                     VStack(alignment: .leading) {
                         titleView
-                        Text(item.type.label.dropLast() + " \u{2022} " + item.shortID)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        HStack(spacing: 4) {
+                            Text(item.type.label.dropLast() + " \u{2022} " + item.shortID)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Button {
+                                let pb = NSPasteboard.general
+                                pb.clearContents()
+                                pb.setString(item.id, forType: .string)
+                            } label: {
+                                Image(systemName: "doc.on.doc")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
+                            .buttonStyle(.plain)
+                            .help("Copy full ID")
+                            .onHover { hovering in
+                                if hovering { NSCursor.pointingHand.push() }
+                                else { NSCursor.pop() }
+                            }
+                        }
                     }
                     Spacer()
                 }
@@ -160,6 +177,12 @@ struct ItemDetailView: View {
                     }
                 }
 
+                // Related Items — computed from tag/link/domain/hash
+                // overlap. Distinct from "Linked Items" which is the
+                // user's explicit set; this is the serendipitous
+                // neighbor list. Section hides itself when empty.
+                RelatedSection(itemID: item.id)
+
                 // Linked Items
                 if let links = item.links, !links.isEmpty {
                     DetailSection(title: "Linked Items") {
@@ -177,6 +200,7 @@ struct ItemDetailView: View {
                                         .foregroundStyle(.primary)
                                 }
                                 .buttonStyle(.plain)
+                                .pointingHandCursor()
                                 if let label = link.label, !label.isEmpty {
                                     Text("(\(label))")
                                         .font(.callout)
@@ -195,14 +219,18 @@ struct ItemDetailView: View {
                     }
                 }
 
-                // File info
-                if item.mimeType != nil || item.fileSize != nil || item.language != nil {
-                    DetailSection(title: "File Info") {
+                // Info — file metadata (when present) plus ID and
+                // timestamps, always shown. Single section replaces
+                // the previous "File Info" + "Dates" split since
+                // every item has an ID and dates and the file-only
+                // fields read fine alongside them.
+                DetailSection(title: "Info") {
+                    InfoTable {
                         if let mime = item.mimeType {
-                            LabeledContent("MIME Type", value: mime)
+                            InfoRow.row("MIME Type") { Text(mime).textSelection(.enabled) }
                         }
                         if let lang = item.language {
-                            LabeledContent("Language") {
+                            InfoRow.row("Language") {
                                 Text(lang)
                                     .font(.callout.monospaced())
                                     .padding(.horizontal, 6)
@@ -212,16 +240,30 @@ struct ItemDetailView: View {
                             }
                         }
                         if let size = item.humanFileSize {
-                            LabeledContent("Size", value: size)
+                            InfoRow.row("Size") { Text(size) }
                         }
                         if let source = item.sourcePath {
-                            LabeledContent("Source") {
+                            InfoRow.row("Source") {
                                 Text(source)
                                     .textSelection(.enabled)
+                                    .lineLimit(3)
+                                    .truncationMode(.middle)
                             }
+                        }
+                        InfoRow.row("Created") {
+                            Text(item.createdAt.formatted(date: .abbreviated, time: .shortened))
+                        }
+                        InfoRow.row("Updated") {
+                            Text(item.updatedAt.formatted(date: .abbreviated, time: .shortened))
                         }
                     }
                 }
+
+                // Provenance — capture / rule / tag timeline reconstructed
+                // from capture.log and tags.log. Sits right after Info
+                // because both sections are "metadata about the item"
+                // rather than the item's content.
+                ProvenanceSection(itemID: item.id)
 
                 // Archive contents
                 if let mime = item.mimeType, isArchiveMIME(mime),
@@ -281,11 +323,6 @@ struct ItemDetailView: View {
                     }
                 }
 
-                // Dates
-                DetailSection(title: "Dates") {
-                    LabeledContent("Created", value: item.createdAt.formatted(date: .abbreviated, time: .shortened))
-                    LabeledContent("Updated", value: item.updatedAt.formatted(date: .abbreviated, time: .shortened))
-                }
             }
             .padding()
         }
@@ -306,6 +343,9 @@ struct ItemDetailView: View {
                 }
                 .keyboardShortcut("o", modifiers: .command)
                 .help("Open in default application (⌘O)")
+                ShareButton(items: { SharePayload.build(for: item) })
+                    .frame(width: 22, height: 22)
+                    .help("Share via Mail, Messages, AirDrop, etc.")
                 Button { showEditSheet = true } label: {
                     Label("Edit", systemImage: "pencil")
                 }
@@ -420,6 +460,68 @@ func isArchiveMIME(_ mimeType: String) -> Bool {
     mimeType.contains("gzip") || mimeType.contains("tar") || mimeType.contains("zip")
 }
 
+/// One label-value pair rendered inside `InfoTable`. The value is
+/// retained as an `AnyView` so callers can hand in arbitrary content
+/// (styled badges, multi-line text, etc.) without genericizing the
+/// table builder.
+struct InfoRow: Identifiable {
+    let id = UUID()
+    let label: String
+    let value: AnyView
+
+    static func row<V: View>(_ label: String, @ViewBuilder value: () -> V) -> InfoRow {
+        InfoRow(label: label, value: AnyView(value()))
+    }
+}
+
+/// Container that lays InfoRows out as a striped two-column table:
+/// fixed-width label column on the left, flexible value column on
+/// the right, alternating row backgrounds for scan-ability. Callers
+/// hand in rows via a result-builder that filters out nils so each
+/// row can be conditional (e.g. "show MIME only when set").
+struct InfoTable: View {
+    let rows: [InfoRow]
+
+    init(@InfoRowBuilder _ rows: () -> [InfoRow]) {
+        self.rows = rows()
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(rows.enumerated()), id: \.element.id) { idx, row in
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Text(row.label)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 96, alignment: .leading)
+                    row.value
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(idx.isMultiple(of: 2) ? Color.secondary.opacity(0.08) : Color.clear)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+}
+
+/// Result-builder so InfoTable's body reads like a sequence of rows
+/// with conditional `if let` blocks (same ergonomics as ViewBuilder).
+/// Skips nil/empty branches automatically.
+@resultBuilder
+enum InfoRowBuilder {
+    static func buildBlock(_ groups: [InfoRow]...) -> [InfoRow] {
+        groups.flatMap { $0 }
+    }
+    static func buildOptional(_ rows: [InfoRow]?) -> [InfoRow] { rows ?? [] }
+    static func buildEither(first rows: [InfoRow]) -> [InfoRow] { rows }
+    static func buildEither(second rows: [InfoRow]) -> [InfoRow] { rows }
+    static func buildExpression(_ row: InfoRow) -> [InfoRow] { [row] }
+    static func buildExpression(_ rows: [InfoRow]) -> [InfoRow] { rows }
+    static func buildArray(_ rows: [[InfoRow]]) -> [InfoRow] { rows.flatMap { $0 } }
+}
+
 struct DetailSection<Content: View>: View {
     let title: String
     @ViewBuilder let content: Content
@@ -430,6 +532,7 @@ struct DetailSection<Content: View>: View {
                 .font(.headline)
                 .foregroundStyle(.secondary)
             content
+                .padding(.leading, 14)
         }
     }
 }

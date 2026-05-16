@@ -54,6 +54,12 @@ enum ImagePreviewPresenter {
             }
         }
 
+        // Wire Escape → dismiss via the AppKit responder chain.
+        // SwiftUI's `.onExitCommand` only fires when a SwiftUI view is
+        // first responder, and this panel has no focusable element, so
+        // we catch cancelOperation at the panel level instead.
+        panel.onCancel = { Self.dismiss() }
+
         current = panel
         panel.center()
         panel.makeKeyAndOrderFront(nil)
@@ -77,6 +83,17 @@ enum ImagePreviewPresenter {
 final class KeyableBorderlessPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    /// Set by the presenter to route the user's Escape key (sent up the
+    /// responder chain as `cancelOperation`) to whatever dismissal path
+    /// the embedded view uses. SwiftUI's `.onExitCommand` would do this
+    /// for us if the hosted view had any focusable subview, but a pure
+    /// image viewer has none — so we hook in one level lower.
+    var onCancel: (() -> Void)?
+
+    override func cancelOperation(_ sender: Any?) {
+        onCancel?()
+    }
 }
 
 /// Full-window image viewer rendered inside `ImagePreviewPresenter`'s

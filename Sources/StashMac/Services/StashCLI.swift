@@ -408,6 +408,53 @@ actor StashCLI {
         return try plainDecoder.decode(BookmarkPreview.self, from: data)
     }
 
+    // MARK: - URL exclusions (config.toml)
+
+    /// One configured URL-redact rule. The CLI's `stash config
+    /// exclusions ...` subcommands round-trip this shape exactly.
+    struct URLExclusion: Codable, Hashable, Identifiable {
+        let pattern: String
+        let match: String       // "domain" | "regex"
+        let behavior: String    // "domain" | "clear"
+
+        var id: String { pattern }
+
+        init(pattern: String, match: String = "domain", behavior: String = "domain") {
+            self.pattern = pattern
+            self.match = match
+            self.behavior = behavior
+        }
+    }
+
+    /// Read the configured exclusion rules. Empty array when none
+    /// are set (or when config.toml doesn't exist yet — the CLI
+    /// emits `{"exclusions": null}` in that case which decodes to
+    /// nil → []).
+    func listURLExclusions() async throws -> [URLExclusion] {
+        struct Wire: Codable {
+            let exclusions: [URLExclusion]?
+        }
+        let w: Wire = try await captureJSON(args: ["config", "exclusions", "list", "--json"])
+        return w.exclusions ?? []
+    }
+
+    /// Add or update a rule. Idempotent — re-adding the same
+    /// pattern replaces the rule's match / behavior in place.
+    func addURLExclusion(_ rule: URLExclusion) async throws {
+        _ = try await captureOutput(args: [
+            "config", "exclusions", "add", rule.pattern,
+            "--match", rule.match,
+            "--behavior", rule.behavior,
+            "--json",
+        ])
+    }
+
+    func removeURLExclusion(pattern: String) async throws {
+        _ = try await captureOutput(args: [
+            "config", "exclusions", "remove", pattern, "--json",
+        ])
+    }
+
     /// Browser sources for `import history`. Mirrors `BookmarkSource`
     /// but only includes the variants that have a local history DB
     /// — Pocket / Pinterest / Raindrop / generic-HTML aren't browsers.
@@ -578,13 +625,18 @@ actor StashCLI {
         pageURL: String,
         picks: [String],
         linkSource: Bool = false,
+        clique: Bool = false,
         archive: Bool = false,
         tags: [String] = [],
         collection: String? = nil
     ) async throws -> FetchURLPickResult {
         var args = ["fetch-url", "--json"]
         for p in picks { args += ["--pick", p] }
-        if linkSource { args.append("--link-source") }
+        // `--link-source` is a String flag (URL or item id) on the
+        // CLI; passing the page URL as its value points the spokes at
+        // a source item that's auto-created if missing.
+        if linkSource { args += ["--link-source", pageURL] }
+        if clique { args.append("--clique") }
         if archive { args.append("--archive") }
         for tag in tags { args += ["--tag", tag] }
         if let collection, !collection.isEmpty { args += ["--collection", collection] }
@@ -1037,6 +1089,147 @@ actor StashCLI {
         _ = try await captureOutput(args: args)
     }
 
+    // MARK: - Search History
+
+    /// Pull the Recent / Frequent rollup. `sort` is "recent" or
+    /// "frequent". Drives the Quick Search browse panes when the
+    /// query is empty.
+    func listSearchHistory(sort: String = "recent", limit: Int = 30) async throws -> [SearchHistoryEntry] {
+        try await captureJSON(args: [
+            "search-history", "list",
+            "--json",
+            "--sort", sort,
+            "-l", "\(limit)",
+        ])
+    }
+
+    /// Record a committed-query event — fired when the user actually
+    /// clicks a result, not on every keystroke. itemID is logged for
+    /// future stats but unused by the rollup today.
+    func recordSearchClick(query: String, itemID: String? = nil) async throws {
+        var args = ["search-history", "record", query]
+        if let itemID, !itemID.isEmpty {
+            args += ["--item-id", itemID]
+        }
+        _ = try await captureOutput(args: args)
+    }
+
+    func clearSearchHistory() async throws {
+        _ = try await captureOutput(args: ["search-history", "clear"])
+    }
+
+    func deleteSearchHistoryEntry(query: String) async throws {
+        _ = try await captureOutput(args: ["search-history", "delete", query])
+    }
+
+    // MARK: - Feeds + Inbox
+
+    /// `stash feeds list --json`
+    func listFeedSources() async throws -> [FeedSource] {
+        try await captureJSON(args: ["feeds", "list", "--json"])
+    }
+
+    /// `stash feeds add NAME URL ...`
+    @discardableResult
+    func addFeedSource(name: String,
+                       url: String,
+                       kind: String = "rss",
+                       defaultTags: [String] = [],
+                       defaultCollection: String? = nil,
+                       autoStash: Bool = false,
+                       intervalMinutes: Int = 360) async throws -> FeedSource {
+        var args = ["feeds", "add", "--json", "--kind", kind, "--interval", "\(intervalMinutes)"]
+        for t in defaultTags { args += ["-T", t] }
+        if let c = defaultCollection, !c.isEmpty { args += ["-c", c] }
+        if autoStash { args.append("--auto-stash") }
+        args += [name, url]
+        return try await captureJSON(args: args)
+    }
+
+    /// `stash feeds remove ID`
+    func removeFeedSource(id: Int64) async throws {
+        _ = try await captureOutput(args: ["feeds", "remove", "\(id)"])
+    }
+
+    /// `stash feeds refresh` — runs the poller across all enabled
+    /// sources (or one if `sourceID` given). Returns success/failure
+    /// per source via the embedded result map.
+    func refreshFeeds(sourceID: Int64? = nil) async throws {
+        var args = ["feeds", "refresh", "--json"]
+        if let id = sourceID { args += ["--source", "\(id)"] }
+        _ = try await captureOutput(args: args)
+    }
+
+    /// `stash feeds candidates --json` — Inbox view data.
+    func listFeedCandidates(state: String = "unread", limit: Int = 100) async throws -> [FeedCandidate] {
+        try await captureJSON(args: [
+            "feeds", "candidates", "--json",
+            "--state", state,
+            "-l", "\(limit)",
+        ])
+    }
+
+    func stashFeedCandidate(id: Int64,
+                            extraTags: [String] = [],
+                            collection: String? = nil,
+                            notes: String? = nil) async throws -> StashItem {
+        var args = ["feeds", "stash", "--json"]
+        for t in extraTags { args += ["-T", t] }
+        if let c = collection, !c.isEmpty { args += ["-c", c] }
+        if let n = notes, !n.isEmpty { args += ["-n", n] }
+        args.append("\(id)")
+        return try await captureJSON(args: args)
+    }
+
+    func dismissFeedCandidate(id: Int64) async throws {
+        _ = try await captureOutput(args: ["feeds", "dismiss", "\(id)"])
+    }
+
+    /// `stash feeds snooze ID --for 1h` (Go's time.Duration accepts
+    /// "1h", "30m", "1h30m" — we pass through the user's choice).
+    func snoozeFeedCandidate(id: Int64, duration: String) async throws {
+        _ = try await captureOutput(args: ["feeds", "snooze", "\(id)", "--for", duration])
+    }
+
+    // MARK: - Resurface
+
+    /// `stash resurface --mark` so picks don't repeat within MinIdleAgo.
+    func pickResurfaceItems(limit: Int = 5) async throws -> [StashItem] {
+        try await captureJSON(args: ["resurface", "--json", "-l", "\(limit)", "--mark"])
+    }
+
+    func dismissResurfaceItem(id: String) async throws {
+        _ = try await captureOutput(args: ["resurface", "dismiss", id])
+    }
+
+    func snoozeResurfaceItem(id: String, duration: String) async throws {
+        _ = try await captureOutput(args: ["resurface", "snooze", id, "--for", duration])
+    }
+
+    /// Items the user has flagged for action via `read-later` or
+    /// `watch-later` tags. Powers the Inbox's "To read & watch"
+    /// queue section. Items snoozed/dismissed for resurface are
+    /// still returned — the queue is intentional commitment, not
+    /// a passive resurface, so the user shouldn't lose track of
+    /// what they signed up for.
+    func listReadWatchQueue(limit: Int = 8) async throws -> [StashItem] {
+        try await listItems(tags: ["read-later", "watch-later"], limit: limit)
+    }
+
+    /// `stash provenance <id> --json` — chronological timeline of
+    /// capture / rule / tag events for one item. Used by the detail
+    /// pane's "Why is this here?" section.
+    func itemProvenance(id: String) async throws -> [ProvenanceEvent] {
+        try await captureJSON(args: ["provenance", "--json", id])
+    }
+
+    /// `stash related <id> --json` — items scored by tag/link/domain/
+    /// content-hash overlap with the source item. Drives the
+    /// "Related items" section in the detail pane.
+    func relatedItems(id: String, limit: Int = 5) async throws -> [StashItem] {
+        try await captureJSON(args: ["related", "--json", "-l", "\(limit)", id])
+    }
+
     // MARK: - Private
 
     private func captureJSON<T: Decodable>(args: [String]) async throws -> T {
@@ -1044,7 +1237,7 @@ actor StashCLI {
         guard let data = output.data(using: .utf8) else {
             throw CLIError.failed("Invalid UTF-8 output")
         }
-        return try decoder.decode(T.self, from: data)
+        return try decodeOrExplain(T.self, from: data, args: args, raw: output)
     }
 
     private func captureJSONWithStdin<T: Decodable>(args: [String], input: String) async throws -> T {
@@ -1052,7 +1245,53 @@ actor StashCLI {
         guard let data = output.data(using: .utf8) else {
             throw CLIError.failed("Invalid UTF-8 output")
         }
-        return try decoder.decode(T.self, from: data)
+        return try decodeOrExplain(T.self, from: data, args: args, raw: output)
+    }
+
+    /// Decode with the shared decoder and, on failure, rewrap the
+    /// `DecodingError` into a `CLIError.failed` whose message names the
+    /// failing JSON path and the command that produced it. Without
+    /// this, every decode failure surfaces in the UI as the useless
+    /// "The data couldn't be read because it is missing." default —
+    /// no field, no command, no clue.
+    private func decodeOrExplain<T: Decodable>(_ type: T.Type, from data: Data, args: [String], raw: String) throws -> T {
+        do {
+            return try decoder.decode(type, from: data)
+        } catch let e as DecodingError {
+            let cmd = "stash " + args.joined(separator: " ")
+            let path = decodingPath(e)
+            let kind = decodingKind(e)
+            let snippet = raw.count > 200 ? String(raw.prefix(200)) + "…" : raw
+            throw CLIError.failed("\(kind) at `\(path)` while running `\(cmd)`. JSON head: \(snippet)")
+        }
+    }
+
+    private func decodingPath(_ e: DecodingError) -> String {
+        let ctx: DecodingError.Context
+        switch e {
+        case .keyNotFound(_, let c),
+             .valueNotFound(_, let c),
+             .typeMismatch(_, let c),
+             .dataCorrupted(let c):
+            ctx = c
+        @unknown default:
+            return "<unknown>"
+        }
+        let parts = ctx.codingPath.map { key -> String in
+            if let i = key.intValue { return "[\(i)]" }
+            return key.stringValue
+        }
+        return parts.isEmpty ? "<root>" : parts.joined(separator: ".")
+    }
+
+    private func decodingKind(_ e: DecodingError) -> String {
+        switch e {
+        case .keyNotFound(let k, _):       return "Missing key '\(k.stringValue)'"
+        case .valueNotFound(let t, _):     return "Missing value of type \(t)"
+        case .typeMismatch(let t, _):      return "Type mismatch (expected \(t))"
+        case .dataCorrupted(let c):        return "Data corrupted (\(c.debugDescription))"
+        @unknown default:                  return "Unknown decode error"
+        }
     }
 
     private func captureOutput(args: [String]) async throws -> String {

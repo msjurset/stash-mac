@@ -36,6 +36,7 @@ struct FetchURLSheet: View {
     @State private var collection: String = ""
     @State private var extraTags: String = ""
     @State private var linkSourceTogether: Bool = true
+    @State private var cliqueLinks: Bool = false
     @State private var error: String?
 
     enum Phase {
@@ -177,8 +178,10 @@ struct FetchURLSheet: View {
             tagFields
 
             if picked.count > 1 {
-                Toggle("Cross-link picked items together", isOn: $linkSourceTogether)
-                    .help("Add an undirected link between every picked item and the source page item, so you can navigate the batch from any one of them.")
+                Toggle("Link picks to the source page", isOn: $linkSourceTogether)
+                    .help("Add an undirected link between every picked item and the source page item (spokes).")
+                Toggle("Also cross-link picks to each other (clique)", isOn: $cliqueLinks)
+                    .help("Add a link between every pair of picked items in addition to the source-page spokes. N×(N−1)/2 edges — keep groups small (≤15).")
             }
         }
     }
@@ -441,6 +444,7 @@ struct FetchURLSheet: View {
                 pageURL: pageURLToSend,
                 picks: picksToSend,
                 linkSource: crossLink,
+                clique: picked.count > 1 && cliqueLinks,
                 archive: false,
                 tags: tags,
                 collection: coll.isEmpty ? nil : coll
