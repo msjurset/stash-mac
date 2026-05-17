@@ -1969,9 +1969,13 @@ final class StashStore {
         Task { [weak self] in
             defer { Task { @MainActor in self?.identifyingItemIDs.remove(id) } }
             do {
+                // `op://` references resolve here, just before the
+                // network call — the actual secret never leaves
+                // 1Password's keychain.
+                let resolvedKey = try await AIKeyResolver.resolve(key)
                 let bytes = try Data(contentsOf: url)
                 let result = try await provider.identify(
-                    apiKey: key,
+                    apiKey: resolvedKey,
                     bytes: bytes,
                     mimeType: mime,
                     promptText: prompt

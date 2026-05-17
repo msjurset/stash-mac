@@ -57,11 +57,12 @@ struct AIPrefsView: View {
                     Link("Get a key →", destination: prefs.activeProvider.keyURL)
                         .font(.caption)
                 }
+                onePasswordHint
                 statusLine
             } header: {
                 Text("API key")
             } footer: {
-                Text("Used to identify image items via right-click → Identify with \(prefs.activeProvider.displayName). The key never leaves this Mac.")
+                Text("Used to identify image items via right-click → Identify with \(prefs.activeProvider.displayName). The key never leaves this Mac.\n\nPaste an `op://vault/item/field` reference to resolve the secret via the 1Password CLI on every request — install with `brew install 1password-cli`.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -161,6 +162,33 @@ struct AIPrefsView: View {
         }
     }
 
+    /// Inline hint when the user has pasted an `op://` reference.
+    /// Confirms 1Password CLI mode is engaged, and flags it when the
+    /// `op` binary isn't on disk so the user can fix the install
+    /// before hitting Test / Identify.
+    @ViewBuilder
+    private var onePasswordHint: some View {
+        if AIKeyResolver.isReference(keyField) {
+            HStack(spacing: 6) {
+                Image(systemName: AIKeyResolver.opAvailable
+                      ? "lock.shield"
+                      : "exclamationmark.triangle")
+                    .foregroundStyle(AIKeyResolver.opAvailable
+                                     ? Color.secondary
+                                     : Color.yellow)
+                if AIKeyResolver.opAvailable {
+                    Text("Resolved via 1Password CLI on each request.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("1Password CLI not found — `brew install 1password-cli` then `op signin`.")
+                        .font(.caption)
+                        .foregroundStyle(.yellow)
+                }
+            }
+        }
+    }
+
     @ViewBuilder
     private var statusLine: some View {
         switch testStatus {
@@ -187,7 +215,11 @@ struct AIPrefsView: View {
         guard !trimmed.isEmpty else { return }
         testStatus = .pending
         do {
-            try await prefs.activeProvider.testKey(trimmed)
+            // Resolve `op://...` references the same way the
+            // identify path does, so Test exercises the full
+            // 1Password CLI → provider round trip.
+            let resolved = try await AIKeyResolver.resolve(trimmed)
+            try await prefs.activeProvider.testKey(resolved)
             testStatus = .ok
         } catch {
             testStatus = .failed(describe(error))
