@@ -167,6 +167,29 @@ actor StashCLI {
         _ = try await captureOutput(args: ["heal", id])
     }
 
+    /// Pairing payload from `stash serve pair --json`. Used by the
+    /// Settings → Phone pairing tab to render a QR locally for the
+    /// Android app.
+    struct PairInfo: Codable {
+        let host: String
+        let port: Int
+        let token: String
+        let uri: String
+    }
+
+    /// Drive `stash serve pair --json` to get the pairing URI for
+    /// the currently-running daemon. Doesn't restart the daemon.
+    func pairInfo() async throws -> PairInfo {
+        try await captureJSON(args: ["serve", "pair", "--json"])
+    }
+
+    /// Rotate the bearer token via `stash serve token --rotate`.
+    /// Invalidates every paired device — they'll all need to
+    /// re-scan the new QR.
+    func rotateServeToken() async throws {
+        _ = try await captureOutput(args: ["serve", "token", "--rotate"])
+    }
+
     // MARK: - Multi-file items (attach / detach / reorder / merge)
 
     /// Attach a local file as an additional photo on an existing

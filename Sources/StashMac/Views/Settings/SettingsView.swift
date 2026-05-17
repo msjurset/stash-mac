@@ -1,8 +1,9 @@
 import SwiftUI
 
 /// Root of the Stash Settings scene (⌘,). Tabs: Capture (existing
-/// ingest-related toggles), Appearance (theme picker), and AI
-/// (provider picker + API key + identify prompt).
+/// ingest-related toggles), Appearance (theme picker), AI (provider
+/// picker + API key + identify prompt), and Pairing (QR for the
+/// Android app, manual-entry fallback, token rotation).
 struct SettingsView: View {
     var body: some View {
         TabView {
@@ -21,7 +22,12 @@ struct SettingsView: View {
                     Label("AI", systemImage: "sparkles")
                 }
                 .frame(minWidth: 560, minHeight: 540)
+            PairingPrefsView()
+                .tabItem {
+                    Label("Pairing", systemImage: "qrcode")
+                }
+                .frame(minWidth: 560, minHeight: 540)
         }
-        .frame(width: 640, height: 580)
+        .frame(width: 640, height: 600)
     }
 }
