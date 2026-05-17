@@ -106,11 +106,22 @@ struct ImagePreviewView: View {
     @State private var zoom: CGFloat = 1.0
     /// Zoom level captured at the start of the in-progress pinch
     /// gesture, or nil when no pinch is happening.
-    /// MagnificationGesture.value is gesture-relative (always begins
-    /// at 1.0), so consecutive pinches multiply against this base
-    /// instead of replacing zoom outright — matches the way pan's
-    /// committedPan + liveDrag pair compounds drags.
+    /// MagnifyGesture.magnification is gesture-relative (always
+    /// begins at 1.0), so consecutive pinches multiply against this
+    /// base instead of replacing zoom outright — matches the way
+    /// pan's committedPan + liveDrag pair compounds drags.
     @State private var pinchBaseZoom: CGFloat? = nil
+    /// Pan at gesture start; needed for the zoom-toward-cursor math
+    /// so the anchor formula reads from a stable starting offset
+    /// throughout the gesture instead of stair-stepping off the
+    /// just-updated value.
+    @State private var pinchBasePan: CGSize? = nil
+    /// Center-relative cursor position captured at gesture start.
+    /// "Zoom toward cursor" keeps the image-point under this anchor
+    /// pinned to the same screen position as zoom changes, so the
+    /// viewer center smoothly tracks the focus point — standard
+    /// touch-image navigation behaviour.
+    @State private var pinchAnchor: CGPoint? = nil
     @State private var committedPan: CGSize = .zero
     @State private var liveDrag: CGSize = .zero
 
@@ -132,7 +143,7 @@ struct ImagePreviewView: View {
             ZStack {
                 Color.black
                     .contentShape(Rectangle())
-                    .gesture(magnification)
+                    .gesture(magnification(in: geo.size))
                     .simultaneousGesture(panOrTapGesture(in: geo.size))
 
                 Image(nsImage: image)
@@ -169,20 +180,53 @@ struct ImagePreviewView: View {
 
     // MARK: - Gestures
 
-    private var magnification: some Gesture {
-        MagnificationGesture()
+    private func magnification(in canvas: CGSize) -> some Gesture {
+        MagnifyGesture()
             .onChanged { val in
                 // First sample of a new gesture (pinchBaseZoom is
-                // nil) — snapshot the current zoom so the pinch
-                // builds on top of it. Without this, every new
-                // pinch reset zoom to the gesture's local 1.0..val
-                // factor and the prior magnification was lost.
-                let base = pinchBaseZoom ?? zoom
-                if pinchBaseZoom == nil { pinchBaseZoom = base }
-                zoom = clamp(base * val, lower: 0.5, upper: 8.0)
+                // nil) — snapshot the current zoom, pan, and the
+                // center-relative cursor position so the gesture
+                // can read from a stable origin throughout. Without
+                // these snapshots:
+                //   - zoom would reset to the gesture's local
+                //     1.0..magnification factor and lose prior scale
+                //   - the pan formula would chase its own tail by
+                //     reading the just-written committedPan
+                //   - the anchor would drift if MagnifyGesture
+                //     reported any noise in startLocation
+                if pinchBaseZoom == nil {
+                    pinchBaseZoom = zoom
+                    pinchBasePan = committedPan
+                    pinchAnchor = CGPoint(
+                        x: val.startLocation.x - canvas.width / 2,
+                        y: val.startLocation.y - canvas.height / 2
+                    )
+                }
+                let z0 = pinchBaseZoom ?? zoom
+                let basePan = pinchBasePan ?? committedPan
+                let anchor = pinchAnchor ?? .zero
+                let newZoom = clamp(z0 * val.magnification, lower: 0.5, upper: 8.0)
+                zoom = newZoom
+                // Zoom-toward-cursor: keep the image-point under the
+                // gesture-start cursor at the same screen position
+                // for the entire pinch. As zoom grows, the visible
+                // crop tightens around that anchor — the viewer
+                // "center" appears to follow the mouse smoothly.
+                //
+                // Derivation: at gesture start the image-point I at
+                // cursor satisfies anchor = I*z0 + basePan. We want
+                // anchor = I*newZoom + p' to hold throughout, so
+                //   p' = anchor*(1 - newZoom/z0) + basePan*(newZoom/z0)
+                let ratio = newZoom / z0
+                committedPan = CGSize(
+                    width: anchor.x * (1 - ratio) + basePan.width * ratio,
+                    height: anchor.y * (1 - ratio) + basePan.height * ratio
+                )
             }
             .onEnded { _ in
                 pinchBaseZoom = nil
+                pinchBasePan = nil
+                pinchAnchor = nil
                 if zoom < 1 {
                     withAnimation(.easeOut(duration: 0.18)) {
                         zoom = 1
