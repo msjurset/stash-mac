@@ -23,6 +23,24 @@ struct EditItemSheet: View {
     @State private var locationSource: String
     @State private var showLocationMap = false
 
+    /// Frozen-at-open snapshot of the image carousel + the index of
+    /// the currently-selected cover. The order never changes mid-
+    /// dialog so the user can pick a new cover by tapping without
+    /// the tiles dancing around them. The actual promote only runs
+    /// on Save — matches the rest of the dialog's "edit, then
+    /// commit" model.
+    @State private var stripEntries: [StripEntry]
+    @State private var activeStripIndex: Int = 0
+
+    struct StripEntry: Identifiable {
+        let id: String
+        let url: URL?
+        let caption: String?
+        /// 1-based attachment index used by store.promoteFile.
+        /// nil for the entry that was the primary at open time.
+        let originalAttachmentIndex: Int?
+    }
+
     init(item: StashItem) {
         self.item = item
         _title = State(initialValue: item.title)
@@ -37,6 +55,31 @@ struct EditItemSheet: View {
         _latText = State(initialValue: item.location.map { String($0.lat) } ?? "")
         _lonText = State(initialValue: item.location.map { String($0.lon) } ?? "")
         _locationSource = State(initialValue: item.location?.source ?? "")
+        // Build the immutable image carousel for the dialog's
+        // lifetime: primary first, attached files in their existing
+        // order. activeStripIndex tracks which entry is the
+        // "intended cover" — applied via store.promoteFile on Save.
+        var entries: [StripEntry] = []
+        if let sp = item.storePath, !sp.isEmpty {
+            entries.append(StripEntry(
+                id: item.contentHash ?? "primary",
+                url: FilePathResolver.resolve(storePath: sp),
+                caption: nil,
+                originalAttachmentIndex: nil
+            ))
+        }
+        if let files = item.files {
+            for (i, f) in files.enumerated() {
+                entries.append(StripEntry(
+                    id: f.contentHash,
+                    url: FilePathResolver.resolve(storePath: f.storePath),
+                    caption: f.caption,
+                    originalAttachmentIndex: i + 1
+                ))
+            }
+        }
+        _stripEntries = State(initialValue: entries)
+        _activeStripIndex = State(initialValue: 0)
     }
 
     var currentTags: [String] {
@@ -256,17 +299,18 @@ struct EditItemSheet: View {
     }
 
     /// Horizontal strip of every photo on the item — primary plus
-    /// each attached file. Tapping a non-primary tile promotes it
-    /// to be the new cover; primary is badged with a small star.
-    /// Keeps the carousel at the top of the dialog so the photos
-    /// stay visible while you edit title / notes.
+    /// each attached file. Tap a tile to mark it as the new cover;
+    /// the highlight + star badge move there, but the strip's
+    /// layout stays frozen for the dialog's lifetime so the tiles
+    /// don't dance around the user. The actual promote runs in
+    /// save() when the user commits.
     @ViewBuilder
     private var imageStrip: some View {
-        let slots: [ImageSlot] = buildImageSlots()
-        if !slots.isEmpty {
+        if !stripEntries.isEmpty {
             ScrollView(.horizontal, showsIndicators: false) {
                 LazyHStack(spacing: 8) {
-                    ForEach(slots) { slot in
+                    ForEach(Array(stripEntries.enumerated()), id: \.element.id) { idx, entry in
+                        let isActive = idx == activeStripIndex
                         VStack(spacing: 3) {
                             // Async + downsampled thumbnail. Previously
                             // NSImage(contentsOf:) ran inline on the
@@ -274,80 +318,43 @@ struct EditItemSheet: View {
                             // multi-megabyte photos that was a 4-
                             // second hitch every time the dialog
                             // opened.
-                            EditStripThumb(fileURL: slot.url)
+                            EditStripThumb(fileURL: entry.url)
                                 .frame(width: 80, height: 80)
                                 .clipShape(RoundedRectangle(cornerRadius: 5))
                                 .overlay(
                                     RoundedRectangle(cornerRadius: 5)
-                                        .stroke(slot.isPrimary ? Color.accentColor
+                                        .stroke(isActive ? Color.accentColor
                                                 : Color.secondary.opacity(0.3),
-                                                lineWidth: slot.isPrimary ? 2 : 1)
+                                                lineWidth: isActive ? 2 : 1)
                                 )
-                            .overlay(alignment: .topTrailing) {
-                                if slot.isPrimary {
-                                    Image(systemName: "star.fill")
-                                        .font(.caption2)
-                                        .foregroundStyle(.yellow)
-                                        .padding(3)
-                                        .background(.black.opacity(0.5), in: Circle())
-                                        .padding(3)
+                                .overlay(alignment: .topTrailing) {
+                                    if isActive {
+                                        Image(systemName: "star.fill")
+                                            .font(.caption2)
+                                            .foregroundStyle(.yellow)
+                                            .padding(3)
+                                            .background(.black.opacity(0.5), in: Circle())
+                                            .padding(3)
+                                    }
                                 }
-                            }
-                            Text(slot.isPrimary ? "cover"
-                                 : (slot.caption?.isEmpty == false ? slot.caption! : "—"))
+                            Text(isActive ? "cover"
+                                 : (entry.caption?.isEmpty == false ? entry.caption! : "—"))
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
                                 .frame(width: 80)
                         }
+                        .contentShape(Rectangle())
                         .onTapGesture {
-                            if let idx = slot.attachmentIndex, !slot.isPrimary {
-                                store.promoteFile(in: item.id, index: idx)
-                            }
+                            activeStripIndex = idx
                         }
-                        .help(slot.isPrimary ? "Cover photo" : "Click to set as cover")
+                        .help(isActive ? "Cover photo" : "Click to set as cover")
                     }
                 }
                 .padding(.vertical, 2)
             }
+            .animation(.easeInOut(duration: 0.15), value: activeStripIndex)
         }
-    }
-
-    /// Per-tile model for the image strip — primary slot first,
-    /// attached files following in carousel order. `attachmentIndex`
-    /// is nil for the primary; for attachments it's the 1-based
-    /// index expected by store.promoteFile.
-    private struct ImageSlot: Identifiable {
-        let id: String
-        let isPrimary: Bool
-        let attachmentIndex: Int?
-        let url: URL?
-        let caption: String?
-    }
-
-    private func buildImageSlots() -> [ImageSlot] {
-        var out: [ImageSlot] = []
-        if let sp = item.storePath, !sp.isEmpty {
-            out.append(ImageSlot(
-                id: "primary",
-                isPrimary: true,
-                attachmentIndex: nil,
-                url: FilePathResolver.resolve(storePath: sp),
-                caption: nil,
-            ))
-        }
-        if let files = item.files {
-            for (i, f) in files.enumerated() {
-                out.append(ImageSlot(
-                    id: "f-\(f.id)",
-                    isPrimary: false,
-                    attachmentIndex: i + 1,
-                    url: FilePathResolver.resolve(storePath: f.storePath),
-                    caption: f.caption,
-                ))
-            }
-        }
-        return out
     }
 
     private var identifyRow: some View {
@@ -502,6 +509,16 @@ struct EditItemSheet: View {
             location: newLocation,
             clearLocation: shouldClearLocation
         )
+        // Cover changed during the dialog? Promote on save. The
+        // strip's layout was frozen on open, so activeStripIndex
+        // and stripEntries match the original carousel order;
+        // index 0 = original primary. Anything else is an
+        // attachment we want to lift to primary now.
+        if activeStripIndex != 0,
+           activeStripIndex < stripEntries.count,
+           let attachIdx = stripEntries[activeStripIndex].originalAttachmentIndex {
+            store.promoteFile(in: item.id, index: attachIdx)
+        }
         dismiss()
     }
 }
