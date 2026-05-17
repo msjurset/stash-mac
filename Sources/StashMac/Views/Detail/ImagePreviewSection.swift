@@ -46,6 +46,10 @@ struct ImagePreviewSection: View {
                     )
             }
         }
+        // Crossfade swaps between images / placeholder rather than
+        // hard-cutting — keeps the multi-file carousel feel smooth
+        // when the user taps from one strip thumbnail to another.
+        .animation(.easeInOut(duration: 0.18), value: image)
         .task(id: fileURL.path) {
             await load()
         }
@@ -53,10 +57,11 @@ struct ImagePreviewSection: View {
 
     private func load() async {
         let url = fileURL
-        // Reset before kicking off a new load so a quick navigation
-        // away doesn't keep the previous image on screen during the
-        // decode window.
-        image = nil
+        // Keep the previous image visible while decoding the next
+        // one — clearing it produced a "whole page refresh" flash
+        // when tapping carousel strip thumbnails. The detached
+        // decode is fast for any already-on-disk file and the new
+        // image swaps in via the .animation crossfade above.
         let img = await Task.detached(priority: .userInitiated) { () -> NSImage? in
             guard FileManager.default.fileExists(atPath: url.path) else { return nil }
             return NSImage(contentsOf: url)
@@ -65,6 +70,9 @@ struct ImagePreviewSection: View {
         // mid-decode. SwiftUI cancels the .task on id change, but
         // detached children still finish.
         guard fileURL == url else { return }
-        image = img
+        // Only update if we actually got a new image — leaves the
+        // previous image up if the next file is unreadable rather
+        // than blanking the view.
+        if img != nil { image = img }
     }
 }
