@@ -104,6 +104,13 @@ struct ImagePreviewView: View {
     let onDismiss: () -> Void
 
     @State private var zoom: CGFloat = 1.0
+    /// Zoom level captured at the start of the in-progress pinch
+    /// gesture, or nil when no pinch is happening.
+    /// MagnificationGesture.value is gesture-relative (always begins
+    /// at 1.0), so consecutive pinches multiply against this base
+    /// instead of replacing zoom outright — matches the way pan's
+    /// committedPan + liveDrag pair compounds drags.
+    @State private var pinchBaseZoom: CGFloat? = nil
     @State private var committedPan: CGSize = .zero
     @State private var liveDrag: CGSize = .zero
 
@@ -165,9 +172,17 @@ struct ImagePreviewView: View {
     private var magnification: some Gesture {
         MagnificationGesture()
             .onChanged { val in
-                zoom = clamp(val, lower: 0.5, upper: 8.0)
+                // First sample of a new gesture (pinchBaseZoom is
+                // nil) — snapshot the current zoom so the pinch
+                // builds on top of it. Without this, every new
+                // pinch reset zoom to the gesture's local 1.0..val
+                // factor and the prior magnification was lost.
+                let base = pinchBaseZoom ?? zoom
+                if pinchBaseZoom == nil { pinchBaseZoom = base }
+                zoom = clamp(base * val, lower: 0.5, upper: 8.0)
             }
             .onEnded { _ in
+                pinchBaseZoom = nil
                 if zoom < 1 {
                     withAnimation(.easeOut(duration: 0.18)) {
                         zoom = 1
