@@ -23,23 +23,37 @@ enum AIKeyResolver {
 
     /// If `raw` is an `op://vault/item/field` reference, runs `op
     /// read` to fetch the actual secret. Otherwise returns the
-    /// trimmed input as-is.
+    /// cleaned input as-is (whitespace + surrounding quotes stripped
+    /// — copy-pasting references from code samples often brings
+    /// quotes along for the ride).
     static func resolve(_ raw: String) async throws -> String {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard isReference(trimmed) else { return trimmed }
+        let cleaned = clean(raw)
+        guard cleaned.lowercased().hasPrefix("op://") else { return cleaned }
         guard let opPath = findOpBinary() else {
             throw ResolverError.opNotFound
         }
-        return try await runOpRead(opPath: opPath, reference: trimmed)
+        return try await runOpRead(opPath: opPath, reference: cleaned)
     }
 
     /// True when the value is a 1Password reference. Used by the
     /// Settings UI to flip the placeholder + show the "via 1Password"
-    /// hint line.
+    /// hint line. Tolerant of surrounding quotes / whitespace.
     static func isReference(_ raw: String) -> Bool {
-        raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-            .hasPrefix("op://")
+        clean(raw).lowercased().hasPrefix("op://")
+    }
+
+    /// Normalised version of a pasted field value: outer whitespace
+    /// and one layer of matched surrounding single / double / back-
+    /// tick quotes stripped. Used by both `resolve` and the prefs
+    /// store's `setKey` so the saved value is always clean.
+    static func clean(_ raw: String) -> String {
+        var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if s.count >= 2, let first = s.first, let last = s.last,
+           first == last,
+           first == "\"" || first == "'" || first == "`" {
+            s = String(s.dropFirst().dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return s
     }
 
     /// Probe whether the 1Password CLI is installed. Used by the

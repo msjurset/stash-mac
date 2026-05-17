@@ -37,6 +37,10 @@ struct AIPrefsView: View {
                 HStack(spacing: 8) {
                     Button("Save") {
                         prefs.setKey(keyField)
+                        // Reflect the cleaned value back into the
+                        // editor (e.g. stripped surrounding quotes)
+                        // so the user sees what was actually saved.
+                        keyField = prefs.apiKey
                         testStatus = .idle
                     }
                     .disabled(keyField.trimmingCharacters(in: .whitespaces).isEmpty

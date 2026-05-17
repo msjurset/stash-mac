@@ -27,9 +27,7 @@ final class AIPrefsStore {
 
     var activeProvider: AIProvider { AIProviderRegistry.provider(for: activeID) }
     var apiKey: String { apiKeys[activeID] ?? "" }
-    var promptText: String {
-        prompts[activeID] ?? activeProvider.defaultPrompt
-    }
+    var promptText: String { prompt(for: activeID) }
     var hasKey: Bool { !apiKey.isEmpty }
 
     private let defaults = UserDefaults.standard
@@ -88,13 +86,17 @@ final class AIPrefsStore {
     }
 
     func setKey(_ value: String, for id: AIProviderID? = nil) {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Strip surrounding quotes and whitespace — pasting an
+        // op:// reference from a code sample often drags quotes
+        // along, and surrounding quotes are never valid in any
+        // real key format we accept.
+        let cleaned = AIKeyResolver.clean(value)
         let target = id ?? activeID
-        apiKeys[target] = trimmed
-        if trimmed.isEmpty {
+        apiKeys[target] = cleaned
+        if cleaned.isEmpty {
             defaults.removeObject(forKey: "ai.\(target.rawValue).apiKey")
         } else {
-            defaults.set(trimmed, forKey: "ai.\(target.rawValue).apiKey")
+            defaults.set(cleaned, forKey: "ai.\(target.rawValue).apiKey")
         }
     }
 
@@ -119,7 +121,15 @@ final class AIPrefsStore {
     /// the not-currently-active providers (e.g. so swapping the
     /// picker reveals each provider's pre-configured key).
     func apiKey(for id: AIProviderID) -> String { apiKeys[id] ?? "" }
+    /// Falls back to the provider's default prompt when nothing is
+    /// stored OR when the stored value is empty (the migration path
+    /// fills the dict with empty strings for every provider before
+    /// pulling from UserDefaults, so a plain dict lookup would skip
+    /// the fallback).
     func prompt(for id: AIProviderID) -> String {
-        prompts[id] ?? AIProviderRegistry.provider(for: id).defaultPrompt
+        let stored = prompts[id] ?? ""
+        return stored.isEmpty
+            ? AIProviderRegistry.provider(for: id).defaultPrompt
+            : stored
     }
 }
