@@ -159,6 +159,14 @@ actor StashCLI {
         _ = try await captureOutput(args: ["copy", id, "--field", field])
     }
 
+    /// Drive `stash heal <id>` to re-fetch a missing content blob
+    /// from the item's source URL. Used by the detail-pane
+    /// MissingBlobBanner. Returns void on success; throws with the
+    /// CLI's stderr on failure.
+    func healItem(id: String) async throws {
+        _ = try await captureOutput(args: ["heal", id])
+    }
+
     // MARK: - Multi-file items (attach / detach / reorder / merge)
 
     /// Attach a local file as an additional photo on an existing

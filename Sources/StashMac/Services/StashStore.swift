@@ -2096,6 +2096,21 @@ final class StashStore {
         }
     }
 
+    /// Drive `stash heal` to re-fetch a missing content blob from
+    /// the item's source URL. Awaited by the detail-pane
+    /// MissingBlobBanner so the button can flip back to "Heal"
+    /// when the call completes. Errors land in self.error like
+    /// every other CLI failure.
+    func healItem(id: String) async {
+        do {
+            try await cli.healItem(id: id)
+            flashMessage = "Healed ✓"
+            refresh()
+        } catch {
+            self.error = "Heal failed: \(error.localizedDescription)"
+        }
+    }
+
     // MARK: - Multi-file items
 
     /// Attach a local file to an item as an additional photo

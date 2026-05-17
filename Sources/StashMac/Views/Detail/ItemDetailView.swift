@@ -65,21 +65,45 @@ struct ItemDetailView: View {
                 // (see ImagePreviewSection) so navigating to a large
                 // image item doesn't stall the runloop on
                 // NSImage(contentsOf:) inside the body.
-                if item.type == .image, let storePath = item.storePath,
-                   let fileURL = FilePathResolver.resolve(storePath: storePath) {
+                if item.type == .image {
                     DetailSection(title: "Preview") {
-                        // Items with attached files render a
-                        // carousel + filmstrip; single-file items
-                        // stay on the lean ImagePreviewSection so we
-                        // don't pay the LazyHStack / drop-target
-                        // overhead on the 99% case.
-                        if let files = item.files, !files.isEmpty {
+                        let primaryURL = item.storePath
+                            .flatMap { FilePathResolver.resolve(storePath: $0) }
+                        let thumbnailURL = (item.thumbnailPath?.isEmpty == false)
+                            .takeIf { $0 == true }
+                            .flatMap { _ in
+                                FilePathResolver.resolveRelative(item.thumbnailPath!)
+                            }
+                            .flatMap { url in
+                                FileManager.default.fileExists(atPath: url.path)
+                                    ? url : nil
+                            }
+                        if primaryURL != nil, let files = item.files, !files.isEmpty {
+                            // Items with attached files render a
+                            // carousel + filmstrip; single-file items
+                            // stay on the lean ImagePreviewSection so we
+                            // don't pay the LazyHStack / drop-target
+                            // overhead on the 99% case.
                             MultiFilePreview(item: item)
-                        } else {
-                            ImagePreviewSection(fileURL: fileURL)
+                        } else if let primary = primaryURL {
+                            ImagePreviewSection(fileURL: primary)
                                 .onDrop(of: [.fileURL], isTargeted: nil) { providers in
                                     attachDroppedFiles(providers: providers)
                                 }
+                        } else if let fallback = thumbnailURL {
+                            // Primary blob is missing on disk (rare —
+                            // a `stash heal` or re-import will bring
+                            // it back). Render the cached thumbnail so
+                            // the user can still see what the item is.
+                            VStack(alignment: .leading, spacing: 6) {
+                                ImagePreviewSection(fileURL: fallback)
+                                MissingBlobBanner(itemID: item.id)
+                            }
+                        } else {
+                            // Neither primary blob nor thumbnail —
+                            // surface the missing-blob warning so the
+                            // user knows the item needs healing.
+                            MissingBlobBanner(itemID: item.id)
                         }
                     }
                 }
@@ -657,5 +681,61 @@ struct FlowLayout: Layout {
         }
 
         return (CGSize(width: maxX, height: y + rowHeight), positions)
+    }
+}
+
+/// Banner shown when the primary content blob for an image item
+/// is missing on disk. Surfaces the gap to the user along with a
+/// "Heal" button that fires `stash heal <id>` to re-fetch from
+/// the item's source URL when possible. Pairs with the existing
+/// Health-Check workflow but appears in the detail pane itself
+/// so the user notices immediately.
+private struct MissingBlobBanner: View {
+    let itemID: String
+    @Environment(StashStore.self) private var store
+    @State private var isHealing = false
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.yellow)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Content file missing on disk")
+                    .font(.callout.weight(.medium))
+                Text("Showing the cached thumbnail. Heal to re-fetch the full file from the source URL.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button {
+                isHealing = true
+                Task {
+                    await store.healItem(id: itemID)
+                    isHealing = false
+                }
+            } label: {
+                if isHealing {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Text("Heal")
+                }
+            }
+            .disabled(isHealing)
+        }
+        .padding(10)
+        .background(.yellow.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(.yellow.opacity(0.4), lineWidth: 1)
+        )
+    }
+}
+
+private extension Bool {
+    /// Compose-style `takeIf` for nullable chaining, used by the
+    /// preview-section thumbnail fallback to keep the conditional
+    /// pipeline readable.
+    func takeIf(_ predicate: (Bool) -> Bool) -> Bool? {
+        predicate(self) ? self : nil
     }
 }
