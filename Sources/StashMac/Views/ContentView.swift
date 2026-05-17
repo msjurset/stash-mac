@@ -47,6 +47,8 @@ struct ContentView: View {
                 CheckView()
             case .dupes:
                 DupesView()
+            case .trips:
+                TripSuggestionsView()
             case .rules:
                 RulesView()
             case .ruleActivity:
@@ -76,6 +78,8 @@ struct ContentView: View {
                 DetailRouter(showEditSheet: $showEditSheet)
             case .dupes:
                 DetailRouter(showEditSheet: $showEditSheet)
+            case .trips:
+                EmptyView()
             case .savedSearch:
                 DetailRouter(showEditSheet: $showEditSheet)
             case .inbox:
@@ -190,6 +194,7 @@ struct ContentView: View {
         case .stats, .check:            return .statsAndCheck
         case .rules, .ruleActivity:     return .rules
         case .inbox:                    return .gettingStarted
+        case .trips:                    return .organizing
         }
     }
 

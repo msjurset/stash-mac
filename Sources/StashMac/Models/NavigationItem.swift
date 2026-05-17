@@ -13,6 +13,7 @@ enum NavigationItem: Hashable {
     case check
     case rules
     case ruleActivity
+    case trips
 }
 
 extension NavigationItem {
@@ -31,6 +32,7 @@ extension NavigationItem {
         case .check:                  return "check"
         case .rules:                  return "rules"
         case .ruleActivity:           return "ruleActivity"
+        case .trips:                  return "trips"
         case .type(let t):            return "type:\(t.rawValue)"
         case .tag(let t):             return "tag:\(t.name)"
         case .collection(let c):      return "collection:\(c.name)"
@@ -57,6 +59,7 @@ extension NavigationItem {
         case "check":         return .check
         case "rules":         return .rules
         case "ruleActivity":  return .ruleActivity
+        case "trips":         return .trips
         default: break
         }
         let parts = key.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)

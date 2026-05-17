@@ -190,6 +190,53 @@ actor StashCLI {
         _ = try await captureOutput(args: ["serve", "token", "--rotate"])
     }
 
+    // MARK: - Trip / event suggestions
+
+    /// One row returned by `stash trip-suggest --json`. The CLI side
+    /// is the source of truth for the clustering algorithm; this
+    /// struct mirrors the JSON shape so the Mac UI can render
+    /// suggestions without re-implementing the heuristic.
+    struct TripSuggestion: Codable, Identifiable, Equatable {
+        let start: Date
+        let end: Date
+        let itemCount: Int
+        let itemIds: [String]
+        let suggestedName: String
+        let score: Double
+        let sharedTags: [String]?
+        let locationCenter: LocationCenter?
+        let locationCount: Int?
+
+        struct LocationCenter: Codable, Equatable {
+            let lat: Double
+            let lon: Double
+        }
+
+        // Synthesize a stable identity from the first item ID + score
+        // so SwiftUI lists don't re-shuffle on every refresh.
+        var id: String { (itemIds.first ?? "?") + "|" + String(score) }
+    }
+
+    /// Drive `stash trip-suggest --json`. Default flags match the CLI
+    /// defaults (90-day window, 6h gap, 5-day span, min-items 3).
+    /// Returns a score-sorted slice for direct rendering.
+    func tripSuggestions(scanAll: Bool = false) async throws -> [TripSuggestion] {
+        var args = ["trip-suggest", "--json"]
+        if scanAll { args.append("--all") }
+        return try await captureJSON(args: args)
+    }
+
+    /// Action a suggestion by creating (or reusing) a collection and
+    /// adding the listed items. Idempotent on the CLI side.
+    func tripSuggestAccept(name: String, ids: [String], description: String? = nil) async throws {
+        var args = ["trip-suggest", "accept", "--name", name]
+        if let description, !description.isEmpty {
+            args += ["--description", description]
+        }
+        args.append(contentsOf: ids)
+        _ = try await captureOutput(args: args)
+    }
+
     // MARK: - Multi-file items (attach / detach / reorder / merge)
 
     /// Attach a local file as an additional photo on an existing

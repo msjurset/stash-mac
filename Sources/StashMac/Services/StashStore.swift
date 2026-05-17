@@ -1792,7 +1792,7 @@ final class StashStore {
             filterTags = [t.name]
         case .collection(let c):
             filterCollection = c.name
-        case .tagGraph, .stats, .check, .dupes, .savedSearch, .rules, .ruleActivity, .inbox:
+        case .tagGraph, .stats, .check, .dupes, .savedSearch, .rules, .ruleActivity, .inbox, .trips:
             break
         }
         refresh()

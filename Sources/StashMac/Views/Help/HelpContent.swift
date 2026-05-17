@@ -27,6 +27,7 @@ enum HelpTopic: String, CaseIterable, Identifiable, Codable, Hashable {
     case rules = "Rules"
     case aiIdentify = "Identify with AI"
     case location = "Location"
+    case trips = "Trip Suggestions"
     case keyboard = "Keyboard Shortcuts"
 
     var id: String { rawValue }
@@ -49,6 +50,7 @@ enum HelpTopic: String, CaseIterable, Identifiable, Codable, Hashable {
         case .rules: return "wand.and.stars"
         case .aiIdentify: return "sparkles"
         case .location: return "mappin.and.ellipse"
+        case .trips: return "calendar.badge.clock"
         case .keyboard: return "keyboard"
         }
     }
@@ -488,6 +490,24 @@ enum HelpTopic: String, CaseIterable, Identifiable, Codable, Hashable {
                     "Garbage GPS values (NaN, 0/0 Null Island, out of geographic range) are rejected; the item gets no location rather than a corrupt one.",
                     "Snippet items don't show the Location editor — geo doesn't apply.",
                 ]),
+            ]
+
+        case .trips:
+            return [
+                .paragraph("Trip Suggestions surfaces clusters of items you captured close together in time, often sharing a location or a tag, as candidates for a single collection. Open it from the sidebar under Tools → Trips."),
+                .heading("What it looks for"),
+                .bullet([
+                    "Bursts of items in a short time window (default: more than 3 items within 6 hours of each other, total span ≤ 5 days)",
+                    "Coherence signals that boost confidence — items sharing a tag, items with GPS coordinates near each other",
+                    "Items not already grouped in the same collection (those clusters are dropped automatically once you've accepted them)",
+                ]),
+                .heading("Accepting a suggestion"),
+                .paragraph("Click *Accept as Collection…* on any card. The suggested name is pre-filled — it combines the dominant shared tag (if any) with the date range. Edit it before confirming. Creates the collection if it doesn't exist and adds every item in the cluster; rerun is idempotent if the collection already exists."),
+                .heading("Scan window"),
+                .paragraph("Defaults to the last 90 days so the list reflects recent activity. Flip *Scan all history* in the header to widen to the whole stash — useful for retroactively bundling older bursts that pre-date the feature."),
+                .heading("CLI equivalent"),
+                .paragraph("The Mac view is a thin wrapper over `stash trip-suggest`. The same clusters surface from the terminal:"),
+                .code("stash trip-suggest --json | jq '.[0]'\nstash trip-suggest accept --name \"Beach trip 2026-05\" ID ID ID"),
             ]
 
         case .keyboard:

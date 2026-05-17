@@ -84,6 +84,8 @@ struct SidebarView: View {
                         .tag(NavigationItem.stats)
                     Label("Duplicates", systemImage: "doc.on.doc")
                         .tag(NavigationItem.dupes)
+                    Label("Trips", systemImage: "calendar.badge.clock")
+                        .tag(NavigationItem.trips)
                     Label("Health Check", systemImage: "checkmark.shield")
                         .tag(NavigationItem.check)
                 }
