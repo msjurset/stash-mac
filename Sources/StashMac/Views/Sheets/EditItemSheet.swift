@@ -1,3 +1,5 @@
+import AppKit
+import ImageIO
 import SwiftUI
 
 struct EditItemSheet: View {
@@ -266,23 +268,21 @@ struct EditItemSheet: View {
                 LazyHStack(spacing: 8) {
                     ForEach(slots) { slot in
                         VStack(spacing: 3) {
-                            Group {
-                                if let url = slot.url, let img = NSImage(contentsOf: url) {
-                                    Image(nsImage: img)
-                                        .resizable()
-                                        .scaledToFill()
-                                } else {
-                                    Color.secondary.opacity(0.2)
-                                }
-                            }
-                            .frame(width: 80, height: 80)
-                            .clipShape(RoundedRectangle(cornerRadius: 5))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 5)
-                                    .stroke(slot.isPrimary ? Color.accentColor
-                                            : Color.secondary.opacity(0.3),
-                                            lineWidth: slot.isPrimary ? 2 : 1)
-                            )
+                            // Async + downsampled thumbnail. Previously
+                            // NSImage(contentsOf:) ran inline on the
+                            // main thread for each tile — with 3-4
+                            // multi-megabyte photos that was a 4-
+                            // second hitch every time the dialog
+                            // opened.
+                            EditStripThumb(fileURL: slot.url)
+                                .frame(width: 80, height: 80)
+                                .clipShape(RoundedRectangle(cornerRadius: 5))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 5)
+                                        .stroke(slot.isPrimary ? Color.accentColor
+                                                : Color.secondary.opacity(0.3),
+                                                lineWidth: slot.isPrimary ? 2 : 1)
+                                )
                             .overlay(alignment: .topTrailing) {
                                 if slot.isPrimary {
                                     Image(systemName: "star.fill")
@@ -508,4 +508,58 @@ struct EditItemSheet: View {
 
 private extension Optional where Wrapped == String {
     var isNilOrEmpty: Bool { self?.isEmpty ?? true }
+}
+
+/// Off-main-thread + ImageIO-downsampled tile for the image strip
+/// at the top of the Edit dialog. NSImage(contentsOf:) on a 4-8 MB
+/// phone JPEG blocks the main runloop long enough to manifest as a
+/// 4-second hitch when opening Edit on a multi-file item. ImageIO's
+/// CGImageSourceCreateThumbnailAtIndex decodes only enough of the
+/// file to produce a thumbnail at the requested size — typically
+/// 10-50× faster.
+private struct EditStripThumb: View {
+    let fileURL: URL?
+    @State private var image: NSImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Color.secondary.opacity(0.15)
+            }
+        }
+        .task(id: fileURL?.path) {
+            guard let url = fileURL else { return }
+            let img = await Task.detached(priority: .userInitiated) {
+                Self.downsample(url: url, maxDim: 160)
+            }.value
+            // Guard against the URL having changed while we were
+            // decoding — typical SwiftUI .task race when the user
+            // navigates quickly between items.
+            guard fileURL == url else { return }
+            image = img
+        }
+    }
+
+    /// ImageIO-based downsampled decode. 160 px on the long edge
+    /// (2× the 80 dp tile) gives a sharp Retina render without
+    /// pulling the full image into RAM. `nonisolated` so it can
+    /// run on a Task.detached priority pool without the main
+    /// actor's queue.
+    nonisolated private static func downsample(url: URL, maxDim: Int) -> NSImage? {
+        guard FileManager.default.fileExists(atPath: url.path),
+              let src = CGImageSourceCreateWithURL(url as CFURL, nil)
+        else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxDim,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+        ]
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, options as CFDictionary)
+        else { return nil }
+        return NSImage(cgImage: cg, size: NSSize(width: maxDim, height: maxDim))
+    }
 }
