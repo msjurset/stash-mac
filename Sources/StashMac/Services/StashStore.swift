@@ -679,7 +679,7 @@ final class StashStore {
         }
     }
 
-    func editItem(id: String, title: String?, note: String?, extractedText: String? = nil, url: String? = nil, addTags: [String], removeTags: [String], collection: String?) {
+    func editItem(id: String, title: String?, note: String?, extractedText: String? = nil, url: String? = nil, addTags: [String], removeTags: [String], collection: String?, location: ItemLocation? = nil, clearLocation: Bool = false) {
         // Optimistic update for the Health Check view: the moment a
         // URL edit lands, mark the row as "rechecking" with the new
         // URL so the user gets immediate visual feedback. Without
@@ -696,7 +696,7 @@ final class StashStore {
 
         Task {
             do {
-                _ = try await cli.editItem(id: id, title: title, note: note, extractedText: extractedText, url: url, addTags: addTags, removeTags: removeTags, collection: collection)
+                _ = try await cli.editItem(id: id, title: title, note: note, extractedText: extractedText, url: url, addTags: addTags, removeTags: removeTags, collection: collection, location: location, clearLocation: clearLocation)
                 loadAll()
                 // If the URL changed and an active health check has
                 // this item in its broken-URLs list, re-check just

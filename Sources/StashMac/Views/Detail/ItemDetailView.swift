@@ -102,6 +102,15 @@ struct ItemDetailView: View {
                     NotesView(text: notes, itemID: item.id)
                 }
 
+                // Location — only shown when an item has a stored
+                // latitude/longitude (auto-extracted from EXIF on
+                // ingest, set on mobile capture, or typed manually).
+                if let loc = item.location {
+                    DetailSection(title: "Location") {
+                        locationRow(loc: loc)
+                    }
+                }
+
                 // Tags
                 DetailSection(title: "Tags") {
                     FlowLayout(spacing: 6) {
@@ -379,6 +388,35 @@ struct ItemDetailView: View {
             }
         } message: {
             Text("This action cannot be undone.")
+        }
+    }
+
+    /// Renders the single Location row: pin glyph + lat/lon (six
+    /// decimal places ≈ 11cm precision, plenty), an "Open in Maps"
+    /// link, and a small source badge so the user can tell at a
+    /// glance whether the value came from EXIF, mobile capture, or
+    /// a manual edit.
+    @ViewBuilder
+    private func locationRow(loc: ItemLocation) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "mappin.and.ellipse")
+                .foregroundStyle(.secondary)
+            Text(String(format: "%.6f, %.6f", loc.lat, loc.lon))
+                .font(.callout.monospacedDigit())
+                .textSelection(.enabled)
+            if let url = item.mapsURL {
+                Link("Open in Maps", destination: url)
+                    .font(.caption)
+            }
+            if let src = loc.source, !src.isEmpty {
+                Text(src)
+                    .font(.caption2)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(.secondary.opacity(0.15), in: Capsule())
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
         }
     }
 

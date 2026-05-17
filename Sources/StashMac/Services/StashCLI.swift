@@ -131,7 +131,9 @@ actor StashCLI {
         url: String? = nil,
         addTags: [String] = [],
         removeTags: [String] = [],
-        collection: String? = nil
+        collection: String? = nil,
+        location: ItemLocation? = nil,
+        clearLocation: Bool = false
     ) async throws -> StashItem {
         var args = ["edit", "--json", id]
         if let title { args += ["-t", title] }
@@ -141,6 +143,11 @@ actor StashCLI {
         for tag in addTags { args += ["--add-tag", tag] }
         for tag in removeTags { args += ["--remove-tag", tag] }
         if let collection { args += ["-c", collection] }
+        if let location {
+            args += ["--location", "\(location.lat),\(location.lon)"]
+        } else if clearLocation {
+            args += ["--clear-location"]
+        }
         return try await captureJSON(args: args)
     }
 

@@ -16,6 +16,7 @@ struct StashItem: Codable, Identifiable, Hashable {
     var metadata: [String: String]?
     var createdAt: Date
     var updatedAt: Date
+    var location: ItemLocation?
     var tags: [StashTag]?
     var collections: [StashCollection]?
     var links: [StashLink]?
@@ -58,6 +59,15 @@ struct StashItem: Codable, Identifiable, Hashable {
         return nil
     }
 
+    /// Apple Maps URL for this item's location, when present. Used
+    /// by the detail pane's Location row and the right-click "Open
+    /// in Maps" action.
+    var mapsURL: URL? {
+        guard let loc = location else { return nil }
+        let q = "\(loc.lat),\(loc.lon)"
+        return URL(string: "https://maps.apple.com/?q=\(q)")
+    }
+
     var humanFileSize: String? {
         guard let size = fileSize, size > 0 else { return nil }
         let units = ["B", "KB", "MB", "GB"]
@@ -72,4 +82,15 @@ struct StashItem: Codable, Identifiable, Hashable {
         }
         return String(format: "%.1f %@", value, units[unitIndex])
     }
+}
+
+/// Geolocation attached to an item. Populated automatically from
+/// JPEG EXIF on capture (`source == "exif"`), from a mobile OS
+/// Location API on Android capture (`source == "capture"`), or
+/// set manually via the Edit dialog / `stash edit --location`
+/// (`source == "manual"`).
+struct ItemLocation: Codable, Hashable {
+    var lat: Double
+    var lon: Double
+    var source: String?
 }

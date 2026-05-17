@@ -26,6 +26,7 @@ enum HelpTopic: String, CaseIterable, Identifiable, Codable, Hashable {
     case services = "System Services"
     case rules = "Rules"
     case aiIdentify = "Identify with AI"
+    case location = "Location"
     case keyboard = "Keyboard Shortcuts"
 
     var id: String { rawValue }
@@ -47,6 +48,7 @@ enum HelpTopic: String, CaseIterable, Identifiable, Codable, Hashable {
         case .services: return "square.and.arrow.down.on.square"
         case .rules: return "wand.and.stars"
         case .aiIdentify: return "sparkles"
+        case .location: return "mappin.and.ellipse"
         case .keyboard: return "keyboard"
         }
     }
@@ -458,6 +460,33 @@ enum HelpTopic: String, CaseIterable, Identifiable, Codable, Hashable {
                     "The menu item only appears for image-type items when an API key is configured.",
                     "Each provider keeps its own key and prompt; switching the picker doesn't lose other providers' values.",
                     "Mac and Android Stash share the Gemini prompt shape but maintain independent keys / drafts.",
+                ]),
+            ]
+
+        case .location:
+            return [
+                .paragraph("Image items can carry a geolocation — typically extracted from JPEG EXIF GPS tags at capture time, but also set manually via the Edit dialog or `stash edit --location`. When present, the detail pane shows a Location row with the coordinates and an Open in Maps link."),
+                .heading("How it gets filled"),
+                .bullet([
+                    "**EXIF (auto)** — every image stashed via the CLI, mobile app, or `stash serve` upload gets its JPEG EXIF parsed on ingest. Source badge reads `exif`.",
+                    "**Mobile capture** — when the Android app captures a photo with location services on, the OS coordinates are sent alongside the file. Source badge reads `capture`. (Falls back to EXIF if the OS API isn't available.)",
+                    "**Manual** — type lat / lon into the Edit dialog or run `stash edit <id> --location \"33.7547,-84.6322\"`. Source badge reads `manual`.",
+                ]),
+                .heading("Backfilling existing items"),
+                .paragraph("Items captured before this feature shipped don't have a populated Location even if their EXIF carries GPS. Run `stash backfill-locations --all` to scan every image and lift the GPS into the structured field. Idempotent — items already populated are skipped. Use `--force` to re-extract EXIF over existing exif-sourced rows (manual / capture values are preserved)."),
+                .heading("Editing"),
+                .bullet([
+                    "Edit dialog has two text fields under Title — lat and lon in decimal degrees. Leave both empty to clear; mixed (one filled, one empty) silently no-ops.",
+                    "Clear button removes the location.",
+                    "Manual edits set `source=manual`; the backfill command then won't overwrite them on a subsequent `--force` run.",
+                ]),
+                .heading("Open in Maps"),
+                .paragraph("The Location row's link opens Apple Maps centered on the coordinates. Right-clicking gives the standard system menu (copy, etc.)."),
+                .heading("Notes"),
+                .bullet([
+                    "HEIC images (newer iPhone format) aren't parsed by the underlying library — they decode as 'no GPS' and skip silently. Convert to JPEG first if you need them parsed.",
+                    "Garbage GPS values (NaN, 0/0 Null Island, out of geographic range) are rejected; the item gets no location rather than a corrupt one.",
+                    "Snippet items don't show the Location editor — geo doesn't apply.",
                 ]),
             ]
 

@@ -16,6 +16,9 @@ struct EditItemSheet: View {
     @State private var collection = ""
     @State private var isIdentifying = false
     @State private var identifyError: String?
+    @State private var latText: String
+    @State private var lonText: String
+    @State private var locationSource: String
 
     init(item: StashItem) {
         self.item = item
@@ -24,6 +27,13 @@ struct EditItemSheet: View {
         _note = State(initialValue: item.notes ?? "")
         _extractedText = State(initialValue: item.extractedText ?? "")
         _collection = State(initialValue: item.collectionNames.first ?? "")
+        // Empty string = "no location" — both fields blank means we
+        // send --clear-location, both populated means
+        // --location lat,lon. Mixed (one filled, one empty) gets
+        // surfaced as a save-time validation error.
+        _latText = State(initialValue: item.location.map { String($0.lat) } ?? "")
+        _lonText = State(initialValue: item.location.map { String($0.lon) } ?? "")
+        _locationSource = State(initialValue: item.location?.source ?? "")
     }
 
     var currentTags: [String] {
@@ -68,6 +78,8 @@ struct EditItemSheet: View {
                 StashTextEditor(text: $extractedText)
                     .frame(minHeight: 60)
             }
+
+            locationRow
 
             VStack(alignment: .leading, spacing: 8) {
                 Text("Tags")
@@ -138,6 +150,56 @@ struct EditItemSheet: View {
         }
         .padding()
         .frame(width: 480, height: 550)
+    }
+
+    /// Two-field editor + clear button for the item's location.
+    /// Empty fields mean "no location". Hidden for snippet items —
+    /// geo doesn't fit that type.
+    @ViewBuilder
+    private var locationRow: some View {
+        if item.type != .snippet {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text("Location")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if !locationSource.isEmpty {
+                        Text(locationSource)
+                            .font(.caption2)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(.secondary.opacity(0.15), in: Capsule())
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if !latText.isEmpty || !lonText.isEmpty {
+                        Button("Clear") {
+                            latText = ""
+                            lonText = ""
+                            locationSource = ""
+                        }
+                        .buttonStyle(.borderless)
+                        .font(.caption)
+                    }
+                }
+                HStack(spacing: 8) {
+                    FilterField(
+                        placeholder: "lat",
+                        text: $latText,
+                        isBordered: true,
+                        backgroundColor: .textBackgroundColor
+                    )
+                    .frame(height: 22)
+                    FilterField(
+                        placeholder: "lon",
+                        text: $lonText,
+                        isBordered: true,
+                        backgroundColor: .textBackgroundColor
+                    )
+                    .frame(height: 22)
+                }
+            }
+        }
     }
 
     private var identifyRow: some View {
@@ -230,7 +292,40 @@ struct EditItemSheet: View {
         let u = url != (item.url ?? "") ? url : nil
         let c = collection.isEmpty ? nil : collection
 
-        store.editItem(id: item.id, title: t, note: n, extractedText: e, url: u, addTags: tagsToAdd, removeTags: tagsToRemove, collection: c)
+        // Location diff: empty in both fields → clear (if there was
+        // one before); valid lat,lon → set as manual; mixed (one
+        // filled / one empty) silently no-ops rather than dismissing
+        // with a half-edit — keeps the save button forgiving.
+        let trimmedLat = latText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedLon = lonText.trimmingCharacters(in: .whitespacesAndNewlines)
+        var newLocation: ItemLocation? = nil
+        var shouldClearLocation = false
+        if trimmedLat.isEmpty && trimmedLon.isEmpty {
+            if item.location != nil {
+                shouldClearLocation = true
+            }
+        } else if let lat = Double(trimmedLat), let lon = Double(trimmedLon),
+                  (-90...90).contains(lat), (-180...180).contains(lon) {
+            let existing = item.location
+            // Avoid resending an unchanged value as a no-op manual
+            // edit — keeps EXIF / capture sources pinned.
+            if existing == nil || existing?.lat != lat || existing?.lon != lon {
+                newLocation = ItemLocation(lat: lat, lon: lon, source: "manual")
+            }
+        }
+
+        store.editItem(
+            id: item.id,
+            title: t,
+            note: n,
+            extractedText: e,
+            url: u,
+            addTags: tagsToAdd,
+            removeTags: tagsToRemove,
+            collection: c,
+            location: newLocation,
+            clearLocation: shouldClearLocation
+        )
         dismiss()
     }
 }
