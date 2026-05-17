@@ -40,11 +40,18 @@ struct ItemListView: View {
     /// inside-popover tap gesture.
     @State private var shownThumbnailID: String?
 
-    /// Merge-items picker state. `mergePickerIDs` holds the
-    /// multi-selection that opened the sheet; the sheet displays
-    /// them as radio choices for which one is the keeper.
-    @State private var showMergeSheet = false
-    @State private var mergePickerIDs: [String] = []
+    /// Merge-items picker state. Single Identifiable optional so
+    /// the `.sheet(item:)` content closure gets the IDs directly
+    /// instead of relying on two separate @State updates landing in
+    /// the right order — the previous showBool+idsArray version
+    /// silently presented with 0 items because the array update
+    /// hadn't propagated before the sheet body ran.
+    @State private var mergeRequest: MergeRequest?
+
+    struct MergeRequest: Identifiable {
+        let id = UUID()
+        let itemIDs: [String]
+    }
 
     struct TagPickerTarget: Equatable {
         let id: String                 // the right-clicked row id (anchor)
@@ -240,20 +247,21 @@ struct ItemListView: View {
         .onDisappear { store.removeItemDragMonitor() }
         // Merge picker sheet — attached at body level (not on a
         // specific view-mode branch) so it presents from list,
-        // grid, and masonry views the same way. Without this the
-        // multi-select "Merge Selected…" menu item silently
-        // no-ops when the user isn't in grid mode.
-        .sheet(isPresented: $showMergeSheet) {
+        // grid, and masonry views the same way. Uses .sheet(item:)
+        // so the IDs are passed in alongside the present-true
+        // signal in one state mutation — avoids the empty-payload
+        // race the two-@State version had.
+        .sheet(item: $mergeRequest) { req in
             MergeItemsSheet(
-                items: mergePickerIDs.compactMap { id in
+                items: req.itemIDs.compactMap { id in
                     store.items.first(where: { $0.id == id })
                 },
                 onMerge: { targetID, sourceIDs in
                     store.mergeItems(targetID: targetID, sourceIDs: sourceIDs)
                     store.selectedItems = [targetID]
-                    showMergeSheet = false
+                    mergeRequest = nil
                 },
-                onCancel: { showMergeSheet = false }
+                onCancel: { mergeRequest = nil }
             )
         }
     }
@@ -756,8 +764,7 @@ struct ItemListView: View {
             if selected.count >= 2 {
                 Divider()
                 Button("Merge Selected (\(selected.count))…") {
-                    mergePickerIDs = Array(selected)
-                    showMergeSheet = true
+                    mergeRequest = MergeRequest(itemIDs: Array(selected))
                 }
             }
             Divider()
