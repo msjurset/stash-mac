@@ -70,6 +70,14 @@ struct EditItemSheet: View {
 
     private var formContent: some View {
         VStack(alignment: .leading, spacing: 16) {
+            // Image strip for multi-file items: shows primary +
+            // every attached file inline, lets the user pick a new
+            // cover, and surfaces the carousel at the top of the
+            // edit dialog so the photos are at hand while editing.
+            if item.type == .image {
+                imageStrip
+            }
+
             StashField("Title", text: $title)
 
             // Identify-with-AI row — image items only, key
@@ -92,8 +100,12 @@ struct EditItemSheet: View {
                 Text("Notes")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                StashTextEditor(text: $note)
-                    .frame(minHeight: 160)
+                // Expands while focused so long Gemini-generated
+                // notes stay readable without scrolling the inner
+                // editor. Collapses back when focus leaves.
+                StashTextEditor(text: $note,
+                                idleHeight: 160,
+                                focusedHeight: 360)
             }
 
             VStack(alignment: .leading, spacing: 4) {
@@ -241,8 +253,112 @@ struct EditItemSheet: View {
         return (lat, lon)
     }
 
+    /// Horizontal strip of every photo on the item — primary plus
+    /// each attached file. Tapping a non-primary tile promotes it
+    /// to be the new cover; primary is badged with a small star.
+    /// Keeps the carousel at the top of the dialog so the photos
+    /// stay visible while you edit title / notes.
+    @ViewBuilder
+    private var imageStrip: some View {
+        let slots: [ImageSlot] = buildImageSlots()
+        if !slots.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(spacing: 8) {
+                    ForEach(slots) { slot in
+                        VStack(spacing: 3) {
+                            Group {
+                                if let url = slot.url, let img = NSImage(contentsOf: url) {
+                                    Image(nsImage: img)
+                                        .resizable()
+                                        .scaledToFill()
+                                } else {
+                                    Color.secondary.opacity(0.2)
+                                }
+                            }
+                            .frame(width: 80, height: 80)
+                            .clipShape(RoundedRectangle(cornerRadius: 5))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 5)
+                                    .stroke(slot.isPrimary ? Color.accentColor
+                                            : Color.secondary.opacity(0.3),
+                                            lineWidth: slot.isPrimary ? 2 : 1)
+                            )
+                            .overlay(alignment: .topTrailing) {
+                                if slot.isPrimary {
+                                    Image(systemName: "star.fill")
+                                        .font(.caption2)
+                                        .foregroundStyle(.yellow)
+                                        .padding(3)
+                                        .background(.black.opacity(0.5), in: Circle())
+                                        .padding(3)
+                                }
+                            }
+                            Text(slot.isPrimary ? "cover"
+                                 : (slot.caption?.isEmpty == false ? slot.caption! : "—"))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .frame(width: 80)
+                        }
+                        .onTapGesture {
+                            if let idx = slot.attachmentIndex, !slot.isPrimary {
+                                store.promoteFile(in: item.id, index: idx)
+                            }
+                        }
+                        .help(slot.isPrimary ? "Cover photo" : "Click to set as cover")
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+        }
+    }
+
+    /// Per-tile model for the image strip — primary slot first,
+    /// attached files following in carousel order. `attachmentIndex`
+    /// is nil for the primary; for attachments it's the 1-based
+    /// index expected by store.promoteFile.
+    private struct ImageSlot: Identifiable {
+        let id: String
+        let isPrimary: Bool
+        let attachmentIndex: Int?
+        let url: URL?
+        let caption: String?
+    }
+
+    private func buildImageSlots() -> [ImageSlot] {
+        var out: [ImageSlot] = []
+        if let sp = item.storePath, !sp.isEmpty {
+            out.append(ImageSlot(
+                id: "primary",
+                isPrimary: true,
+                attachmentIndex: nil,
+                url: FilePathResolver.resolve(storePath: sp),
+                caption: nil,
+            ))
+        }
+        if let files = item.files {
+            for (i, f) in files.enumerated() {
+                out.append(ImageSlot(
+                    id: "f-\(f.id)",
+                    isPrimary: false,
+                    attachmentIndex: i + 1,
+                    url: FilePathResolver.resolve(storePath: f.storePath),
+                    caption: f.caption,
+                ))
+            }
+        }
+        return out
+    }
+
     private var identifyRow: some View {
-        HStack(spacing: 8) {
+        // "Re-identify" when the item already has AI-style content
+        // populated. Heuristic: any non-empty title OR notes implies
+        // we (or the user) have content worth refreshing on top of.
+        // Otherwise show "Identify" as the first-time action label.
+        let hasContent = !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let verb = hasContent ? "Re-identify" : "Identify"
+        return HStack(spacing: 8) {
             Button {
                 identify()
             } label: {
@@ -253,12 +369,12 @@ struct EditItemSheet: View {
                         Image(systemName: "sparkles")
                     }
                     Text(isIdentifying
-                         ? "Identifying…"
-                         : "Identify with \(aiPrefs.activeProvider.displayName)")
+                         ? "\(verb)ing…"
+                         : "\(verb) with \(aiPrefs.activeProvider.displayName)")
                 }
             }
             .disabled(isIdentifying)
-            .help("Fill Title and append to Notes from the active AI provider")
+            .help("\(verb) using every photo on this item via the active AI provider")
             if let identifyError {
                 Text(identifyError)
                     .font(.caption)

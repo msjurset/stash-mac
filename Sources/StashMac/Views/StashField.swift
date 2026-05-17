@@ -40,13 +40,23 @@ struct StashField: View {
 
 struct StashTextEditor: View {
     @Binding var text: String
+    /// Heights for the unfocused and focused states. Set
+    /// `focusedHeight` larger than `idleHeight` to get the
+    /// "expand-when-you-click-into-it" effect — useful for fields
+    /// like Notes where the user might want a bigger workspace
+    /// while editing. Default behaviour (both nil) leaves layout
+    /// entirely up to the caller via `.frame(minHeight:)`.
+    var idleHeight: CGFloat? = nil
+    var focusedHeight: CGFloat? = nil
     @FocusState private var isFocused: Bool
 
     var body: some View {
+        let activeHeight = isFocused ? (focusedHeight ?? idleHeight) : idleHeight
         TextEditor(text: $text)
             .font(.body)
             .scrollContentBackground(.hidden)
             .padding(4)
+            .frame(minHeight: activeHeight)
             .background(isFocused ? Color.accentColor.opacity(0.08) : Color.primary.opacity(0.04))
             .clipShape(RoundedRectangle(cornerRadius: 6))
             .overlay(
@@ -54,6 +64,6 @@ struct StashTextEditor: View {
                     .stroke(isFocused ? Color.accentColor.opacity(0.5) : Color.primary.opacity(0.1), lineWidth: 1)
             )
             .focused($isFocused)
-            .animation(.easeInOut(duration: 0.15), value: isFocused)
+            .animation(.easeInOut(duration: 0.18), value: isFocused)
     }
 }
