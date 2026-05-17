@@ -19,6 +19,7 @@ struct EditItemSheet: View {
     @State private var latText: String
     @State private var lonText: String
     @State private var locationSource: String
+    @State private var showLocationMap = false
 
     init(item: StashItem) {
         self.item = item
@@ -44,6 +45,30 @@ struct EditItemSheet: View {
     }
 
     var body: some View {
+        // Action bar pinned at the bottom outside the ScrollView so
+        // Cancel / Save never scroll out of reach regardless of how
+        // much content the form holds (Notes can grow large after an
+        // Identify run, Tags can be many, etc.).
+        VStack(spacing: 0) {
+            ScrollView {
+                formContent
+                    .padding()
+            }
+            Divider()
+            HStack {
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Spacer()
+                Button("Save") { save() }
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 12)
+        }
+        .frame(width: 540, height: 720)
+    }
+
+    private var formContent: some View {
         VStack(alignment: .leading, spacing: 16) {
             StashField("Title", text: $title)
 
@@ -68,7 +93,7 @@ struct EditItemSheet: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 StashTextEditor(text: $note)
-                    .frame(minHeight: 60)
+                    .frame(minHeight: 160)
             }
 
             VStack(alignment: .leading, spacing: 4) {
@@ -76,7 +101,7 @@ struct EditItemSheet: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 StashTextEditor(text: $extractedText)
-                    .frame(minHeight: 60)
+                    .frame(minHeight: 100)
             }
 
             locationRow
@@ -138,18 +163,7 @@ struct EditItemSheet: View {
                 .frame(maxWidth: 200)
             }
 
-            Spacer()
-
-            HStack {
-                Button("Cancel") { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-                Spacer()
-                Button("Save") { save() }
-                    .keyboardShortcut(.defaultAction)
-            }
         }
-        .padding()
-        .frame(width: 480, height: 550)
     }
 
     /// Two-field editor + clear button for the item's location.
@@ -172,6 +186,18 @@ struct EditItemSheet: View {
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
+                    if let coord = currentLatLon() {
+                        Button {
+                            showLocationMap = true
+                        } label: {
+                            Image(systemName: "scope")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Preview on a map")
+                        .popover(isPresented: $showLocationMap, arrowEdge: .top) {
+                            LocationMapPopover(lat: coord.lat, lon: coord.lon)
+                        }
+                    }
                     if !latText.isEmpty || !lonText.isEmpty {
                         Button("Clear") {
                             latText = ""
@@ -200,6 +226,19 @@ struct EditItemSheet: View {
                 }
             }
         }
+    }
+
+    /// Parses the two text fields into a coordinate pair when both
+    /// hold valid decimal-degree values within the geographic range.
+    /// Returns nil when either field is empty or out-of-range so the
+    /// map button doesn't appear for half-finished edits.
+    private func currentLatLon() -> (lat: Double, lon: Double)? {
+        let lt = latText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let ln = lonText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let lat = Double(lt), let lon = Double(ln),
+              (-90...90).contains(lat), (-180...180).contains(lon)
+        else { return nil }
+        return (lat, lon)
     }
 
     private var identifyRow: some View {
@@ -257,10 +296,14 @@ struct EditItemSheet: View {
                     promptText: prompt
                 )
                 await MainActor.run {
-                    // Fill Title only when blank — never clobber a
-                    // user-typed value, even mid-edit.
-                    let currentTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if currentTitle.isEmpty, let t = result.title, !t.isEmpty {
+                    // Always replace Title with the identified value
+                    // here — unlike the right-click path (which writes
+                    // immediately to the CLI), the dialog is a draft.
+                    // The user reviews and clicks Save or Cancel, so
+                    // overwriting placeholder titles like "unidentified"
+                    // / "IMG_1234.jpg" / etc. is the expected outcome.
+                    if let t = result.title?.trimmingCharacters(in: .whitespacesAndNewlines),
+                       !t.isEmpty {
                         title = t
                     }
                     // Append to Notes with a blank-line separator so

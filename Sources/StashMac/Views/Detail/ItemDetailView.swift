@@ -7,6 +7,7 @@ struct ItemDetailView: View {
     @State private var showDeleteConfirm = false
     @State private var showLinkSheet = false
     @State private var isFetchingContent = false
+    @State private var showLocationMapPopover = false
     @State private var isAddingTag = false
     @State private var newTagText = ""
     /// Inline-edit mode for the title. Double-click on the title
@@ -392,10 +393,11 @@ struct ItemDetailView: View {
     }
 
     /// Renders the single Location row: pin glyph + lat/lon (six
-    /// decimal places ≈ 11cm precision, plenty), an "Open in Maps"
-    /// link, and a small source badge so the user can tell at a
-    /// glance whether the value came from EXIF, mobile capture, or
-    /// a manual edit.
+    /// decimal places ≈ 11cm precision, plenty), a crosshair button
+    /// that pops up a MapKit preview with a pin, jump-out links to
+    /// Apple / Google Maps, and a small source badge so the user
+    /// can tell at a glance whether the value came from EXIF,
+    /// mobile capture, or a manual edit.
     @ViewBuilder
     private func locationRow(loc: ItemLocation) -> some View {
         HStack(spacing: 10) {
@@ -404,6 +406,16 @@ struct ItemDetailView: View {
             Text(String(format: "%.6f, %.6f", loc.lat, loc.lon))
                 .font(.callout.monospacedDigit())
                 .textSelection(.enabled)
+            Button {
+                showLocationMapPopover = true
+            } label: {
+                Image(systemName: "scope")
+            }
+            .buttonStyle(.borderless)
+            .help("Preview on a map")
+            .popover(isPresented: $showLocationMapPopover, arrowEdge: .top) {
+                LocationMapPopover(lat: loc.lat, lon: loc.lon)
+            }
             if let url = item.mapsURL {
                 Link("Open in Maps", destination: url)
                     .font(.caption)
