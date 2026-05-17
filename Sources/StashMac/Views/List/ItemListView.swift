@@ -238,6 +238,24 @@ struct ItemListView: View {
         }
         .onAppear { store.installItemDragMonitor() }
         .onDisappear { store.removeItemDragMonitor() }
+        // Merge picker sheet — attached at body level (not on a
+        // specific view-mode branch) so it presents from list,
+        // grid, and masonry views the same way. Without this the
+        // multi-select "Merge Selected…" menu item silently
+        // no-ops when the user isn't in grid mode.
+        .sheet(isPresented: $showMergeSheet) {
+            MergeItemsSheet(
+                items: mergePickerIDs.compactMap { id in
+                    store.items.first(where: { $0.id == id })
+                },
+                onMerge: { targetID, sourceIDs in
+                    store.mergeItems(targetID: targetID, sourceIDs: sourceIDs)
+                    store.selectedItems = [targetID]
+                    showMergeSheet = false
+                },
+                onCancel: { showMergeSheet = false }
+            )
+        }
     }
 
     /// True when the current navigation is a sidebar Collection.
@@ -419,19 +437,6 @@ struct ItemListView: View {
             .padding(14)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .sheet(isPresented: $showMergeSheet) {
-            MergeItemsSheet(
-                items: mergePickerIDs.compactMap { id in
-                    store.items.first(where: { $0.id == id })
-                },
-                onMerge: { targetID, sourceIDs in
-                    store.mergeItems(targetID: targetID, sourceIDs: sourceIDs)
-                    store.selectedItems = [targetID]
-                    showMergeSheet = false
-                },
-                onCancel: { showMergeSheet = false }
-            )
-        }
     }
 
     /// Tile click handling — modifier-aware multi-select that
