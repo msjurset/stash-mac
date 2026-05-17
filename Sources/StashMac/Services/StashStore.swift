@@ -1962,6 +1962,13 @@ final class StashStore {
         }
         let mime = item.mimeType ?? "image/jpeg"
         let prompt = prefs.promptText
+        // Collect the primary blob plus every attached file in
+        // carousel order. Multi-photo items (mushroom top/side/
+        // bottom, flower-plus-leaves) identify much better when
+        // the model sees every angle in one request.
+        let attachedURLs: [(URL, String)] = (item.files ?? []).compactMap { f in
+            FilePathResolver.resolve(storePath: f.storePath).map { ($0, f.mimeType ?? "image/jpeg") }
+        }
 
         identifyingItemIDs.insert(id)
         flashMessage = "Identifying \(shortID(id)) with \(provider.displayName)…"
@@ -1973,11 +1980,23 @@ final class StashStore {
                 // network call — the actual secret never leaves
                 // 1Password's keychain.
                 let resolvedKey = try await AIKeyResolver.resolve(key)
-                let bytes = try Data(contentsOf: url)
+                var images: [AIImage] = []
+                let primaryBytes = try Data(contentsOf: url)
+                images.append(AIImage(data: primaryBytes, mimeType: mime))
+                for (fileURL, fileMime) in attachedURLs {
+                    let data = try Data(contentsOf: fileURL)
+                    images.append(AIImage(data: data, mimeType: fileMime))
+                }
+                // Only downscale when bundling multiple — a single
+                // image at native quality gives the model the most
+                // detail and has always fit fine in the request
+                // budget. Stored blobs are never modified by this.
+                let sendImages = images.count > 1
+                    ? images.map { downscaleForIdentify($0) }
+                    : images
                 let result = try await provider.identify(
                     apiKey: resolvedKey,
-                    bytes: bytes,
-                    mimeType: mime,
+                    images: sendImages,
                     promptText: prompt
                 )
                 await self?.applyIdentifyResult(itemID: id, result: result)

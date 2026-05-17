@@ -280,6 +280,12 @@ struct EditItemSheet: View {
         let key = aiPrefs.apiKey
         let prompt = aiPrefs.promptText
         let mime = item.mimeType ?? "image/jpeg"
+        // Bundle primary + attached files so multi-photo items
+        // identify with full context. Same logic as the right-click
+        // → Identify path in StashStore.
+        let attachedURLs: [(URL, String)] = (item.files ?? []).compactMap { f in
+            FilePathResolver.resolve(storePath: f.storePath).map { ($0, f.mimeType ?? "image/jpeg") }
+        }
 
         isIdentifying = true
         identifyError = nil
@@ -288,11 +294,22 @@ struct EditItemSheet: View {
             defer { Task { @MainActor in isIdentifying = false } }
             do {
                 let resolved = try await AIKeyResolver.resolve(key)
-                let bytes = try Data(contentsOf: fileURL)
+                var images: [AIImage] = []
+                let primary = try Data(contentsOf: fileURL)
+                images.append(AIImage(data: primary, mimeType: mime))
+                for (u, m) in attachedURLs {
+                    let data = try Data(contentsOf: u)
+                    images.append(AIImage(data: data, mimeType: m))
+                }
+                // Single-image identify: send the original at full
+                // quality. Multi-image: downscale each so the
+                // bundle fits comfortably in the request budget.
+                let sendImages = images.count > 1
+                    ? images.map { downscaleForIdentify($0) }
+                    : images
                 let result = try await provider.identify(
                     apiKey: resolved,
-                    bytes: bytes,
-                    mimeType: mime,
+                    images: sendImages,
                     promptText: prompt
                 )
                 await MainActor.run {

@@ -58,27 +58,32 @@ struct ClaudeProvider: AIProvider {
     }
 
     /// Send the image bytes + prompt, return parsed Title / Notes.
+    /// Multi-image support mirrors the Gemini side: when more than
+    /// one image is sent, prefix the prompt with a hint so Claude
+    /// treats them as the same subject from different angles.
     func identify(
         apiKey: String,
-        bytes: Data,
-        mimeType: String,
+        images: [AIImage],
         promptText: String
     ) async throws -> AIIdentifyResult {
-        let base64 = bytes.base64EncodedString()
-        // Anthropic recommends image-first then text — image gets
+        guard !images.isEmpty else { throw ClaudeError.emptyResponse }
+        let effectivePrompt = images.count > 1
+            ? AIPrompts.multiImageHint(count: images.count) + promptText
+            : promptText
+        // Anthropic recommends image-first then text — images get
         // primed before the instruction lands.
+        var content: [ContentBlock] = []
+        for img in images {
+            content.append(.image(
+                mediaType: img.mimeType,
+                data: img.data.base64EncodedString()
+            ))
+        }
+        content.append(.text(effectivePrompt))
         let body = MessagesBody(
             model: model,
             max_tokens: maxTokens,
-            messages: [
-                Message(
-                    role: "user",
-                    content: [
-                        .image(mediaType: mimeType, data: base64),
-                        .text(promptText),
-                    ]
-                )
-            ]
+            messages: [Message(role: "user", content: content)]
         )
         let raw = try await postMessages(apiKey: apiKey, body: body)
         guard !raw.isEmpty else { throw ClaudeError.emptyResponse }

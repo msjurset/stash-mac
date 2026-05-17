@@ -51,22 +51,30 @@ struct GeminiProvider: AIProvider {
     }
 
     /// Send the image bytes + prompt, return parsed Title / Notes.
+    /// When `images` has more than one entry the prompt is prefixed
+    /// with a multi-image hint so the model treats them as one
+    /// subject. Single-image requests keep the original prompt.
     func identify(
         apiKey: String,
-        bytes: Data,
-        mimeType: String,
+        images: [AIImage],
         promptText: String
     ) async throws -> AIIdentifyResult {
+        guard !images.isEmpty else { throw GeminiError.emptyResponse }
         struct IdBody: Encodable { let contents: [Content] }
-        let base64 = bytes.base64EncodedString()
-        let body = IdBody(
-            contents: [
-                Content(parts: [
-                    Part(text: promptText, inlineData: nil),
-                    Part(text: nil, inlineData: InlineData(mimeType: mimeType, data: base64)),
-                ])
-            ]
-        )
+        let effectivePrompt = images.count > 1
+            ? AIPrompts.multiImageHint(count: images.count) + promptText
+            : promptText
+        var parts: [Part] = [Part(text: effectivePrompt, inlineData: nil)]
+        for img in images {
+            parts.append(Part(
+                text: nil,
+                inlineData: InlineData(
+                    mimeType: img.mimeType,
+                    data: img.data.base64EncodedString()
+                )
+            ))
+        }
+        let body = IdBody(contents: [Content(parts: parts)])
         let raw = try await postGenerate(apiKey: apiKey, body: body)
         guard !raw.isEmpty else { throw GeminiError.emptyResponse }
         return AIResponseParser.parse(raw)

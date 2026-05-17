@@ -40,12 +40,23 @@ protocol AIProvider: Sendable {
     func testKey(_ apiKey: String) async throws
 
     /// Send image bytes + prompt, return parsed title/notes.
+    /// Multi-image identify: when more than one image is supplied,
+    /// the provider should treat them as the same subject from
+    /// different angles. Implementations are responsible for
+    /// embedding all of them in the request body.
     func identify(
         apiKey: String,
-        bytes: Data,
-        mimeType: String,
+        images: [AIImage],
         promptText: String
     ) async throws -> AIIdentifyResult
+}
+
+/// Single image payload — used by the multi-image identify API.
+/// Plain Data + MIME so both the JPEG-EXIF auto-pull path and the
+/// HEIC/PNG passthrough work without conversion.
+struct AIImage: Sendable {
+    var data: Data
+    var mimeType: String
 }
 
 /// Concrete provider IDs known to the app. New providers should be
@@ -95,6 +106,58 @@ NOTES: <natural prose, three to six sentences. Open by naming the subject in pla
 
 If you can't identify confidently, write TITLE: Unknown and explain your best guess and the reasoning in NOTES.
 """
+
+    /// Prepended to the user's prompt when multiple images travel
+    /// in one identify request. Tells the model to treat the photos
+    /// as the same subject from different angles instead of N
+    /// unrelated items — fixes the "I can't tell which kind of
+    /// Wild Rose without the stem / leaves / thorns" case.
+    static func multiImageHint(count: Int) -> String {
+        "The following \(count) photos are of the same subject from different angles or states. Identify the subject using all photos together.\n\n"
+    }
+}
+
+// MARK: - Image downscaling (identify-only)
+
+import CoreGraphics
+import ImageIO
+import UniformTypeIdentifiers
+
+/// Re-encode an image at a smaller size for AI-identify requests.
+/// Used **only** in the identify path when multiple photos are
+/// bundled into one request — single-image identify always sends
+/// the original full-resolution bytes since one image fits cleanly
+/// in Gemini's / Claude's request budget. Stored blobs in stash
+/// are never touched by this.
+///
+/// Falls back to the original data when ImageIO can't decode the
+/// source (corrupt file, unsupported format) — the worst case is
+/// sending the full bytes.
+func downscaleForIdentify(
+    _ source: AIImage,
+    maxPixelSize: Int = 1024,
+    jpegQuality: CGFloat = 0.85
+) -> AIImage {
+    guard let cgSource = CGImageSourceCreateWithData(source.data as CFData, nil) else {
+        return source
+    }
+    let opts: [CFString: Any] = [
+        kCGImageSourceCreateThumbnailFromImageAlways: true,
+        kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
+        kCGImageSourceCreateThumbnailWithTransform: true,
+    ]
+    guard let cgImage = CGImageSourceCreateThumbnailAtIndex(cgSource, 0, opts as CFDictionary)
+    else { return source }
+    let outData = NSMutableData()
+    guard let dest = CGImageDestinationCreateWithData(
+        outData, UTType.jpeg.identifier as CFString, 1, nil
+    ) else { return source }
+    let destOpts: [CFString: Any] = [
+        kCGImageDestinationLossyCompressionQuality: jpegQuality,
+    ]
+    CGImageDestinationAddImage(dest, cgImage, destOpts as CFDictionary)
+    guard CGImageDestinationFinalize(dest) else { return source }
+    return AIImage(data: outData as Data, mimeType: "image/jpeg")
 }
 
 // MARK: - Shared response parsing
