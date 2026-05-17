@@ -56,9 +56,14 @@ This builds the app, creates the `.app` bundle with icon, and installs to `/Appl
 ## Build
 
 ```
-make build       # Compile release binary
-make bundle      # Build + create .app bundle
-make test        # Run tests
+make build           # Compile release binary
+make bundle          # Build + create .app bundle
+make test            # Run tests
+make phantom-check   # Launch app with STASH_PHANTOM_CHECK=1, exit non-zero
+                     # if the phantom autofill / inline-prediction popup is
+                     # observed in the window tree. Defaults to a 30s window
+                     # (set CHECK_SECONDS=N to extend); click around during
+                     # the run to exercise focus paths.
 ```
 
 ## Architecture

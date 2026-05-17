@@ -37,6 +37,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         UNUserNotificationCenter.current().requestAuthorization(
             options: [.alert, .sound]
         ) { _, _ in }
+
+        // Always-on watcher: scans the window tree every 0.5s and
+        // logs the first sighting of any predictive-text / Writing
+        // Tools / autofill-style subview. Runs in production so the
+        // unified log captures regressions during normal use.
+        PhantomPopupDetector.startWatching()
+
+        // Check mode for `make phantom-check`: launch with
+        // STASH_PHANTOM_CHECK=1 → app exits after a fixed window with
+        // status 0 (no hits) or 1 (any hit). Driver is the Makefile
+        // target; output goes to stderr.
+        let env = ProcessInfo.processInfo.environment
+        if env["STASH_PHANTOM_CHECK"] == "1" {
+            let seconds: TimeInterval =
+                Double(env["STASH_PHANTOM_CHECK_SECONDS"] ?? "") ?? 30
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(seconds))
+                let hits = PhantomPopupDetector.observedHits
+                let prefix = "STASH_PHANTOM_CHECK"
+                if hits.isEmpty {
+                    let msg = "\(prefix) ok (no hits in \(Int(seconds))s)\n"
+                    FileHandle.standardError.write(Data(msg.utf8))
+                    exit(0)
+                } else {
+                    var summary = "\(prefix) FAIL: \(hits.count) hit(s)\n"
+                    for h in hits {
+                        summary += """
+                              - \(h.className) in "\(h.windowTitle)" \
+                            frame=\(Int(h.frame.width))x\(Int(h.frame.height)) \
+                            hasText=\(h.hasTextDescendants)
+
+                            """
+                    }
+                    FileHandle.standardError.write(Data(summary.utf8))
+                    exit(1)
+                }
+            }
+        }
     }
 
     deinit {

@@ -62,4 +62,33 @@ clean:
 test:
 	swift test
 
-.PHONY: build bundle icon deploy clean test cert
+# Launches the installed app with STASH_PHANTOM_CHECK=1, which makes
+# it run the phantom-popup watcher and exit after a fixed window with
+# status 0 (no hits) or 1 (popup observed). The exec runs Stash
+# foreground so any STASH_PHANTOM_POPUP_HIT line on stderr is visible
+# in the make output. CHECK_SECONDS is tunable so you can keep it open
+# longer while you click around exercising trigger surfaces.
+#
+# NB: this scans passively — actually exercising every focus path
+# (sheets, popovers, inline edits) still requires the user to click
+# around during the window. Increase CHECK_SECONDS for that.
+CHECK_SECONDS ?= 30
+phantom-check:
+	@if [ ! -x "$(INSTALL_DIR)/$(BUNDLE)/Contents/MacOS/$(APP_NAME)" ]; then \
+		echo "$(BUNDLE) is not installed. Run 'make deploy' first." >&2; \
+		exit 2; \
+	fi
+	@pkill -9 -f "$(APP_NAME)" 2>/dev/null || true
+	@sleep 1
+	@echo "Running phantom-popup check for $(CHECK_SECONDS)s — click around the app to exercise trigger surfaces…"
+	@STASH_PHANTOM_CHECK=1 STASH_PHANTOM_CHECK_SECONDS=$(CHECK_SECONDS) \
+		"$(INSTALL_DIR)/$(BUNDLE)/Contents/MacOS/$(APP_NAME)" 2>&1; \
+	status=$$?; \
+	if [ $$status -eq 0 ]; then \
+		echo "✓ Phantom-popup check passed (no hits in $(CHECK_SECONDS)s)"; \
+	else \
+		echo "✗ Phantom-popup check FAILED — see hits above"; \
+	fi; \
+	exit $$status
+
+.PHONY: build bundle icon deploy clean test cert phantom-check
