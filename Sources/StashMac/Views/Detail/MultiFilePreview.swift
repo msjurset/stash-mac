@@ -32,12 +32,43 @@ struct MultiFilePreview: View {
     private var mainPreview: some View {
         if let url = activeFileURL {
             ImagePreviewSection(fileURL: url)
+        } else if !anySlotResolves, let fallback = thumbnailFallbackURL {
+            // Every slot's blob has gone missing on disk (dedup
+            // delete, manual cleanup, broken backup restore). Show
+            // the cached canonical thumbnail so the user can still
+            // identify what the item is, and surface the heal
+            // banner so they have a one-click path to refetching.
+            VStack(alignment: .leading, spacing: 6) {
+                ImagePreviewSection(fileURL: fallback)
+                MissingBlobBanner(itemID: item.id)
+            }
         } else {
-            // Blob missing on disk — show a placeholder rather than
-            // crashing. Most commonly seen for archived/deleted
-            // files we still have a row for.
+            // Selected slot's blob is missing but other slots still
+            // resolve — let the user click another filmstrip tile
+            // rather than overlaying a heal banner that doesn't
+            // apply to the whole item.
             placeholder("Image not available")
         }
+    }
+
+    /// True when at least one slot (primary or attached) resolves to
+    /// an on-disk file. Used to decide between the per-slot
+    /// "Image not available" placeholder and the item-wide
+    /// thumbnail-plus-banner fallback.
+    private var anySlotResolves: Bool {
+        allSlots.contains { $0.url != nil }
+    }
+
+    /// URL of the cached canonical thumbnail (the file stash itself
+    /// generated and the list/grid views reuse), or nil if the
+    /// thumbnail is missing too.
+    private var thumbnailFallbackURL: URL? {
+        guard let rel = item.thumbnailPath, !rel.isEmpty,
+              let url = FilePathResolver.resolveRelative(rel),
+              FileManager.default.fileExists(atPath: url.path) else {
+            return nil
+        }
+        return url
     }
 
     /// Horizontally-scrolling row of thumbnails — primary first,

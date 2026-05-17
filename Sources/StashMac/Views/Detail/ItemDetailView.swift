@@ -78,12 +78,15 @@ struct ItemDetailView: View {
                                 FileManager.default.fileExists(atPath: url.path)
                                     ? url : nil
                             }
-                        if primaryURL != nil, let files = item.files, !files.isEmpty {
+                        if let files = item.files, !files.isEmpty {
                             // Items with attached files render a
                             // carousel + filmstrip; single-file items
                             // stay on the lean ImagePreviewSection so we
                             // don't pay the LazyHStack / drop-target
-                            // overhead on the 99% case.
+                            // overhead on the 99% case. MultiFilePreview
+                            // owns the missing-primary-blob fallback for
+                            // these items (cached thumbnail + heal
+                            // banner when every slot has lost its blob).
                             MultiFilePreview(item: item)
                         } else if let primary = primaryURL {
                             ImagePreviewSection(fileURL: primary)
@@ -690,7 +693,7 @@ struct FlowLayout: Layout {
 /// the item's source URL when possible. Pairs with the existing
 /// Health-Check workflow but appears in the detail pane itself
 /// so the user notices immediately.
-private struct MissingBlobBanner: View {
+struct MissingBlobBanner: View {
     let itemID: String
     @Environment(StashStore.self) private var store
     @State private var isHealing = false
