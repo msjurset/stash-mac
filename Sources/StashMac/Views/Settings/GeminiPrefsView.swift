@@ -122,7 +122,7 @@ struct AIPrefsView: View {
             EmptyView()
         }
         .labelsHidden()
-        .pickerStyle(.segmented)
+        .pickerStyle(.radioGroup)
     }
 
     private var keyRow: some View {

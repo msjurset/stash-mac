@@ -15,7 +15,7 @@ struct GeminiProvider: AIProvider {
     var displayName: String { "Google Gemini" }
     var keyPlaceholder: String { "AIza…" }
     var keyURL: URL { URL(string: "https://aistudio.google.com/app/apikey")! }
-    var defaultPrompt: String { Self.defaultPromptText }
+    var defaultPrompt: String { AIPrompts.defaultIdentify }
 
     var model: String = "gemini-2.5-flash"
     var urlSession: URLSession = .shared
@@ -69,7 +69,7 @@ struct GeminiProvider: AIProvider {
         )
         let raw = try await postGenerate(apiKey: apiKey, body: body)
         guard !raw.isEmpty else { throw GeminiError.emptyResponse }
-        return Self.parseResponse(raw)
+        return AIResponseParser.parse(raw)
     }
 
     // MARK: - Wire types
@@ -151,103 +151,5 @@ struct GeminiProvider: AIProvider {
             let text = String(data: data, encoding: .utf8) ?? ""
             throw GeminiError.decode("\(error.localizedDescription) — head: \(text.prefix(160))")
         }
-    }
-
-    // MARK: - Response parsing
-
-    /// Extract Title + Notes from a Gemini response, robust to the
-    /// most common variations the model produces:
-    ///   - explicit "TITLE: ..." / "NOTES: ..." (the format the
-    ///     default prompt asks for)
-    ///   - "Common Name: ..." / "Description: ..." (the strongly-
-    ///     trained natural fallback)
-    ///   - markdown wrappers (`**TITLE:**`)
-    ///
-    /// If no title marker matches, title returns nil and the entire
-    /// response goes in notes.
-    static func parseResponse(_ raw: String) -> AIIdentifyResult {
-        let titleMarkers = ["TITLE", "Title", "Common Name", "Common name", "Name", "Subject"]
-        let notesMarkers = ["NOTES", "Notes", "Description", "Details"]
-
-        let lines = raw.components(separatedBy: "\n")
-
-        var title: String? = nil
-        var notes: String? = nil
-
-        for line in lines {
-            if title == nil, let val = extractValue(line, markers: titleMarkers) {
-                title = val.cleanInlineMarkers()
-            }
-            if notes == nil, let val = extractValue(line, markers: notesMarkers) {
-                notes = val.cleanInlineMarkers()
-            }
-            if title != nil && notes != nil { break }
-        }
-
-        let notesText: String
-        if let n = notes {
-            notesText = n
-        } else {
-            // Fall back: everything except the matched title line.
-            let filtered = lines.filter { line in
-                extractValue(line, markers: titleMarkers) == nil
-            }
-            let joined = filtered.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-            notesText = joined.isEmpty ? raw : joined
-        }
-
-        return AIIdentifyResult(
-            title: title?.isEmpty == false ? title : nil,
-            notes: notesText
-        )
-    }
-
-    private static func extractValue(_ line: String, markers: [String]) -> String? {
-        let trimmed = line.drop { $0 == " " || $0 == "\t" }
-        let stripped = String(trimmed).trimmingCharacters(in: CharacterSet(charactersIn: "*_ "))
-        for m in markers {
-            let needle = "\(m):"
-            if let r = stripped.range(of: needle, options: [.caseInsensitive, .anchored]) {
-                let value = String(stripped[r.upperBound...])
-                    .trimmingCharacters(in: .whitespaces)
-                    .trimmingCharacters(in: CharacterSet(charactersIn: "*_"))
-                    .trimmingCharacters(in: .whitespaces)
-                return value
-            }
-        }
-        return nil
-    }
-
-    // MARK: - Default prompt
-
-    /// Default identify prompt — mirrors the Android client's default
-    /// so cross-device output stays consistent. User can override in
-    /// Settings → AI.
-    static let defaultPromptText: String = """
-Identify the main subject in this photo.
-
-Respond with exactly these two lines, no preamble, no markdown:
-
-TITLE: <common name; include scientific name in parentheses when applicable>
-NOTES: <natural prose, three to six sentences. Open by naming the subject in plain language — e.g. "This is the YYYY mushroom (Scientificus nameus), also known as XXXX..." or "This is the eastern bluebird (Sialia sialis), a small thrush native to..." Then cover, where relevant: notable visual characteristics; habitat, range, or season; edibility / toxicity / safety; species commonly confused with it; what specific features visible in this photo helped identify it; and any other interesting facts a curious naturalist would want to know. Be generous with detail — the user will trim what they don't want.>
-
-If you can't identify confidently, write TITLE: Unknown and explain your best guess and the reasoning in NOTES.
-"""
-}
-
-private extension String {
-    /// Strip leading/trailing markdown bold/italic markers off a
-    /// single value — Gemini occasionally wraps the value even when
-    /// asked for plain text.
-    func cleanInlineMarkers() -> String {
-        var s = trimmingCharacters(in: .whitespaces)
-        for marker in ["**", "__", "*", "_"] {
-            if s.hasPrefix(marker) && s.hasSuffix(marker) && s.count > marker.count * 2 {
-                let start = s.index(s.startIndex, offsetBy: marker.count)
-                let end = s.index(s.endIndex, offsetBy: -marker.count)
-                s = String(s[start..<end]).trimmingCharacters(in: .whitespaces)
-            }
-        }
-        return s
     }
 }

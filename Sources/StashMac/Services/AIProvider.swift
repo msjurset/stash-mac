@@ -52,7 +52,7 @@ protocol AIProvider: Sendable {
 /// added here AND in `AIProviderRegistry.provider(for:)`.
 enum AIProviderID: String, CaseIterable, Codable, Hashable, Identifiable {
     case gemini
-    // case claude   // future — see comment on AIProvider.
+    case claude
     // case openai   // future — see comment on AIProvider.
 
     var id: String { rawValue }
@@ -67,11 +67,112 @@ enum AIProviderRegistry {
         switch id {
         case .gemini:
             return GeminiProvider()
+        case .claude:
+            return ClaudeProvider()
         }
     }
 
     /// All registered providers, in picker / menu display order.
     static var all: [AIProvider] {
         AIProviderID.allCases.map { provider(for: $0) }
+    }
+}
+
+// MARK: - Shared defaults
+
+/// Shared default identify prompt — same shape (TITLE: / NOTES:)
+/// across providers so the Mac response parser works on any of
+/// them. Mirrors the Android client's default for cross-device
+/// consistency. Per-provider overrides live in `AIPrefsStore`.
+enum AIPrompts {
+    static let defaultIdentify: String = """
+Identify the main subject in this photo.
+
+Respond with exactly these two lines, no preamble, no markdown:
+
+TITLE: <common name; include scientific name in parentheses when applicable>
+NOTES: <natural prose, three to six sentences. Open by naming the subject in plain language — e.g. "This is the YYYY mushroom (Scientificus nameus), also known as XXXX..." or "This is the eastern bluebird (Sialia sialis), a small thrush native to..." Then cover, where relevant: notable visual characteristics; habitat, range, or season; edibility / toxicity / safety; species commonly confused with it; what specific features visible in this photo helped identify it; and any other interesting facts a curious naturalist would want to know. Be generous with detail — the user will trim what they don't want.>
+
+If you can't identify confidently, write TITLE: Unknown and explain your best guess and the reasoning in NOTES.
+"""
+}
+
+// MARK: - Shared response parsing
+
+/// Robust title/notes extractor shared by every provider. Handles:
+///   - explicit "TITLE: ..." / "NOTES: ..." (the format the default
+///     prompt asks for)
+///   - "Common Name: ..." / "Description: ..." natural fallback
+///   - markdown wrappers (`**TITLE:**`)
+///
+/// If no title marker matches, title returns nil and the entire
+/// response goes in notes.
+enum AIResponseParser {
+    static func parse(_ raw: String) -> AIIdentifyResult {
+        let titleMarkers = ["TITLE", "Title", "Common Name", "Common name", "Name", "Subject"]
+        let notesMarkers = ["NOTES", "Notes", "Description", "Details"]
+
+        let lines = raw.components(separatedBy: "\n")
+        var title: String? = nil
+        var notes: String? = nil
+
+        for line in lines {
+            if title == nil, let val = extractValue(line, markers: titleMarkers) {
+                title = val.cleanInlineMarkers()
+            }
+            if notes == nil, let val = extractValue(line, markers: notesMarkers) {
+                notes = val.cleanInlineMarkers()
+            }
+            if title != nil && notes != nil { break }
+        }
+
+        let notesText: String
+        if let n = notes {
+            notesText = n
+        } else {
+            let filtered = lines.filter { line in
+                extractValue(line, markers: titleMarkers) == nil
+            }
+            let joined = filtered.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            notesText = joined.isEmpty ? raw : joined
+        }
+
+        return AIIdentifyResult(
+            title: title?.isEmpty == false ? title : nil,
+            notes: notesText
+        )
+    }
+
+    private static func extractValue(_ line: String, markers: [String]) -> String? {
+        let trimmed = line.drop { $0 == " " || $0 == "\t" }
+        let stripped = String(trimmed).trimmingCharacters(in: CharacterSet(charactersIn: "*_ "))
+        for m in markers {
+            let needle = "\(m):"
+            if let r = stripped.range(of: needle, options: [.caseInsensitive, .anchored]) {
+                let value = String(stripped[r.upperBound...])
+                    .trimmingCharacters(in: .whitespaces)
+                    .trimmingCharacters(in: CharacterSet(charactersIn: "*_"))
+                    .trimmingCharacters(in: .whitespaces)
+                return value
+            }
+        }
+        return nil
+    }
+}
+
+extension String {
+    /// Strip leading/trailing markdown bold/italic markers off a
+    /// single value — the model occasionally wraps the value even
+    /// when asked for plain text.
+    func cleanInlineMarkers() -> String {
+        var s = trimmingCharacters(in: .whitespaces)
+        for marker in ["**", "__", "*", "_"] {
+            if s.hasPrefix(marker) && s.hasSuffix(marker) && s.count > marker.count * 2 {
+                let start = s.index(s.startIndex, offsetBy: marker.count)
+                let end = s.index(s.endIndex, offsetBy: -marker.count)
+                s = String(s[start..<end]).trimmingCharacters(in: .whitespaces)
+            }
+        }
+        return s
     }
 }
