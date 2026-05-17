@@ -17,6 +17,7 @@ struct StashItem: Codable, Identifiable, Hashable {
     var createdAt: Date
     var updatedAt: Date
     var location: ItemLocation?
+    var files: [ItemFile]?
     var tags: [StashTag]?
     var collections: [StashCollection]?
     var links: [StashLink]?
@@ -93,4 +94,23 @@ struct ItemLocation: Codable, Hashable {
     var lat: Double
     var lon: Double
     var source: String?
+}
+
+/// Additional photo / file attached to an item beyond its primary
+/// store_path. Items default to single-file (the primary lives on
+/// `storePath`/`contentHash`); rows accumulate when the user
+/// attaches extra angles or states of the same subject — mushroom
+/// top/side/bottom, bird male/female, etc. Loaded via
+/// `stash files` / `GET /items/{id}` and rendered as the carousel
+/// strip in the detail pane.
+struct ItemFile: Codable, Identifiable, Hashable {
+    var id: Int64
+    var itemId: String
+    var storePath: String
+    var contentHash: String
+    var mimeType: String?
+    var fileSize: Int64?
+    var caption: String?
+    var position: Int
+    var createdAt: Date
 }

@@ -159,6 +159,53 @@ actor StashCLI {
         _ = try await captureOutput(args: ["copy", id, "--field", field])
     }
 
+    // MARK: - Multi-file items (attach / detach / reorder / merge)
+
+    /// Attach a local file as an additional photo on an existing
+    /// item. Drives `stash attach`. Returns the refreshed item with
+    /// the new ItemFile included in its `files` array.
+    func attachFile(itemID: String, path: String, caption: String? = nil) async throws -> StashItem {
+        var args = ["attach", itemID, path]
+        if let caption, !caption.isEmpty {
+            args += ["--caption", caption]
+        }
+        _ = try await captureOutput(args: args)
+        return try await captureJSON(args: ["show", itemID, "--json"])
+    }
+
+    /// Detach an attached file. `index` is 1-based — `0` is the
+    /// primary and can't be detached (use `promoteFile` first).
+    func detachFile(itemID: String, index: Int) async throws -> StashItem {
+        _ = try await captureOutput(args: ["detach", itemID, "\(index)"])
+        return try await captureJSON(args: ["show", itemID, "--json"])
+    }
+
+    /// Promote an attached file to be the new primary. The previous
+    /// primary becomes attachment position 0 — nothing is lost.
+    func promoteFile(itemID: String, index: Int) async throws -> StashItem {
+        _ = try await captureOutput(args: ["primary", itemID, "\(index)"])
+        return try await captureJSON(args: ["show", itemID, "--json"])
+    }
+
+    /// Reorder the carousel. `attachmentIndices` is the new order
+    /// of attached-file slots (1-based, primary excluded).
+    func reorderFiles(itemID: String, attachmentIndices: [Int]) async throws -> StashItem {
+        var args = ["reorder", itemID]
+        for i in attachmentIndices { args.append("\(i)") }
+        _ = try await captureOutput(args: args)
+        return try await captureJSON(args: ["show", itemID, "--json"])
+    }
+
+    /// Merge one or more source items into a target. Source primaries
+    /// become attached files of target, tags union, notes append
+    /// below "---", sources are deleted. Returns the merged target.
+    func mergeItems(targetID: String, sourceIDs: [String]) async throws -> StashItem {
+        var args = ["merge", targetID]
+        args.append(contentsOf: sourceIDs)
+        _ = try await captureOutput(args: args)
+        return try await captureJSON(args: ["show", targetID, "--json"])
+    }
+
     /// Run a focused URL recheck on a single item via
     /// `stash check --urls --id <id> --json`. Returns true if the
     /// URL is still broken, false if it now responds OK. Used by

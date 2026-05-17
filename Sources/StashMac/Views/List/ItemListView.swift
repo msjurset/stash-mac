@@ -40,6 +40,12 @@ struct ItemListView: View {
     /// inside-popover tap gesture.
     @State private var shownThumbnailID: String?
 
+    /// Merge-items picker state. `mergePickerIDs` holds the
+    /// multi-selection that opened the sheet; the sheet displays
+    /// them as radio choices for which one is the keeper.
+    @State private var showMergeSheet = false
+    @State private var mergePickerIDs: [String] = []
+
     struct TagPickerTarget: Equatable {
         let id: String                 // the right-clicked row id (anchor)
         let itemIDs: [String]          // items the picker applies to
@@ -413,6 +419,19 @@ struct ItemListView: View {
             .padding(14)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .sheet(isPresented: $showMergeSheet) {
+            MergeItemsSheet(
+                items: mergePickerIDs.compactMap { id in
+                    store.items.first(where: { $0.id == id })
+                },
+                onMerge: { targetID, sourceIDs in
+                    store.mergeItems(targetID: targetID, sourceIDs: sourceIDs)
+                    store.selectedItems = [targetID]
+                    showMergeSheet = false
+                },
+                onCancel: { showMergeSheet = false }
+            )
+        }
     }
 
     /// Tile click handling — modifier-aware multi-select that
@@ -722,6 +741,19 @@ struct ItemListView: View {
             }
             Button("Export Selected (\(selected.count))…") {
                 exportSelection(ids: Array(selected))
+            }
+            // Merge — fold N-1 of the selected items into the Nth.
+            // Most useful for the duplicate-Canna-Lily case: user
+            // selects both copies and merges them into a single item
+            // whose carousel holds both photos. Picker UI lives in
+            // MergeItemsSheet which lets the user pick which copy
+            // is the keeper before committing.
+            if selected.count >= 2 {
+                Divider()
+                Button("Merge Selected (\(selected.count))…") {
+                    mergePickerIDs = Array(selected)
+                    showMergeSheet = true
+                }
             }
             Divider()
             Button("Archive All") {

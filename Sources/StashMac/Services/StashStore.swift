@@ -2021,4 +2021,68 @@ final class StashStore {
         }
     }
 
+    // MARK: - Multi-file items
+
+    /// Attach a local file to an item as an additional photo
+    /// (carousel slide). Flash-messages the result and refreshes
+    /// the store so the detail pane re-renders with the new file.
+    func attachFile(to itemID: String, path: String, caption: String? = nil) {
+        flashMessage = "Attaching…"
+        Task {
+            do {
+                _ = try await cli.attachFile(itemID: itemID, path: path, caption: caption)
+                flashMessage = "File attached ✓"
+                refresh()
+            } catch {
+                flashMessage = nil
+                self.error = "Couldn't attach file: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    /// Detach an attached file by its 1-based attachment index
+    /// (0 = primary, can't be detached this way).
+    func detachFile(from itemID: String, index: Int) {
+        Task {
+            do {
+                _ = try await cli.detachFile(itemID: itemID, index: index)
+                flashMessage = "File detached ✓"
+                refresh()
+            } catch {
+                self.error = "Couldn't detach file: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    /// Promote an attached file to be the new primary/cover.
+    func promoteFile(in itemID: String, index: Int) {
+        Task {
+            do {
+                _ = try await cli.promoteFile(itemID: itemID, index: index)
+                flashMessage = "Primary set ✓"
+                refresh()
+            } catch {
+                self.error = "Couldn't set primary: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    /// Merge a list of source items into the target. Used by the
+    /// "Merge into…" context-menu action — typical case: two
+    /// captures of the same subject collapsed into one item with
+    /// the duplicate's photo as a second slide.
+    func mergeItems(targetID: String, sourceIDs: [String]) {
+        guard !sourceIDs.isEmpty else { return }
+        flashMessage = "Merging \(sourceIDs.count) item(s)…"
+        Task {
+            do {
+                _ = try await cli.mergeItems(targetID: targetID, sourceIDs: sourceIDs)
+                flashMessage = "Merged ✓"
+                refresh()
+            } catch {
+                flashMessage = nil
+                self.error = "Couldn't merge: \(error.localizedDescription)"
+            }
+        }
+    }
 }

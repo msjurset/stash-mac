@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ItemDetailView: View {
     @Environment(StashStore.self) private var store
@@ -67,7 +68,19 @@ struct ItemDetailView: View {
                 if item.type == .image, let storePath = item.storePath,
                    let fileURL = FilePathResolver.resolve(storePath: storePath) {
                     DetailSection(title: "Preview") {
-                        ImagePreviewSection(fileURL: fileURL)
+                        // Items with attached files render a
+                        // carousel + filmstrip; single-file items
+                        // stay on the lean ImagePreviewSection so we
+                        // don't pay the LazyHStack / drop-target
+                        // overhead on the 99% case.
+                        if let files = item.files, !files.isEmpty {
+                            MultiFilePreview(item: item)
+                        } else {
+                            ImagePreviewSection(fileURL: fileURL)
+                                .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+                                    attachDroppedFiles(providers: providers)
+                                }
+                        }
                     }
                 }
 
@@ -430,6 +443,26 @@ struct ItemDetailView: View {
             }
             Spacer()
         }
+    }
+
+    /// Single-file preview's drop-target callback. Promotes the
+    /// item from "one file" to "carousel" by attaching the dropped
+    /// file(s) as additional slides. The store refresh will swap
+    /// the rendered view from ImagePreviewSection to MultiFilePreview
+    /// on the next pass.
+    private func attachDroppedFiles(providers: [NSItemProvider]) -> Bool {
+        var attached = 0
+        for p in providers where p.canLoadObject(ofClass: URL.self) {
+            _ = p.loadObject(ofClass: URL.self) { url, _ in
+                guard let url, url.isFileURL else { return }
+                let path = url.path(percentEncoded: false)
+                Task { @MainActor in
+                    store.attachFile(to: item.id, path: path)
+                }
+            }
+            attached += 1
+        }
+        return attached > 0
     }
 
     private func refetchContent() {
