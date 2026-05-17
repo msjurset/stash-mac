@@ -386,6 +386,17 @@ final class StashStore {
     private var suppressNavigationChange = false
     private var ingestObserver: NSObjectProtocol?
 
+    /// Polls ~/.stash/stash.db for modification-time changes so the
+    /// All-items view refreshes when an item lands via stash serve
+    /// (Android sync), a CLI in another terminal, or any out-of-
+    /// process writer. 5-second cadence — the latency is well under
+    /// what feels "live" while keeping idle CPU near zero. Posts
+    /// the existing `.stashDidIngest` notification, so every
+    /// downstream observer reacts the same way it does for in-app
+    /// captures (loadAll, smart-collection refresh, etc).
+    private var dbPollTask: Task<Void, Never>?
+    private var lastDBModTime: Date?
+
     var fetchedItem: StashItem?
 
     init() {
@@ -395,6 +406,51 @@ final class StashStore {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor in self?.handleIngest() }
+        }
+        startDatabasePolling()
+    }
+
+    /// Background task that watches `~/.stash/stash.db` (+ its WAL
+    /// sidecar) for modification-time changes — fires when items
+    /// land via `stash serve` (Android sync), the CLI from a
+    /// terminal, or any other writer. Posts `.stashDidIngest` so
+    /// the existing observer chain (loadAll, smart-collection
+    /// refresh, rule-activity panel, etc.) reacts the same way it
+    /// already does for in-app captures.
+    @MainActor
+    private func startDatabasePolling() {
+        dbPollTask?.cancel()
+        dbPollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(5))
+                guard let self, !Task.isCancelled else { break }
+                await self.checkDatabaseModification()
+            }
+        }
+    }
+
+    @MainActor
+    private func checkDatabaseModification() {
+        let paths: [String] = [
+            "stash.db", "stash.db-wal",
+        ].map { (NSString(string: "~/.stash/\($0)") as NSString).expandingTildeInPath }
+        let latest = paths.compactMap { path -> Date? in
+            guard let attrs = try? FileManager.default.attributesOfItem(atPath: path) else {
+                return nil
+            }
+            return attrs[.modificationDate] as? Date
+        }.max()
+        guard let latest else { return }
+        // First sample seeds the baseline — don't fire a refresh
+        // on app launch just because we've never seen the file
+        // before.
+        guard let previous = lastDBModTime else {
+            lastDBModTime = latest
+            return
+        }
+        if latest > previous {
+            lastDBModTime = latest
+            NotificationCenter.default.post(name: .stashDidIngest, object: nil)
         }
     }
 
