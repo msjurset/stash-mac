@@ -200,7 +200,7 @@ actor StashCLI {
         let start: Date
         let end: Date
         let itemCount: Int
-        let itemIds: [String]
+        let items: [TripItem]
         let suggestedName: String
         let score: Double
         let sharedTags: [String]?
@@ -212,9 +212,22 @@ actor StashCLI {
             let lon: Double
         }
 
+        /// Per-item preview: enough metadata to render a filmstrip
+        /// and let the user verify what they're about to bundle
+        /// without a second round trip per item.
+        struct TripItem: Codable, Equatable, Hashable {
+            let id: String
+            let title: String?
+            let type: String?
+            let thumbnailPath: String?
+        }
+
+        /// Convenience for the accept path — just the ID list.
+        var itemIds: [String] { items.map(\.id) }
+
         // Synthesize a stable identity from the first item ID + score
         // so SwiftUI lists don't re-shuffle on every refresh.
-        var id: String { (itemIds.first ?? "?") + "|" + String(score) }
+        var id: String { (items.first?.id ?? "?") + "|" + String(score) }
     }
 
     /// Drive `stash trip-suggest --json`. Default flags match the CLI

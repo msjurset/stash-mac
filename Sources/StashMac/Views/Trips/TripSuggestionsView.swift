@@ -203,6 +203,8 @@ private struct SuggestionCard: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
+            filmstrip
+
             if let shared = suggestion.sharedTags, !shared.isEmpty {
                 HStack(spacing: 4) {
                     Image(systemName: "tag")
@@ -248,6 +250,34 @@ private struct SuggestionCard: View {
         )
     }
 
+    /// Horizontal preview row showing the first ~8 items in the
+    /// cluster. Hover any tile to see its title; clicking is
+    /// intentionally a no-op (don't whisk the user off mid-review).
+    /// Items beyond the preview slot collapse into a "+N" badge.
+    private var filmstrip: some View {
+        let preview = Array(suggestion.items.prefix(filmstripLimit))
+        let remaining = suggestion.items.count - preview.count
+        return HStack(spacing: 6) {
+            ForEach(preview, id: \.id) { item in
+                FilmstripTile(item: item)
+            }
+            if remaining > 0 {
+                Text("+\(remaining)")
+                    .font(.caption2.bold().monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(width: 48, height: 48)
+                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 4))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 4)
+                            .stroke(.quaternary, lineWidth: 1)
+                    )
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    private var filmstripLimit: Int { 8 }
+
     private var rangeString: String {
         let sameDay = Calendar.current.isDate(
             suggestion.start, inSameDayAs: suggestion.end
@@ -256,6 +286,47 @@ private struct SuggestionCard: View {
             return Self.dayFormatter.string(from: suggestion.start)
         }
         return "\(Self.dayFormatter.string(from: suggestion.start)) → \(Self.dayFormatter.string(from: suggestion.end))"
+    }
+}
+
+// MARK: - Filmstrip tile
+
+private struct FilmstripTile: View {
+    let item: StashCLI.TripSuggestion.TripItem
+
+    var body: some View {
+        AsyncThumbnailImage(
+            relativePath: item.thumbnailPath,
+            fallback: {
+                ZStack {
+                    Rectangle().fill(.secondary.opacity(0.15))
+                    Text(iconFor(type: item.type))
+                        .font(.title3)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        )
+        .frame(width: 48, height: 48)
+        .clipShape(RoundedRectangle(cornerRadius: 4))
+        .overlay(
+            RoundedRectangle(cornerRadius: 4)
+                .stroke(.quaternary, lineWidth: 1)
+        )
+        .help(item.title?.isEmpty == false ? item.title! : item.id)
+    }
+
+    /// Emoji that mirrors what the help/list views use for the item
+    /// type. Keeps the filmstrip readable even when thumbnails are
+    /// missing (older items pre-thumbnail-backfill, snippet/email).
+    private func iconFor(type: String?) -> String {
+        switch type {
+        case "image":   return "🖼️"
+        case "url":     return "🌐"
+        case "file":    return "📁"
+        case "snippet": return "📄"
+        case "email":   return "✉️"
+        default:        return "•"
+        }
     }
 }
 
