@@ -287,32 +287,26 @@ struct SidebarView: View {
         } header: {
             HStack(spacing: 4) {
                 Text("Collections")
-                // Recent/Frequent toggle — picker rendered as a
-                // segmented menu so it stays compact in the
-                // section header. Only governs the cap-at-N Static
-                // Collections strip; Smart Collections are
-                // unaffected.
-                Menu {
-                    ForEach(StashStore.CollectionsSortMode.allCases) { mode in
-                        Button {
-                            store.collectionsSortMode = mode
-                        } label: {
-                            if mode == store.collectionsSortMode {
-                                Label(mode.label, systemImage: "checkmark")
-                            } else {
-                                Text(mode.label)
-                            }
-                        }
-                    }
-                } label: {
-                    Text(store.collectionsSortMode.label)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                Spacer()
+                // Recent / Frequent — two side-by-side icon
+                // toggles, mutually exclusive. Same shape Homebar
+                // uses for its Recent / Frequent device picker.
+                // Centered between the section title and the
+                // see-all / + icons.
+                HStack(spacing: 2) {
+                    SortModeIcon(
+                        systemImage: "clock",
+                        active: store.collectionsSortMode == .recent,
+                        help: "Recent — sort by latest item-add",
+                        onTap: { store.collectionsSortMode = .recent }
+                    )
+                    SortModeIcon(
+                        systemImage: "chart.bar",
+                        active: store.collectionsSortMode == .frequent,
+                        help: "Frequent — sort by view count",
+                        onTap: { store.collectionsSortMode = .frequent }
+                    )
                 }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-                .help("Sort: recent activity vs. frequency of access")
                 Spacer()
                 // "Show all" — the cap-at-N slice doesn't include
                 // every Static Collection; this popover lets the
@@ -635,5 +629,32 @@ private struct RenameTagSheet: View {
             }
         }
         .padding(20)
+    }
+}
+
+/// Compact icon toggle for the sidebar Collections section's
+/// Recent / Frequent picker. Active state gets a translucent
+/// accent-tinted background circle — same visual treatment Apple
+/// uses for selected toolbar items in the Files-style scenes, and
+/// what Homebar uses for its Recent / Frequent device picker.
+private struct SortModeIcon: View {
+    let systemImage: String
+    let active: Bool
+    let help: String
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            Image(systemName: systemImage)
+                .font(.caption.weight(active ? .semibold : .regular))
+                .foregroundStyle(active ? Color.accentColor : .secondary)
+                .frame(width: 20, height: 20)
+                .background(
+                    Circle()
+                        .fill(active ? Color.accentColor.opacity(0.15) : .clear)
+                )
+        }
+        .buttonStyle(.plain)
+        .help(help)
     }
 }

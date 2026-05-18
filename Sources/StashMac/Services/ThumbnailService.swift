@@ -140,7 +140,14 @@ final class ThumbnailService {
         case .image:
             guard let storePath = item.storePath,
                   let url = FilePathResolver.resolve(storePath: storePath) else { return nil }
-            return NSImage(contentsOf: url)
+            // Critical: load through ThumbnailCache.loadOriented so
+            // the EXIF rotation tag is applied BEFORE we save the
+            // generated thumbnail to disk. Otherwise we bake the
+            // sideways pixels into the thumbnail file and every
+            // downstream consumer sees the rotated image — even if
+            // they load through CGImageSource, because the saved
+            // thumbnail no longer carries an orientation tag.
+            return ThumbnailCache.loadOriented(from: url)
 
         case .file:
             guard let storePath = item.storePath,
