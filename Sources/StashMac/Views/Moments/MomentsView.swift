@@ -157,7 +157,8 @@ struct MomentsView: View {
                             isSelected: store.selectedMoment?.id == suggestion.id,
                             onSelect: { store.selectedMoment = suggestion },
                             onAccept: { renaming = suggestion },
-                            onDismiss: { Task { await dismiss(suggestion: suggestion) } }
+                            onDismiss: { Task { await dismiss(suggestion: suggestion) } },
+                            visionHint: store.momentVisionHints[suggestion.signature]
                         )
                     }
                 }
@@ -235,6 +236,10 @@ private struct SuggestionCard: View {
     let onSelect: () -> Void
     let onAccept: () -> Void
     let onDismiss: () -> Void
+    /// Optional on-device-vision hint surfaced as a sparkle badge
+    /// next to the suggested name. Nil = vision found no high-
+    /// coverage label (or hasn't finished classifying yet).
+    let visionHint: MomentVision.ClusterHint?
 
     private static let dateFormatter: DateFormatter = {
         let df = DateFormatter()
@@ -253,6 +258,22 @@ private struct SuggestionCard: View {
             HStack(alignment: .firstTextBaseline) {
                 Text(suggestion.suggestedName)
                     .font(.headline)
+                if let hint = visionHint {
+                    Label {
+                        Text(hint.label)
+                            .font(.caption.weight(.medium))
+                    } icon: {
+                        Image(systemName: "sparkles")
+                            .font(.caption)
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1)
+                    .background(.purple.opacity(0.15), in: Capsule())
+                    .foregroundStyle(.purple)
+                    .help(String(format: "On-device vision: %.0f%% of items look like \"%@\" (avg confidence %.0f%%)",
+                                 hint.coverage * 100, hint.label as NSString,
+                                 Double(hint.confidence) * 100))
+                }
                 Spacer()
                 Text(String(format: "%.0f pts", suggestion.score))
                     .font(.caption2.monospacedDigit())

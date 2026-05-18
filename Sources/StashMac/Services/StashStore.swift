@@ -104,6 +104,12 @@ final class StashStore {
     /// Last error from `stash trip-suggest`, surfaced inline in the
     /// view. Cleared on the next successful refresh.
     var momentsError: String?
+    /// Per-cluster vision hints keyed by Moment signature. Populated
+    /// asynchronously after a fresh `loadMoments` so the cluster
+    /// cards render immediately and the hint badges fade in once
+    /// the on-device classifier returns. Nil signature entry =
+    /// "vision found no high-coverage label" (don't surface).
+    var momentVisionHints: [String: MomentVision.ClusterHint] = [:]
 
     // MARK: - Navigation history (back / forward)
 
@@ -1932,10 +1938,35 @@ final class StashStore {
             } else if selectedMoment == nil {
                 selectedMoment = fresh.first
             }
+            // Hint enrichment runs in a separate task so the
+            // cards render immediately and the badges fade in as
+            // results land. Force-reloads also reset the hint
+            // dict; cache hits inside MomentVision keep per-item
+            // results across runs even when the hint dict is
+            // cleared at the cluster level.
+            if forceReload {
+                momentVisionHints.removeAll()
+            }
+            Task { await refreshMomentVisionHints(for: fresh) }
         } catch {
             momentsError = (error as? LocalizedError)?.errorDescription
                 ?? error.localizedDescription
             moments = []
+        }
+    }
+
+    /// Run Apple's on-device scene classifier across each Moment
+    /// cluster, write the dominant label (when coverage clears the
+    /// threshold) into `momentVisionHints`. Per-cluster; the
+    /// SuggestionCard reads the dict and renders a small ✨ badge.
+    private func refreshMomentVisionHints(for suggestions: [StashCLI.MomentSuggestion]) async {
+        for suggestion in suggestions {
+            // Skip already-hinted clusters unless they re-clustered
+            // (different signature = different items = re-run).
+            if momentVisionHints[suggestion.signature] != nil { continue }
+            if let hint = await MomentVision.enrich(suggestion) {
+                momentVisionHints[suggestion.signature] = hint
+            }
         }
     }
 
