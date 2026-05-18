@@ -1,3 +1,5 @@
+import AppKit
+import ImageIO
 import SwiftUI
 
 /// Right-pane viewer for the Trips sidebar entry. Reads
@@ -288,16 +290,43 @@ private struct TripPreviewImage: View {
             }
         }
         // Step 2: image item with a content blob — render the blob
-        // directly. Off main, same as the thumbnail cache path.
+        // directly via CGImageSource so the EXIF orientation tag is
+        // honored. NSImage(contentsOf:) silently ignores EXIF
+        // rotation for many camera-roll JPEGs, which left portrait
+        // captures rendering on their side in the grid.
         if item.type == "image",
            let sp = item.storePath,
            !sp.isEmpty,
            let url = FilePathResolver.resolve(storePath: sp) {
             return await Task.detached(priority: .userInitiated) {
-                NSImage(contentsOf: url)
+                Self.loadOriented(from: url)
             }.value
         }
         return nil
+    }
+
+    /// Load an NSImage with EXIF orientation pre-applied. Uses
+    /// `kCGImageSourceCreateThumbnailWithTransform` so the returned
+    /// CGImage is already rotated to its display orientation; the
+    /// wrapping NSImage then renders correctly anywhere we draw it
+    /// without needing per-call-site orientation handling.
+    /// `MaxPixelSize` caps the decode at 1024px on the longest edge
+    /// — the tile is ~160pt, so anything larger is wasted memory
+    /// and decode time.
+    nonisolated private static func loadOriented(from url: URL) -> NSImage? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
+            return nil
+        }
+        let opts: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: 1024,
+        ]
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, opts as CFDictionary) else {
+            return nil
+        }
+        return NSImage(cgImage: cg,
+                       size: NSSize(width: cg.width, height: cg.height))
     }
 
     private func iconFor(type: String?) -> String {
