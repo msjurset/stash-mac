@@ -27,7 +27,7 @@ enum HelpTopic: String, CaseIterable, Identifiable, Codable, Hashable {
     case rules = "Rules"
     case aiIdentify = "Identify with AI"
     case location = "Location"
-    case trips = "Trip Suggestions"
+    case moments = "Moments"
     case keyboard = "Keyboard Shortcuts"
 
     var id: String { rawValue }
@@ -50,7 +50,7 @@ enum HelpTopic: String, CaseIterable, Identifiable, Codable, Hashable {
         case .rules: return "wand.and.stars"
         case .aiIdentify: return "sparkles"
         case .location: return "mappin.and.ellipse"
-        case .trips: return "calendar.badge.clock"
+        case .moments: return "calendar.badge.clock"
         case .keyboard: return "keyboard"
         }
     }
@@ -492,9 +492,9 @@ enum HelpTopic: String, CaseIterable, Identifiable, Codable, Hashable {
                 ]),
             ]
 
-        case .trips:
+        case .moments:
             return [
-                .paragraph("Trip Suggestions surfaces clusters of items you captured close together in time, often sharing a location or a tag, as candidates for a single collection. Open it from the sidebar under Tools → Trips."),
+                .paragraph("Moments surfaces clusters of items captured close together in time, often sharing a location or a tag, as candidates for a single collection. Open it from the sidebar under Tools → Moments. Clustering uses each item's captured_at (EXIF DateTimeOriginal for photos, most-recent thread Date for emails, file mtime for arbitrary files) when set, falling back to created_at otherwise — so a burst of photos all stashed days later still clusters by when they were actually taken."),
                 .heading("What it looks for"),
                 .bullet([
                     "Bursts of items in a short time window (default: more than 3 items within 6 hours of each other, total span ≤ 5 days)",
@@ -508,8 +508,8 @@ enum HelpTopic: String, CaseIterable, Identifiable, Codable, Hashable {
                 .heading("Scan window"),
                 .paragraph("Defaults to the last 90 days so the list reflects recent activity. Flip *Scan all history* in the header to widen to the whole stash — useful for retroactively bundling older bursts that pre-date the feature."),
                 .heading("CLI equivalent"),
-                .paragraph("The Mac view is a thin wrapper over `stash trip-suggest`. The same clusters surface from the terminal:"),
-                .code("stash trip-suggest --json | jq '.[0]'\nstash trip-suggest accept --name \"Beach trip 2026-05\" ID ID ID"),
+                .paragraph("The Mac view is a thin wrapper over `stash moments`. The same clusters surface from the terminal:"),
+                .code("stash moments --json | jq '.[0]'\nstash moments accept --name \"Beach trip 2026-05\" ID ID ID"),
             ]
 
         case .keyboard:
@@ -523,7 +523,7 @@ enum HelpTopic: String, CaseIterable, Identifiable, Codable, Hashable {
                     ["⌘K",  "Open the global search panel (same as ⌘F)"],
                     ["⌘⇧U", "Fetch Files via URL — discover images / files on a page"],
                     ["⌘⇧I", "Import Archive — round-trip a `stash export` zip back in"],
-                    ["⌘[",  "Back — return to the previous navigation state (e.g. the Trips suggestion you drilled into an item from)"],
+                    ["⌘[",  "Back — return to the previous navigation state (e.g. the Moment you drilled into an item from)"],
                     ["⌘]",  "Forward — redo a Back step"],
                     ["/",   "Open the global search panel (when no field has focus, or list filter is empty)"],
                     ["?",   "Open contextual help for the current sidebar section"],

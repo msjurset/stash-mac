@@ -16,6 +16,14 @@ struct StashItem: Codable, Identifiable, Hashable {
     var metadata: [String: String]?
     var createdAt: Date
     var updatedAt: Date
+    /// When the underlying content was created in the real world —
+    /// EXIF shutter time for photos, most-recent thread Date for
+    /// emails, filesystem mtime for arbitrary files, the row's
+    /// CreatedAt for snippets. Nil for URL items (no reliable
+    /// signal) and for legacy rows that haven't been backfilled
+    /// (`stash backfill-captured-at --all`). Distinct from
+    /// createdAt, which records when the row landed in the stash.
+    var capturedAt: Date?
     var location: ItemLocation?
     var files: [ItemFile]?
     var tags: [StashTag]?

@@ -23,29 +23,29 @@ final class StashStore {
     /// Currently-focused suggestion in the Trips view. Bound by the
     /// suggestion-card tap; consumed by `TripDetailView` in the
     /// detail column to render the cluster's items as a grid.
-    var selectedTripSuggestion: StashCLI.TripSuggestion?
+    var selectedMoment: StashCLI.MomentSuggestion?
     /// Per-item check state inside the focused trip suggestion.
     /// Owned by the Trips detail pane (the right column) but read
     /// by the middle pane's Accept button so the user's edits to
     /// "what goes into this collection?" survive the round trip
     /// through the Accept sheet. Defaults to every item when the
     /// focused suggestion changes.
-    var selectedTripItemIDs: Set<String> = []
+    var selectedMomentItemIDs: Set<String> = []
     /// Cached `stash trip-suggest` results. Cached on the store so
     /// the Trips middle pane renders instantly on every revisit
     /// (back/forward from a drilled item, sidebar reselection) and
     /// only re-runs the CLI when the user explicitly refreshes or
     /// flips the scan-all-history toggle.
-    var tripSuggestions: [StashCLI.TripSuggestion] = []
-    /// Last scope `tripSuggestions` was loaded with. Drives the
+    var moments: [StashCLI.MomentSuggestion] = []
+    /// Last scope `moments` was loaded with. Drives the
     /// "do I need to re-fetch on toggle flip" decision.
-    var tripSuggestionsScanAll: Bool = false
+    var momentsScanAll: Bool = false
     /// True while the trip-suggest CLI call is in flight. Backs the
-    /// header spinner in TripSuggestionsView.
-    var tripSuggestionsLoading: Bool = false
+    /// header spinner in MomentSuggestionsView.
+    var momentsLoading: Bool = false
     /// Last error from `stash trip-suggest`, surfaced inline in the
     /// view. Cleared on the next successful refresh.
-    var tripSuggestionsError: String?
+    var momentsError: String?
 
     // MARK: - Navigation history (back / forward)
 
@@ -55,8 +55,8 @@ final class StashStore {
     struct NavigationSnapshot: Equatable, Sendable {
         let navigation: NavigationItem?
         let selectedItemID: String?
-        let selectedTripSuggestion: StashCLI.TripSuggestion?
-        let selectedTripItemIDs: Set<String>
+        let selectedMoment: StashCLI.MomentSuggestion?
+        let selectedMomentItemIDs: Set<String>
     }
 
     var navigationHistory: [NavigationSnapshot] = []
@@ -1803,39 +1803,39 @@ final class StashStore {
 
     // MARK: - Trip suggestions
 
-    /// Refresh `tripSuggestions` from the CLI. If `forceReload` is
+    /// Refresh `moments` from the CLI. If `forceReload` is
     /// false AND there's already a cached set loaded with the same
     /// scope (scanAll), this is a no-op — the user is revisiting the
     /// view via back/forward and the cards should appear instantly
     /// rather than waiting for a re-fetch. The explicit Refresh
     /// button passes forceReload=true.
-    func loadTripSuggestions(scanAll: Bool, forceReload: Bool = false) async {
+    func loadMoments(scanAll: Bool, forceReload: Bool = false) async {
         if !forceReload,
-           !tripSuggestions.isEmpty,
-           tripSuggestionsScanAll == scanAll {
+           !moments.isEmpty,
+           momentsScanAll == scanAll {
             return
         }
-        tripSuggestionsLoading = true
-        tripSuggestionsError = nil
-        defer { tripSuggestionsLoading = false }
+        momentsLoading = true
+        momentsError = nil
+        defer { momentsLoading = false }
         do {
-            let fresh = try await StashCLI.shared.tripSuggestions(scanAll: scanAll)
-            tripSuggestions = fresh
-            tripSuggestionsScanAll = scanAll
+            let fresh = try await StashCLI.shared.momentSuggestions(scanAll: scanAll)
+            moments = fresh
+            momentsScanAll = scanAll
             // Reconcile the focused suggestion with what came back.
             // If it's gone (accepted into a collection, scope
             // shrunk), fall forward to the first remaining one so
             // the detail pane stays useful instead of going blank.
-            if let current = selectedTripSuggestion,
+            if let current = selectedMoment,
                !fresh.contains(where: { $0.id == current.id }) {
-                selectedTripSuggestion = fresh.first
-            } else if selectedTripSuggestion == nil {
-                selectedTripSuggestion = fresh.first
+                selectedMoment = fresh.first
+            } else if selectedMoment == nil {
+                selectedMoment = fresh.first
             }
         } catch {
-            tripSuggestionsError = (error as? LocalizedError)?.errorDescription
+            momentsError = (error as? LocalizedError)?.errorDescription
                 ?? error.localizedDescription
-            tripSuggestions = []
+            moments = []
         }
     }
 
@@ -1850,8 +1850,8 @@ final class StashStore {
         NavigationSnapshot(
             navigation: navigation,
             selectedItemID: selectedItemID,
-            selectedTripSuggestion: selectedTripSuggestion,
-            selectedTripItemIDs: selectedTripItemIDs
+            selectedMoment: selectedMoment,
+            selectedMomentItemIDs: selectedMomentItemIDs
         )
     }
 
@@ -1908,8 +1908,8 @@ final class StashStore {
             navigation = nav
         }
         selectedItemID = snapshot.selectedItemID
-        selectedTripSuggestion = snapshot.selectedTripSuggestion
-        selectedTripItemIDs = snapshot.selectedTripItemIDs
+        selectedMoment = snapshot.selectedMoment
+        selectedMomentItemIDs = snapshot.selectedMomentItemIDs
     }
 
     func applyNavigation(_ item: NavigationItem) {
@@ -1949,7 +1949,7 @@ final class StashStore {
             filterTags = [t.name]
         case .collection(let c):
             filterCollection = c.name
-        case .tagGraph, .stats, .check, .dupes, .savedSearch, .rules, .ruleActivity, .inbox, .trips:
+        case .tagGraph, .stats, .check, .dupes, .savedSearch, .rules, .ruleActivity, .inbox, .moments:
             break
         }
         refresh()

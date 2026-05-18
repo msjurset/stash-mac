@@ -7,30 +7,30 @@ import SwiftUI
 /// reuses) a collection and adds every item in the cluster.
 ///
 /// All the clustering and scoring logic lives in the gostash CLI
-/// (`stash trip-suggest --json`). This view is a thin renderer over
+/// (`stash moments --json`). This view is a thin renderer over
 /// that output plus an accept button that shells out to
-/// `stash trip-suggest accept`. Refresh re-runs the CLI; --all
+/// `stash moments accept`. Refresh re-runs the CLI; --all
 /// widens the scan from the default 90-day window to the whole
 /// stash for users who want to retroactively bundle older bursts.
-struct TripSuggestionsView: View {
-    @State private var renaming: StashCLI.TripSuggestion?
+struct MomentsView: View {
+    @State private var renaming: StashCLI.MomentSuggestion?
 
     @Environment(StashStore.self) private var store
 
     // Read-through accessors so the body code reads the same as
-    // before. Trip-suggest results live on StashStore so revisiting
+    // before. Moments results live on StashStore so revisiting
     // this view (back/forward, sidebar reselection) shows the cached
     // list instantly instead of re-running the CLI on every appear.
-    private var suggestions: [StashCLI.TripSuggestion] { store.tripSuggestions }
-    private var loading: Bool { store.tripSuggestionsLoading }
-    private var error: String? { store.tripSuggestionsError }
-    private var scanAll: Bool { store.tripSuggestionsScanAll }
+    private var suggestions: [StashCLI.MomentSuggestion] { store.moments }
+    private var loading: Bool { store.momentsLoading }
+    private var error: String? { store.momentsError }
+    private var scanAll: Bool { store.momentsScanAll }
     private var scanAllBinding: Binding<Bool> {
         Binding(
-            get: { store.tripSuggestionsScanAll },
+            get: { store.momentsScanAll },
             set: { newValue in
-                guard newValue != store.tripSuggestionsScanAll else { return }
-                Task { await store.loadTripSuggestions(scanAll: newValue, forceReload: true) }
+                guard newValue != store.momentsScanAll else { return }
+                Task { await store.loadMoments(scanAll: newValue, forceReload: true) }
             }
         )
     }
@@ -47,12 +47,12 @@ struct TripSuggestionsView: View {
             // has a list loaded with the current scope. Only the
             // first visit (or a flipped scanAll, or the Refresh
             // button) actually hits the CLI.
-            await store.loadTripSuggestions(scanAll: scanAll)
+            await store.loadMoments(scanAll: scanAll)
         }
         .sheet(item: $renaming) { suggestion in
             // Accept only the items still checked in the detail
             // pane. When the user hasn't opened the detail pane yet,
-            // selectedTripItemIDs is empty for this suggestion and
+            // selectedMomentItemIDs is empty for this suggestion and
             // we fall back to "everything" — preserves the original
             // one-click-from-the-middle-pane flow.
             let selected = effectiveSelection(for: suggestion)
@@ -74,7 +74,7 @@ struct TripSuggestionsView: View {
     private var header: some View {
         HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Trip suggestions")
+                Text("Moments")
                     .font(.title3.weight(.semibold))
                 Text(headerSubtitle)
                     .font(.caption)
@@ -94,7 +94,7 @@ struct TripSuggestionsView: View {
             .toggleStyle(.switch)
             .controlSize(.mini)
             Button {
-                Task { await store.loadTripSuggestions(scanAll: scanAll, forceReload: true) }
+                Task { await store.loadMoments(scanAll: scanAll, forceReload: true) }
             } label: {
                 Image(systemName: "arrow.clockwise")
             }
@@ -127,7 +127,7 @@ struct TripSuggestionsView: View {
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                 Button("Retry") {
-                    Task { await store.loadTripSuggestions(scanAll: scanAll, forceReload: true) }
+                    Task { await store.loadMoments(scanAll: scanAll, forceReload: true) }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -154,8 +154,8 @@ struct TripSuggestionsView: View {
                     ForEach(suggestions) { suggestion in
                         SuggestionCard(
                             suggestion: suggestion,
-                            isSelected: store.selectedTripSuggestion?.id == suggestion.id,
-                            onSelect: { store.selectedTripSuggestion = suggestion },
+                            isSelected: store.selectedMoment?.id == suggestion.id,
+                            onSelect: { store.selectedMoment = suggestion },
                             onAccept: { renaming = suggestion }
                         )
                     }
@@ -175,14 +175,14 @@ struct TripSuggestionsView: View {
     }
 
     private func accept(
-        suggestion: StashCLI.TripSuggestion,
+        suggestion: StashCLI.MomentSuggestion,
         ids: [String],
         name: String,
         description: String?
     ) async {
         guard !ids.isEmpty else { return }
         do {
-            try await StashCLI.shared.tripSuggestAccept(
+            try await StashCLI.shared.acceptMoment(
                 name: name,
                 ids: ids,
                 description: description
@@ -191,9 +191,9 @@ struct TripSuggestionsView: View {
             // the sidebar, then force-refresh suggestions so the
             // now-grouped cluster drops out of the list.
             store.loadAll()
-            await store.loadTripSuggestions(scanAll: scanAll, forceReload: true)
+            await store.loadMoments(scanAll: scanAll, forceReload: true)
         } catch {
-            store.tripSuggestionsError = (error as? LocalizedError)?.errorDescription
+            store.momentsError = (error as? LocalizedError)?.errorDescription
                 ?? error.localizedDescription
         }
     }
@@ -201,9 +201,9 @@ struct TripSuggestionsView: View {
     /// IDs to send to accept: the user's per-item selection from the
     /// detail pane if it covers any item in the suggestion, else
     /// every item in the suggestion (one-click-without-review path).
-    private func effectiveSelection(for suggestion: StashCLI.TripSuggestion) -> [String] {
+    private func effectiveSelection(for suggestion: StashCLI.MomentSuggestion) -> [String] {
         let allIDs = suggestion.items.map(\.id)
-        let intersected = allIDs.filter { store.selectedTripItemIDs.contains($0) }
+        let intersected = allIDs.filter { store.selectedMomentItemIDs.contains($0) }
         return intersected.isEmpty ? allIDs : intersected
     }
 }
@@ -211,7 +211,7 @@ struct TripSuggestionsView: View {
 // MARK: - Suggestion card
 
 private struct SuggestionCard: View {
-    let suggestion: StashCLI.TripSuggestion
+    let suggestion: StashCLI.MomentSuggestion
     let isSelected: Bool
     let onSelect: () -> Void
     let onAccept: () -> Void
@@ -314,7 +314,7 @@ private struct SuggestionCard: View {
 // MARK: - Filmstrip tile
 
 private struct FilmstripTile: View {
-    let item: StashCLI.TripSuggestion.TripItem
+    let item: StashCLI.MomentSuggestion.MomentItem
 
     var body: some View {
         AsyncThumbnailImage(
@@ -355,7 +355,7 @@ private struct FilmstripTile: View {
 // MARK: - Accept sheet
 
 private struct AcceptSheet: View {
-    let suggestion: StashCLI.TripSuggestion
+    let suggestion: StashCLI.MomentSuggestion
     let selectedIDs: [String]
     let onAccept: (String, String?) -> Void
 
@@ -364,7 +364,7 @@ private struct AcceptSheet: View {
     @State private var description: String = ""
 
     init(
-        suggestion: StashCLI.TripSuggestion,
+        suggestion: StashCLI.MomentSuggestion,
         selectedIDs: [String],
         onAccept: @escaping (String, String?) -> Void
     ) {
@@ -376,7 +376,7 @@ private struct AcceptSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Accept Trip Suggestion")
+            Text("Accept Moment")
                 .font(.headline)
             Text(detailLine)
                 .font(.callout)

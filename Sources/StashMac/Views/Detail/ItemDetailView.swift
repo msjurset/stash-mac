@@ -300,6 +300,18 @@ struct ItemDetailView: View {
                                     .truncationMode(.middle)
                             }
                         }
+                        // "Captured" sits above "Created" because in the
+                        // photo-heavy case it's what users actually want
+                        // to see — when the shutter fired, not when the
+                        // row landed in the stash. Shown only when
+                        // populated (URL items leave it nil; older
+                        // captures pre-backfill also nil).
+                        if let captured = item.capturedAt {
+                            InfoRow.row("Captured") {
+                                Text(captured.formatted(date: .abbreviated, time: .shortened))
+                                    .help("From EXIF / email headers / file mtime. Distinct from Created (when the row landed in this stash).")
+                            }
+                        }
                         InfoRow.row("Created") {
                             Text(item.createdAt.formatted(date: .abbreviated, time: .shortened))
                         }

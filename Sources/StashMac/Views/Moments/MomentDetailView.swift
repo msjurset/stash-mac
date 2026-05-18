@@ -2,8 +2,8 @@ import AppKit
 import ImageIO
 import SwiftUI
 
-/// Right-pane viewer for the Trips sidebar entry. Reads
-/// `store.selectedTripSuggestion` and renders the cluster's items as
+/// Right-pane viewer for the Moments sidebar entry. Reads
+/// `store.selectedMoment` and renders the cluster's items as
 /// an adaptive grid of thumbnails. Click any tile to jump into that
 /// item's detail (switches sidebar nav to All Items and selects).
 ///
@@ -11,11 +11,11 @@ import SwiftUI
 /// before they hit Accept on the middle-pane card. No state of its
 /// own — the suggestion's `items` array already carries every
 /// (id, title, type, thumbnail_path) tuple needed to draw.
-struct TripDetailView: View {
+struct MomentDetailView: View {
     @Environment(StashStore.self) private var store
 
     var body: some View {
-        if let suggestion = store.selectedTripSuggestion {
+        if let suggestion = store.selectedMoment {
             VStack(alignment: .leading, spacing: 0) {
                 header(for: suggestion)
                 Divider()
@@ -36,7 +36,7 @@ struct TripDetailView: View {
                         ForEach(suggestion.items, id: \.id) { item in
                             DetailTile(
                                 item: item,
-                                isSelected: store.selectedTripItemIDs.contains(item.id),
+                                isSelected: store.selectedMomentItemIDs.contains(item.id),
                                 onToggle: { toggle(itemID: item.id) },
                                 onOpen: { openInList(itemID: item.id) }
                             )
@@ -52,11 +52,11 @@ struct TripDetailView: View {
             // middle pane shows the cluster as a fresh draft instead
             // of carrying the prior selection forward.
             .onChange(of: suggestion.id) { _, _ in
-                store.selectedTripItemIDs = Set(suggestion.items.map(\.id))
+                store.selectedMomentItemIDs = Set(suggestion.items.map(\.id))
             }
             .onAppear {
-                if store.selectedTripItemIDs.isEmpty {
-                    store.selectedTripItemIDs = Set(suggestion.items.map(\.id))
+                if store.selectedMomentItemIDs.isEmpty {
+                    store.selectedMomentItemIDs = Set(suggestion.items.map(\.id))
                 }
             }
         } else {
@@ -78,7 +78,7 @@ struct TripDetailView: View {
     }
 
     @ViewBuilder
-    private func header(for suggestion: StashCLI.TripSuggestion) -> some View {
+    private func header(for suggestion: StashCLI.MomentSuggestion) -> some View {
         HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(suggestion.suggestedName)
@@ -99,9 +99,9 @@ struct TripDetailView: View {
             // and "I want to start fresh" pivots.
             Button(allSelected(suggestion) ? "Deselect all" : "Select all") {
                 if allSelected(suggestion) {
-                    store.selectedTripItemIDs.removeAll()
+                    store.selectedMomentItemIDs.removeAll()
                 } else {
-                    store.selectedTripItemIDs = Set(suggestion.items.map(\.id))
+                    store.selectedMomentItemIDs = Set(suggestion.items.map(\.id))
                 }
             }
             .controlSize(.small)
@@ -111,14 +111,14 @@ struct TripDetailView: View {
         .padding(.vertical, 10)
     }
 
-    private func allSelected(_ suggestion: StashCLI.TripSuggestion) -> Bool {
+    private func allSelected(_ suggestion: StashCLI.MomentSuggestion) -> Bool {
         let ids = Set(suggestion.items.map(\.id))
-        return !ids.isEmpty && ids.isSubset(of: store.selectedTripItemIDs)
+        return !ids.isEmpty && ids.isSubset(of: store.selectedMomentItemIDs)
     }
 
-    private func selectionSummary(for suggestion: StashCLI.TripSuggestion) -> String {
+    private func selectionSummary(for suggestion: StashCLI.MomentSuggestion) -> String {
         let total = suggestion.items.count
-        let selected = suggestion.items.filter { store.selectedTripItemIDs.contains($0.id) }.count
+        let selected = suggestion.items.filter { store.selectedMomentItemIDs.contains($0.id) }.count
         if selected == total {
             return "\(total) items"
         }
@@ -126,17 +126,17 @@ struct TripDetailView: View {
     }
 
     private func toggle(itemID: String) {
-        if store.selectedTripItemIDs.contains(itemID) {
-            store.selectedTripItemIDs.remove(itemID)
+        if store.selectedMomentItemIDs.contains(itemID) {
+            store.selectedMomentItemIDs.remove(itemID)
         } else {
-            store.selectedTripItemIDs.insert(itemID)
+            store.selectedMomentItemIDs.insert(itemID)
         }
     }
 
     /// Navigate to the underlying item in the main list. Switches
     /// the sidebar to All Items (so the item is reachable regardless
     /// of how the user previously had it filtered) and asks the
-    /// store to select + reveal it. Records the current Trips state
+    /// store to select + reveal it. Records the current Moments state
     /// onto the back-stack first so the toolbar Back button (or ⌘[)
     /// returns the user to the same suggestion + per-item selection
     /// they were reviewing.
@@ -150,7 +150,7 @@ struct TripDetailView: View {
 // MARK: - Tile
 
 private struct DetailTile: View {
-    let item: StashCLI.TripSuggestion.TripItem
+    let item: StashCLI.MomentSuggestion.MomentItem
     let isSelected: Bool
     let onToggle: () -> Void
     let onOpen: () -> Void
@@ -180,7 +180,7 @@ private struct DetailTile: View {
                         .aspectRatio(1, contentMode: .fit)
                         .frame(maxWidth: .infinity)
                         .overlay {
-                            TripPreviewImage(item: item)
+                            MomentPreviewImage(item: item)
                         }
                         .clipShape(RoundedRectangle(cornerRadius: 6))
                         .overlay(
@@ -258,8 +258,8 @@ private struct DetailTile: View {
 /// JPEGs are still on disk and look fine at 160pt; falling back to
 /// them avoids a "🖼️ everywhere" placeholder fog while still nudging
 /// the user toward `stash thumbnail backfill` long-term.
-private struct TripPreviewImage: View {
-    let item: StashCLI.TripSuggestion.TripItem
+private struct MomentPreviewImage: View {
+    let item: StashCLI.MomentSuggestion.MomentItem
     @State private var image: NSImage?
 
     var body: some View {

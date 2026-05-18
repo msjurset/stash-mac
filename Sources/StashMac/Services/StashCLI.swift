@@ -192,15 +192,15 @@ actor StashCLI {
 
     // MARK: - Trip / event suggestions
 
-    /// One row returned by `stash trip-suggest --json`. The CLI side
+    /// One row returned by `stash moments --json`. The CLI side
     /// is the source of truth for the clustering algorithm; this
     /// struct mirrors the JSON shape so the Mac UI can render
     /// suggestions without re-implementing the heuristic.
-    struct TripSuggestion: Codable, Identifiable, Equatable {
+    struct MomentSuggestion: Codable, Identifiable, Equatable {
         let start: Date
         let end: Date
         let itemCount: Int
-        let items: [TripItem]
+        let items: [MomentItem]
         let suggestedName: String
         let score: Double
         let sharedTags: [String]?
@@ -219,7 +219,7 @@ actor StashCLI {
         /// thumbnail has been generated yet (image items pre-dating
         /// thumbnail-backfill render fine from the original blob at
         /// small tile sizes).
-        struct TripItem: Codable, Equatable, Hashable {
+        struct MomentItem: Codable, Equatable, Hashable {
             let id: String
             let title: String?
             let type: String?
@@ -235,19 +235,19 @@ actor StashCLI {
         var id: String { (items.first?.id ?? "?") + "|" + String(score) }
     }
 
-    /// Drive `stash trip-suggest --json`. Default flags match the CLI
+    /// Drive `stash moments --json`. Default flags match the CLI
     /// defaults (90-day window, 6h gap, 5-day span, min-items 3).
     /// Returns a score-sorted slice for direct rendering.
-    func tripSuggestions(scanAll: Bool = false) async throws -> [TripSuggestion] {
-        var args = ["trip-suggest", "--json"]
+    func momentSuggestions(scanAll: Bool = false) async throws -> [MomentSuggestion] {
+        var args = ["moments", "--json"]
         if scanAll { args.append("--all") }
         return try await captureJSON(args: args)
     }
 
     /// Action a suggestion by creating (or reusing) a collection and
     /// adding the listed items. Idempotent on the CLI side.
-    func tripSuggestAccept(name: String, ids: [String], description: String? = nil) async throws {
-        var args = ["trip-suggest", "accept", "--name", name]
+    func acceptMoment(name: String, ids: [String], description: String? = nil) async throws {
+        var args = ["moments", "accept", "--name", name]
         if let description, !description.isEmpty {
             args += ["--description", description]
         }
