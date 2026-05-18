@@ -120,8 +120,12 @@ struct TripDetailView: View {
     /// Navigate to the underlying item in the main list. Switches
     /// the sidebar to All Items (so the item is reachable regardless
     /// of how the user previously had it filtered) and asks the
-    /// store to select + reveal it.
+    /// store to select + reveal it. Records the current Trips state
+    /// onto the back-stack first so the toolbar Back button (or ⌘[)
+    /// returns the user to the same suggestion + per-item selection
+    /// they were reviewing.
     private func openInList(itemID: String) {
+        store.recordNavigationHistory()
         store.applyNavigation(.allItems)
         store.selectItemByID(itemID, revealInList: true)
     }

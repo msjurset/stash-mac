@@ -31,6 +31,22 @@ final class StashStore {
     /// through the Accept sheet. Defaults to every item when the
     /// focused suggestion changes.
     var selectedTripItemIDs: Set<String> = []
+
+    // MARK: - Navigation history (back / forward)
+
+    /// Snapshot of the user-visible navigation state. Used by the
+    /// back/forward stack to restore prior drill-downs across views.
+    /// Adapted from upkeep-mac's NavigationSnapshot pattern.
+    struct NavigationSnapshot: Equatable, Sendable {
+        let navigation: NavigationItem?
+        let selectedItemID: String?
+        let selectedTripSuggestion: StashCLI.TripSuggestion?
+        let selectedTripItemIDs: Set<String>
+    }
+
+    var navigationHistory: [NavigationSnapshot] = []
+    var navigationForward: [NavigationSnapshot] = []
+    var isApplyingNavigationHistory = false
     /// Wall-clock of the last successful feed poll. Drives "Last
     /// polled X min ago" in the Inbox header.
     var lastFeedPoll: Date?
@@ -1763,7 +1779,84 @@ final class StashStore {
 
     func handleNavigationChange(_ item: NavigationItem) {
         guard !suppressNavigationChange else { return }
+        // Re-route to applyNavigation so back/forward restorations
+        // skip the normal "user-initiated change, clear filter state"
+        // pipeline that lives there.
+        if isApplyingNavigationHistory { return }
         applyNavigation(item)
+    }
+
+    // MARK: - Back / forward navigation
+
+    var canGoBack: Bool { !navigationHistory.isEmpty }
+    var canGoForward: Bool { !navigationForward.isEmpty }
+
+    /// Snapshot of the right-now navigation state. Used both by the
+    /// recordNavigationHistory push and the goBack/goForward shuttle.
+    private func currentNavigationSnapshot() -> NavigationSnapshot {
+        NavigationSnapshot(
+            navigation: navigation,
+            selectedItemID: selectedItemID,
+            selectedTripSuggestion: selectedTripSuggestion,
+            selectedTripItemIDs: selectedTripItemIDs
+        )
+    }
+
+    /// Push the current state onto the history stack so a subsequent
+    /// drill-down (e.g. opening an item from the Trips detail grid)
+    /// has somewhere to go back to. Clears the forward stack — a new
+    /// branch invalidates any redo path. Idempotent against the
+    /// most-recent snapshot so repeat pushes don't bloat history.
+    func recordNavigationHistory() {
+        let snap = currentNavigationSnapshot()
+        if let last = navigationHistory.last, last == snap { return }
+        navigationHistory.append(snap)
+        navigationForward.removeAll()
+        // Cap depth — 50 entries is plenty for "I want to back out of
+        // a few drill-downs" without growing unbounded.
+        if navigationHistory.count > 50 {
+            navigationHistory.removeFirst(navigationHistory.count - 50)
+        }
+    }
+
+    /// Pop the most recent history entry and restore it; push the
+    /// current state onto the forward stack so the user can redo.
+    func goBack() {
+        guard let prev = navigationHistory.popLast() else { return }
+        navigationForward.append(currentNavigationSnapshot())
+        applyNavigationSnapshot(prev)
+    }
+
+    /// Inverse of goBack — re-apply a snapshot from the forward
+    /// stack and push the current state back onto history.
+    func goForward() {
+        guard let next = navigationForward.popLast() else { return }
+        navigationHistory.append(currentNavigationSnapshot())
+        applyNavigationSnapshot(next)
+    }
+
+    /// Drive the navigation + selection state directly to a snapshot.
+    /// Sets `isApplyingNavigationHistory` so the .onChange handlers
+    /// on `navigation` don't trigger their normal "you switched
+    /// sections, clear out filter state" cleanup — back/forward needs
+    /// to restore the prior state intact.
+    private func applyNavigationSnapshot(_ snapshot: NavigationSnapshot) {
+        isApplyingNavigationHistory = true
+        suppressNavigationChange = true
+        defer {
+            suppressNavigationChange = false
+            // Defer clearing the history flag so any .onChange that
+            // fires from the navigation write sees it still set.
+            Task { @MainActor in
+                self.isApplyingNavigationHistory = false
+            }
+        }
+        if let nav = snapshot.navigation {
+            navigation = nav
+        }
+        selectedItemID = snapshot.selectedItemID
+        selectedTripSuggestion = snapshot.selectedTripSuggestion
+        selectedTripItemIDs = snapshot.selectedTripItemIDs
     }
 
     func applyNavigation(_ item: NavigationItem) {

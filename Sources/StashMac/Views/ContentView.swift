@@ -88,6 +88,27 @@ struct ContentView: View {
                 DetailRouter(showEditSheet: $showEditSheet)
             }
         }
+        .toolbar {
+            ToolbarItemGroup(placement: .navigation) {
+                Button {
+                    store.goBack()
+                } label: {
+                    Image(systemName: "chevron.left")
+                }
+                .disabled(!store.canGoBack)
+                .keyboardShortcut("[", modifiers: .command)
+                .help("Back")
+
+                Button {
+                    store.goForward()
+                } label: {
+                    Image(systemName: "chevron.right")
+                }
+                .disabled(!store.canGoForward)
+                .keyboardShortcut("]", modifiers: .command)
+                .help("Forward")
+            }
+        }
         .onAppear {
             store.loadAll()
             store.startFeedPollTimer()
