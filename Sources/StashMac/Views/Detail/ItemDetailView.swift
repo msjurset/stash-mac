@@ -318,6 +318,39 @@ struct ItemDetailView: View {
                         InfoRow.row("Updated") {
                             Text(item.updatedAt.formatted(date: .abbreviated, time: .shortened))
                         }
+                        // Camera EXIF rows — only render the
+                        // pieces that have values. Shape matches
+                        // Google Photos's "Info" panel for parity:
+                        // device name, settings (ƒ-stop / shutter
+                        // / focal / ISO), dimensions, lens.
+                        if let cam = item.metadata?.camera, cam.hasAny {
+                            if let device = cam.deviceLabel {
+                                InfoRow.row("Capture device") {
+                                    Text(device).textSelection(.enabled)
+                                }
+                            }
+                            if let settings = cam.settingsLine {
+                                InfoRow.row("Settings") {
+                                    Text(settings)
+                                        .font(.callout.monospacedDigit())
+                                        .textSelection(.enabled)
+                                }
+                            }
+                            if let dims = cam.dimensionsLine {
+                                InfoRow.row("Dimensions") {
+                                    Text(dims).textSelection(.enabled)
+                                }
+                            }
+                            if let lens = cam.lens, !lens.isEmpty,
+                               lens != cam.deviceLabel {
+                                InfoRow.row("Lens") {
+                                    Text(lens)
+                                        .textSelection(.enabled)
+                                        .lineLimit(2)
+                                        .truncationMode(.tail)
+                                }
+                            }
+                        }
                     }
                 }
 

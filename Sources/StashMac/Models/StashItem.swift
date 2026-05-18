@@ -13,7 +13,7 @@ struct StashItem: Codable, Identifiable, Hashable {
     var mimeType: String?
     var fileSize: Int64?
     var thumbnailPath: String?
-    var metadata: [String: String]?
+    var metadata: ItemMetadata?
     var createdAt: Date
     var updatedAt: Date
     /// When the underlying content was created in the real world —
@@ -46,7 +46,7 @@ struct StashItem: Codable, Identifiable, Hashable {
     }
 
     var language: String? {
-        metadata?["language"]
+        metadata?.language
     }
 
     /// For email items, the sender's display name (or address if no name was
