@@ -151,9 +151,21 @@ private struct DetailTile: View {
         Button(action: onOpen) {
             VStack(alignment: .leading, spacing: 4) {
                 ZStack(alignment: .topLeading) {
-                    TripPreviewImage(item: item)
+                    // Force a square tile regardless of the source
+                    // image's aspect ratio. A Color.clear .frame() +
+                    // .aspectRatio(1, .fit) makes a square spacer
+                    // sized to the column width; overlaying the
+                    // preview and clipping inside the rounded rect
+                    // crops fill content into that square. Without
+                    // this, a 4:3 portrait image's tile rendered
+                    // taller than its landscape neighbors and rows
+                    // visually crashed into each other.
+                    Color.clear
                         .aspectRatio(1, contentMode: .fit)
                         .frame(maxWidth: .infinity)
+                        .overlay {
+                            TripPreviewImage(item: item)
+                        }
                         .clipShape(RoundedRectangle(cornerRadius: 6))
                         .overlay(
                             RoundedRectangle(cornerRadius: 6)
