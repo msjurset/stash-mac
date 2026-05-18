@@ -206,6 +206,13 @@ actor StashCLI {
         let sharedTags: [String]?
         let locationCenter: LocationCenter?
         let locationCount: Int?
+        /// SHA-256 of the cluster's sorted item-ID set. Used as the
+        /// argument to `stash moments undismiss <sig>` if the user
+        /// wants to un-hide a previously-dismissed cluster. Adding
+        /// or removing items from the cluster produces a different
+        /// signature, so a dismissal only hides the EXACT cluster
+        /// the user rejected.
+        let signature: String
 
         struct LocationCenter: Codable, Equatable {
             let lat: Double
@@ -253,6 +260,23 @@ actor StashCLI {
         }
         args.append(contentsOf: ids)
         _ = try await captureOutput(args: args)
+    }
+
+    /// Mark a cluster as user-rejected so it stops appearing in
+    /// future `stash moments` runs. The CLI rebuilds the signature
+    /// from the item IDs we pass; we send the full ID list so the
+    /// Mac doesn't have to share the hashing implementation. Note
+    /// that the cluster's signature changes if its items change —
+    /// dismissing X+Y+Z doesn't hide X+Y or X+Y+W.
+    func dismissMoment(itemIDs: [String]) async throws {
+        var args = ["moments", "dismiss"]
+        args.append(contentsOf: itemIDs)
+        _ = try await captureOutput(args: args)
+    }
+
+    /// Re-surface a previously-dismissed cluster by its signature.
+    func undismissMoment(signature: String) async throws {
+        _ = try await captureOutput(args: ["moments", "undismiss", signature])
     }
 
     // MARK: - Multi-file items (attach / detach / reorder / merge)

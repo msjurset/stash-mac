@@ -156,7 +156,8 @@ struct MomentsView: View {
                             suggestion: suggestion,
                             isSelected: store.selectedMoment?.id == suggestion.id,
                             onSelect: { store.selectedMoment = suggestion },
-                            onAccept: { renaming = suggestion }
+                            onAccept: { renaming = suggestion },
+                            onDismiss: { Task { await dismiss(suggestion: suggestion) } }
                         )
                     }
                 }
@@ -206,6 +207,24 @@ struct MomentsView: View {
         let intersected = allIDs.filter { store.selectedMomentItemIDs.contains($0) }
         return intersected.isEmpty ? allIDs : intersected
     }
+
+    /// Hide a cluster: shells out to `stash moments dismiss`, then
+    /// drops it from the in-memory list optimistically and clears
+    /// the selection if it was pointing at this cluster. A full
+    /// reload would also remove it, but the optimistic update keeps
+    /// the click feeling instant on the user's machine.
+    private func dismiss(suggestion: StashCLI.MomentSuggestion) async {
+        do {
+            try await StashCLI.shared.dismissMoment(itemIDs: suggestion.items.map(\.id))
+            store.moments.removeAll { $0.signature == suggestion.signature }
+            if store.selectedMoment?.signature == suggestion.signature {
+                store.selectedMoment = store.moments.first
+            }
+        } catch {
+            store.momentsError = (error as? LocalizedError)?.errorDescription
+                ?? error.localizedDescription
+        }
+    }
 }
 
 // MARK: - Suggestion card
@@ -215,6 +234,7 @@ private struct SuggestionCard: View {
     let isSelected: Bool
     let onSelect: () -> Void
     let onAccept: () -> Void
+    let onDismiss: () -> Void
 
     private static let dateFormatter: DateFormatter = {
         let df = DateFormatter()
@@ -271,7 +291,20 @@ private struct SuggestionCard: View {
                 }
             }
 
-            HStack {
+            HStack(spacing: 8) {
+                // Dismiss → hides this exact cluster (by sorted-ID
+                // signature) from future Moments runs. Confirmable
+                // via a context menu, but the button itself is
+                // one-tap because the dismissal is fully reversible:
+                // `stash moments undismiss <sig>` brings it back.
+                Button {
+                    onDismiss()
+                } label: {
+                    Image(systemName: "xmark.circle")
+                }
+                .buttonStyle(.borderless)
+                .help("Dismiss this cluster — it won't reappear in Moments")
+
                 Spacer()
                 Button("Accept as Collection…") { onAccept() }
                     .controlSize(.small)
