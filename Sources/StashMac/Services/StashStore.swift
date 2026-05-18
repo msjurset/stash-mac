@@ -6,6 +6,64 @@ final class StashStore {
     var items: [StashItem] = []
     var tags: [StashTag] = []
     var collections: [StashCollection] = []
+    /// Sidebar's cap-at-3 Static Collections slice — populated
+    /// from `stash collection list --sort recent|frequent --limit 3`
+    /// per the current `collectionsSortMode`. Smart Collections
+    /// stay fully listed and aren't part of this; this is just
+    /// what we surface in the sidebar's headline collection row.
+    var topCollections: [StashCollection] = []
+    /// How many Static Collections the sidebar shows by default.
+    /// "See all" lives behind a popover icon so this stays small.
+    let collectionsCapForSidebar = 3
+    /// Recent-vs-Frequent toggle for the sidebar's top-N list.
+    /// Persisted across launches via UserDefaults; UI binds through
+    /// the matching binding helper below.
+    var collectionsSortMode: CollectionsSortMode {
+        get {
+            let raw = UserDefaults.standard.string(forKey: "collectionsSortMode") ?? CollectionsSortMode.recent.rawValue
+            return CollectionsSortMode(rawValue: raw) ?? .recent
+        }
+        set {
+            UserDefaults.standard.set(newValue.rawValue, forKey: "collectionsSortMode")
+            // Re-fetch the top-N list with the new sort. Cheap —
+            // it's `stash collection list --sort X --limit 3`.
+            Task {
+                topCollections = (try? await cli.listCollections(
+                    sortedBy: newValue.cliSort,
+                    limit: collectionsCapForSidebar
+                )) ?? topCollections
+            }
+        }
+    }
+
+    /// User-facing sort modes for the sidebar's Static Collections
+    /// strip. Names map onto the CLI's `--sort` values one-to-one
+    /// via `cliSort`.
+    enum CollectionsSortMode: String, CaseIterable, Identifiable {
+        case recent
+        case frequent
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .recent:   return "Recent"
+            case .frequent: return "Frequent"
+            }
+        }
+        var cliSort: StashCLI.CollectionSort {
+            switch self {
+            case .recent:   return .recent
+            case .frequent: return .frequent
+            }
+        }
+    }
+
+    /// Call when the user navigates to a collection so the
+    /// view_count signal underlying the "Frequent" sort tracks
+    /// reality. Fire-and-forget — failures here would just stale
+    /// the sort, not block navigation.
+    func touchCollection(name: String) {
+        Task { try? await cli.touchCollection(name: name) }
+    }
 
     /// Inbox state — feed candidates pulled from watched sources, the
     /// "to read & watch" queue (items tagged read-later / watch-later),
@@ -601,6 +659,10 @@ final class StashStore {
                 items = try await fetchFilteredItems()
                 tags = try await cli.listTags()
                 collections = try await cli.listCollections()
+                topCollections = try await cli.listCollections(
+                    sortedBy: collectionsSortMode.cliSort,
+                    limit: collectionsCapForSidebar
+                )
                 tagGraphData = try await cli.tagGraph()
                 savedSearches = try await cli.listSavedSearches()
                 applySortMode()
@@ -1949,6 +2011,13 @@ final class StashStore {
             filterTags = [t.name]
         case .collection(let c):
             filterCollection = c.name
+            // Bump view_count for the Frequent sort, but only when
+            // it's a user-initiated nav (not the history restore
+            // path — going Back/Forward shouldn't inflate the
+            // "frequently accessed" count).
+            if !isApplyingNavigationHistory {
+                touchCollection(name: c.name)
+            }
         case .tagGraph, .stats, .check, .dupes, .savedSearch, .rules, .ruleActivity, .inbox, .moments:
             break
         }

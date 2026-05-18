@@ -962,6 +962,32 @@ actor StashCLI {
         try await captureJSON(args: ["collection", "list", "--json"])
     }
 
+    /// Sort modes for `listCollections(sortedBy:limit:)`. Maps to
+    /// `stash collection list --sort` on the CLI.
+    enum CollectionSort: String {
+        case name      // alphabetical
+        case recent    // newest MAX(item_collections.added_at) first
+        case frequent  // highest view_count first
+    }
+
+    /// Fetch a sorted slice of collections. limit = 0 means all.
+    /// Backs the Mac sidebar's cap-at-3 Recent/Frequent display.
+    func listCollections(sortedBy sort: CollectionSort, limit: Int = 0) async throws -> [StashCollection] {
+        var args = ["collection", "list", "--json", "--sort", sort.rawValue]
+        if limit > 0 {
+            args += ["--limit", "\(limit)"]
+        }
+        return try await captureJSON(args: args)
+    }
+
+    /// Bump view_count on the given collection. Called when the
+    /// user clicks a Static Collection in the sidebar so the
+    /// Frequent sort tracks actual usage. Fire-and-forget: we
+    /// don't await the result for navigation responsiveness.
+    func touchCollection(name: String) async throws {
+        _ = try await captureOutput(args: ["collection", "touch", name])
+    }
+
     func createCollection(name: String, description: String? = nil) async throws -> StashCollection {
         var args = ["collection", "create", "--json", name]
         if let description { args += ["-d", description] }

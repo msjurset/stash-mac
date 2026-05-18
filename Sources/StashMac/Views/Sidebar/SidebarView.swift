@@ -22,6 +22,7 @@ struct SidebarView: View {
     /// true when a drag enters the row's bounds, used to highlight
     /// the active drop target.
     @State private var hoveredCollectionID: Int64?
+    @State private var showAllCollectionsPopover = false
     /// Tag-row equivalent of `hoveredCollectionID`. Tracks which tag
     /// row is the active drop target so we can highlight it during
     /// drag.
@@ -210,8 +211,15 @@ struct SidebarView: View {
         }
     }
 
+    /// Sidebar's combined Collections-section content: a cap-at-N
+    /// slice of Static Collections (sorted by the user's chosen
+    /// Recent/Frequent mode), then EVERY Smart Collection. Smart
+    /// Collections stay fully listed because users typically have
+    /// just a handful and they're closer in spirit to saved
+    /// searches than to user-built collections; the cap is only on
+    /// the noisy side.
     private var combinedCollectionEntries: [CollectionEntry] {
-        store.collections.map { .staticCollection($0) }
+        store.topCollections.map { .staticCollection($0) }
             + store.savedSearches.map { .smartCollection($0) }
     }
 
@@ -279,7 +287,57 @@ struct SidebarView: View {
         } header: {
             HStack(spacing: 4) {
                 Text("Collections")
+                // Recent/Frequent toggle — picker rendered as a
+                // segmented menu so it stays compact in the
+                // section header. Only governs the cap-at-N Static
+                // Collections strip; Smart Collections are
+                // unaffected.
+                Menu {
+                    ForEach(StashStore.CollectionsSortMode.allCases) { mode in
+                        Button {
+                            store.collectionsSortMode = mode
+                        } label: {
+                            if mode == store.collectionsSortMode {
+                                Label(mode.label, systemImage: "checkmark")
+                            } else {
+                                Text(mode.label)
+                            }
+                        }
+                    }
+                } label: {
+                    Text(store.collectionsSortMode.label)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("Sort: recent activity vs. frequency of access")
                 Spacer()
+                // "Show all" — the cap-at-N slice doesn't include
+                // every Static Collection; this popover lets the
+                // user reach the rest without expanding the
+                // sidebar. Smart Collections aren't shown here
+                // since they're already fully listed.
+                Button {
+                    showAllCollectionsPopover = true
+                } label: {
+                    Image(systemName: "list.bullet")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Browse all collections")
+                .popover(isPresented: $showAllCollectionsPopover, arrowEdge: .top) {
+                    AllCollectionsPopover(
+                        collections: store.collections,
+                        onPick: { col in
+                            showAllCollectionsPopover = false
+                            store.applyNavigation(.collection(col))
+                            store.touchCollection(name: col.name)
+                        }
+                    )
+                }
                 Button {
                     showCollectionCreateSheet = true
                 } label: {
