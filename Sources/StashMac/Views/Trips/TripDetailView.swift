@@ -83,24 +83,14 @@ private struct DetailTile: View {
     var body: some View {
         Button(action: onOpen) {
             VStack(alignment: .leading, spacing: 4) {
-                AsyncThumbnailImage(
-                    relativePath: item.thumbnailPath,
-                    fallback: {
-                        ZStack {
-                            Rectangle().fill(.secondary.opacity(0.15))
-                            Text(iconFor(type: item.type))
-                                .font(.system(size: 44))
-                                .foregroundStyle(.tertiary)
-                        }
-                    }
-                )
-                .aspectRatio(1, contentMode: .fit)
-                .frame(maxWidth: .infinity)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(.quaternary, lineWidth: 1)
-                )
+                TripPreviewImage(item: item)
+                    .aspectRatio(1, contentMode: .fit)
+                    .frame(maxWidth: .infinity)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(.quaternary, lineWidth: 1)
+                    )
 
                 Text(item.title?.isEmpty == false ? item.title! : item.id)
                     .font(.caption)
@@ -112,6 +102,79 @@ private struct DetailTile: View {
         }
         .buttonStyle(.plain)
         .help(item.title?.isEmpty == false ? item.title! : item.id)
+    }
+}
+
+/// Thumbnail-with-fallback for trip preview tiles. Resolution order:
+///   1. `thumbnailPath` via the existing thumbnail cache (relative
+///      path under filesDir, populated for items that have run
+///      through `stash thumbnail backfill`).
+///   2. `storePath` via FilePathResolver (the original content blob)
+///      — only attempted for image items; rendering a video / PDF
+///      blob inline isn't useful.
+///   3. Type-emoji placeholder.
+///
+/// Step 2 is the critical fallback: older image captures predate
+/// thumbnail-backfill and have a nil `thumbnailPath`. Their actual
+/// JPEGs are still on disk and look fine at 160pt; falling back to
+/// them avoids a "🖼️ everywhere" placeholder fog while still nudging
+/// the user toward `stash thumbnail backfill` long-term.
+private struct TripPreviewImage: View {
+    let item: StashCLI.TripSuggestion.TripItem
+    @State private var image: NSImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } else {
+                ZStack {
+                    Rectangle().fill(.secondary.opacity(0.15))
+                    Text(iconFor(type: item.type))
+                        .font(.system(size: 44))
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        }
+        .task(id: cacheKey) {
+            image = await loadPreview()
+        }
+    }
+
+    /// Per-item cache key for `.task(id:)`. Combines the hint inputs
+    /// so a refresh that replaces an item's thumbnail re-fires the
+    /// load instead of holding a stale image.
+    private var cacheKey: String {
+        (item.thumbnailPath ?? "") + "|" + (item.storePath ?? "") + "|" + (item.type ?? "")
+    }
+
+    private func loadPreview() async -> NSImage? {
+        // Step 1: try the cached thumbnail. Goes through the shared
+        // cache so first render in a session pays the decode once.
+        if let rel = item.thumbnailPath,
+           !rel.isEmpty,
+           let url = FilePathResolver.resolveRelative(rel),
+           FileManager.default.fileExists(atPath: url.path) {
+            if let cached = ThumbnailCache.shared.image(forPath: url.path) {
+                return cached
+            }
+            if let loaded = await ThumbnailCache.shared.loadAsync(path: url.path) {
+                return loaded
+            }
+        }
+        // Step 2: image item with a content blob — render the blob
+        // directly. Off main, same as the thumbnail cache path.
+        if item.type == "image",
+           let sp = item.storePath,
+           !sp.isEmpty,
+           let url = FilePathResolver.resolve(storePath: sp) {
+            return await Task.detached(priority: .userInitiated) {
+                NSImage(contentsOf: url)
+            }.value
+        }
+        return nil
     }
 
     private func iconFor(type: String?) -> String {

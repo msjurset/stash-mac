@@ -214,12 +214,17 @@ actor StashCLI {
 
         /// Per-item preview: enough metadata to render a filmstrip
         /// and let the user verify what they're about to bundle
-        /// without a second round trip per item.
+        /// without a second round trip per item. `storePath` is the
+        /// content-hashed blob path used as a fallback when no
+        /// thumbnail has been generated yet (image items pre-dating
+        /// thumbnail-backfill render fine from the original blob at
+        /// small tile sizes).
         struct TripItem: Codable, Equatable, Hashable {
             let id: String
             let title: String?
             let type: String?
             let thumbnailPath: String?
+            let storePath: String?
         }
 
         /// Convenience for the accept path — just the ID list.
