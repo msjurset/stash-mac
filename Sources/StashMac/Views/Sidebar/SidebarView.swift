@@ -647,11 +647,17 @@ private struct SortModeIcon: View {
         Button(action: onTap) {
             Image(systemName: systemImage)
                 .font(.caption.weight(active ? .semibold : .regular))
-                .foregroundStyle(active ? Color.accentColor : .secondary)
+                // Active = full-weight foreground (white in dark
+                // mode, black in light). Inactive = tertiary grey.
+                // Avoid the accent color here — it reads like a
+                // focus highlight, which it isn't.
+                .foregroundStyle(active ? Color.primary : Color.secondary.opacity(0.6))
                 .frame(width: 20, height: 20)
                 .background(
                     Circle()
-                        .fill(active ? Color.accentColor.opacity(0.15) : .clear)
+                        // Active fill = subtle neutral, matches
+                        // the Homebar segmented-icon pattern.
+                        .fill(active ? Color.primary.opacity(0.12) : .clear)
                 )
         }
         .buttonStyle(.plain)
