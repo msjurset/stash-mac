@@ -117,6 +117,8 @@ struct TripSuggestionsView: View {
                     ForEach(suggestions) { suggestion in
                         SuggestionCard(
                             suggestion: suggestion,
+                            isSelected: store.selectedTripSuggestion?.id == suggestion.id,
+                            onSelect: { store.selectedTripSuggestion = suggestion },
                             onAccept: { renaming = suggestion }
                         )
                     }
@@ -145,6 +147,17 @@ struct TripSuggestionsView: View {
             self.error = (error as? LocalizedError)?.errorDescription
                 ?? error.localizedDescription
             suggestions = []
+        }
+        // Reconcile the detail-pane selection with what came back.
+        // If the previously-selected suggestion is gone (accepted into
+        // a collection, scan-window shrunk, etc.), fall forward to the
+        // first remaining one so the right pane stays useful instead
+        // of going blank.
+        if let current = store.selectedTripSuggestion,
+           !suggestions.contains(where: { $0.id == current.id }) {
+            store.selectedTripSuggestion = suggestions.first
+        } else if store.selectedTripSuggestion == nil {
+            store.selectedTripSuggestion = suggestions.first
         }
     }
 
@@ -175,6 +188,8 @@ struct TripSuggestionsView: View {
 
 private struct SuggestionCard: View {
     let suggestion: StashCLI.TripSuggestion
+    let isSelected: Bool
+    let onSelect: () -> Void
     let onAccept: () -> Void
 
     private static let dateFormatter: DateFormatter = {
@@ -202,8 +217,6 @@ private struct SuggestionCard: View {
             Text("\(suggestion.itemCount) items · \(rangeString)")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
-
-            filmstrip
 
             if let shared = suggestion.sharedTags, !shared.isEmpty {
                 HStack(spacing: 4) {
@@ -242,41 +255,26 @@ private struct SuggestionCard: View {
             }
             .padding(.top, 4)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
-        .background(.thickMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .background(
+            // Tint the selected card so the user can tell at a glance
+            // which cluster the right pane is showing. .thickMaterial
+            // for unselected keeps a subtle elevation so the cards
+            // still read as distinct.
+            isSelected
+                ? AnyShapeStyle(.tint.opacity(0.12))
+                : AnyShapeStyle(.thickMaterial),
+            in: RoundedRectangle(cornerRadius: 8)
+        )
         .overlay(
             RoundedRectangle(cornerRadius: 8)
-                .stroke(.quaternary, lineWidth: 1)
+                .stroke(isSelected ? Color.accentColor : Color.secondary.opacity(0.25),
+                        lineWidth: isSelected ? 2 : 1)
         )
+        .contentShape(RoundedRectangle(cornerRadius: 8))
+        .onTapGesture(perform: onSelect)
     }
-
-    /// Horizontal preview row showing the first ~8 items in the
-    /// cluster. Hover any tile to see its title; clicking is
-    /// intentionally a no-op (don't whisk the user off mid-review).
-    /// Items beyond the preview slot collapse into a "+N" badge.
-    private var filmstrip: some View {
-        let preview = Array(suggestion.items.prefix(filmstripLimit))
-        let remaining = suggestion.items.count - preview.count
-        return HStack(spacing: 6) {
-            ForEach(preview, id: \.id) { item in
-                FilmstripTile(item: item)
-            }
-            if remaining > 0 {
-                Text("+\(remaining)")
-                    .font(.caption2.bold().monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .frame(width: 48, height: 48)
-                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 4))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 4)
-                            .stroke(.quaternary, lineWidth: 1)
-                    )
-            }
-        }
-        .padding(.vertical, 2)
-    }
-
-    private var filmstripLimit: Int { 8 }
 
     private var rangeString: String {
         let sameDay = Calendar.current.isDate(

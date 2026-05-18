@@ -79,7 +79,7 @@ struct ContentView: View {
             case .dupes:
                 DetailRouter(showEditSheet: $showEditSheet)
             case .trips:
-                EmptyView()
+                TripDetailView()
             case .savedSearch:
                 DetailRouter(showEditSheet: $showEditSheet)
             case .inbox:

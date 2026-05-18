@@ -20,6 +20,10 @@ final class StashStore {
     /// non-nil at a time; both nil = nothing selected (empty inbox).
     var inboxSelectedCandidate: FeedCandidate?
     var inboxSelectedResurfaceItem: StashItem?
+    /// Currently-focused suggestion in the Trips view. Bound by the
+    /// suggestion-card tap; consumed by `TripDetailView` in the
+    /// detail column to render the cluster's items as a grid.
+    var selectedTripSuggestion: StashCLI.TripSuggestion?
     /// Wall-clock of the last successful feed poll. Drives "Last
     /// polled X min ago" in the Inbox header.
     var lastFeedPoll: Date?
