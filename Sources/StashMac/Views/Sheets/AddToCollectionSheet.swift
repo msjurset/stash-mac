@@ -49,22 +49,13 @@ struct AddToCollectionSheet: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(filteredDestinations) { col in
-                            Toggle(isOn: binding(for: col.name)) {
-                                HStack(spacing: 8) {
-                                    Image(systemName: "folder")
-                                        .foregroundStyle(.secondary)
-                                        .frame(width: 16)
-                                    Text(col.name)
-                                        .lineLimit(1)
-                                }
-                            }
-                            .toggleStyle(.checkbox)
-                            .padding(.vertical, 3)
+                            destinationRow(col)
                         }
                         Divider()
                             .padding(.vertical, 6)
                         createNewRow
                     }
+                    .padding(.vertical, 4)
                 }
                 .frame(height: 200)
                 .background(.thickMaterial, in: RoundedRectangle(cornerRadius: 6))
@@ -95,6 +86,37 @@ struct AddToCollectionSheet: View {
         }
         .padding(20)
         .frame(width: 440)
+    }
+
+    /// Click-anywhere row with a leading checkmark badge that
+    /// reflects selection state. Manual button + checkmark rather
+    /// than a SwiftUI Toggle because the .checkbox toggle style
+    /// fought the label HStack on macOS, intermittently hiding the
+    /// collection-name text under its own padding.
+    @ViewBuilder
+    private func destinationRow(_ col: StashCollection) -> some View {
+        let isSelected = picked.contains(col.name)
+        Button {
+            if isSelected { picked.remove(col.name) }
+            else          { picked.insert(col.name) }
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+                    .frame(width: 16)
+                Image(systemName: "folder")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 16)
+                Text(col.name)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     /// The Create-New affordance is split into a "click to expand"
@@ -165,18 +187,5 @@ struct AddToCollectionSheet: View {
         if !picked.isEmpty { return true }
         if creatingNew && !trimmedNewName.isEmpty { return true }
         return false
-    }
-
-    private func binding(for name: String) -> Binding<Bool> {
-        Binding(
-            get: { picked.contains(name) },
-            set: { isOn in
-                if isOn {
-                    picked.insert(name)
-                } else {
-                    picked.remove(name)
-                }
-            }
-        )
     }
 }
