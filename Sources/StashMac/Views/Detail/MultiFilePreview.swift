@@ -231,11 +231,13 @@ private struct AsyncThumbnail: View {
             }
         }
         .task(id: fileURL) {
-            // NSImage(contentsOf:) blocks on disk read — push off
-            // main so the carousel scrolls smoothly when there are
-            // many slides.
+            // Disk read + decode pushed off main so the carousel
+            // scrolls smoothly when there are many slides.
+            // ThumbnailCache.loadOriented honors EXIF rotation —
+            // bare NSImage(contentsOf:) leaves portrait-shot photos
+            // sideways in the filmstrip.
             let img = await Task.detached(priority: .userInitiated) {
-                NSImage(contentsOf: fileURL)
+                ThumbnailCache.loadOriented(from: fileURL)
             }.value
             await MainActor.run { image = img }
         }

@@ -64,7 +64,13 @@ struct ImagePreviewSection: View {
         // image swaps in via the .animation crossfade above.
         let img = await Task.detached(priority: .userInitiated) { () -> NSImage? in
             guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-            return NSImage(contentsOf: url)
+            // ThumbnailCache.loadOriented honors EXIF rotation —
+            // bare NSImage(contentsOf:) leaves portrait-shot photos
+            // rendering on their side. The cache version reads
+            // through CGImageSource at up to 1024px on the long
+            // edge, which is more than enough for the detail
+            // preview at this view size and saves multi-MP decodes.
+            return ThumbnailCache.loadOriented(from: url)
         }.value
         // Guard against the file URL having changed (user navigated)
         // mid-decode. SwiftUI cancels the .task on id change, but

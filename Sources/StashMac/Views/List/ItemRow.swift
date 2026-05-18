@@ -132,7 +132,10 @@ struct ItemRow: View {
     @ViewBuilder
     private var popoverContent: some View {
         if let url = thumbnailURL(),
-           let image = NSImage(contentsOf: url) {
+           // ThumbnailCache.loadOriented honors EXIF rotation. Bare
+           // NSImage(contentsOf:) left portrait-shot images sideways
+           // in this hover popover.
+           let image = ThumbnailCache.loadOriented(from: url) {
             let trimmedNotes = item.notes?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let hasNotes = !trimmedNotes.isEmpty
             Group {
