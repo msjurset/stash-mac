@@ -23,15 +23,30 @@ struct TripDetailView: View {
                         spacing: 12
                     ) {
                         ForEach(suggestion.items, id: \.id) { item in
-                            DetailTile(item: item) {
-                                openInList(itemID: item.id)
-                            }
+                            DetailTile(
+                                item: item,
+                                isSelected: store.selectedTripItemIDs.contains(item.id),
+                                onToggle: { toggle(itemID: item.id) },
+                                onOpen: { openInList(itemID: item.id) }
+                            )
                         }
                     }
                     .padding(16)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // Reset selection to "everything" whenever the focused
+            // suggestion changes, so a fresh click on a card in the
+            // middle pane shows the cluster as a fresh draft instead
+            // of carrying the prior selection forward.
+            .onChange(of: suggestion.id) { _, _ in
+                store.selectedTripItemIDs = Set(suggestion.items.map(\.id))
+            }
+            .onAppear {
+                if store.selectedTripItemIDs.isEmpty {
+                    store.selectedTripItemIDs = Set(suggestion.items.map(\.id))
+                }
+            }
         } else {
             // No selection — guide the user to the middle pane.
             VStack(spacing: 8) {
@@ -52,16 +67,53 @@ struct TripDetailView: View {
 
     @ViewBuilder
     private func header(for suggestion: StashCLI.TripSuggestion) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(suggestion.suggestedName)
-                .font(.title3.weight(.semibold))
-            Text("\(suggestion.itemCount) items")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(suggestion.suggestedName)
+                    .font(.title3.weight(.semibold))
+                Text(selectionSummary(for: suggestion))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            // Bulk toggle: flips between "select all" and "deselect
+            // all" depending on what's selected right now. Cheaper
+            // than two buttons for the common "I want everything"
+            // and "I want to start fresh" pivots.
+            Button(allSelected(suggestion) ? "Deselect all" : "Select all") {
+                if allSelected(suggestion) {
+                    store.selectedTripItemIDs.removeAll()
+                } else {
+                    store.selectedTripItemIDs = Set(suggestion.items.map(\.id))
+                }
+            }
+            .controlSize(.small)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
+    }
+
+    private func allSelected(_ suggestion: StashCLI.TripSuggestion) -> Bool {
+        let ids = Set(suggestion.items.map(\.id))
+        return !ids.isEmpty && ids.isSubset(of: store.selectedTripItemIDs)
+    }
+
+    private func selectionSummary(for suggestion: StashCLI.TripSuggestion) -> String {
+        let total = suggestion.items.count
+        let selected = suggestion.items.filter { store.selectedTripItemIDs.contains($0.id) }.count
+        if selected == total {
+            return "\(total) items"
+        }
+        return "\(selected) of \(total) selected"
+    }
+
+    private func toggle(itemID: String) {
+        if store.selectedTripItemIDs.contains(itemID) {
+            store.selectedTripItemIDs.remove(itemID)
+        } else {
+            store.selectedTripItemIDs.insert(itemID)
+        }
     }
 
     /// Navigate to the underlying item in the main list. Switches
@@ -78,30 +130,72 @@ struct TripDetailView: View {
 
 private struct DetailTile: View {
     let item: StashCLI.TripSuggestion.TripItem
+    let isSelected: Bool
+    let onToggle: () -> Void
     let onOpen: () -> Void
 
     var body: some View {
-        Button(action: onOpen) {
-            VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 4) {
+            ZStack(alignment: .topLeading) {
                 TripPreviewImage(item: item)
                     .aspectRatio(1, contentMode: .fit)
                     .frame(maxWidth: .infinity)
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                     .overlay(
                         RoundedRectangle(cornerRadius: 6)
-                            .stroke(.quaternary, lineWidth: 1)
+                            .stroke(isSelected ? Color.accentColor : Color.secondary.opacity(0.25),
+                                    lineWidth: isSelected ? 2 : 1)
                     )
+                    // Dim unselected items so the included set
+                    // visually dominates the canvas. Stronger signal
+                    // than a corner badge alone.
+                    .opacity(isSelected ? 1.0 : 0.4)
 
-                Text(item.title?.isEmpty == false ? item.title! : item.id)
-                    .font(.caption)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
-                    .foregroundStyle(.primary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                selectionBadge
+                    .padding(6)
+            }
+
+            Text(item.title?.isEmpty == false ? item.title! : item.id)
+                .font(.caption)
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+                .foregroundStyle(isSelected ? .primary : .secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onToggle)
+        // Right-click to open in the main list — keeps the primary
+        // click for selection toggle (the dominant action in this
+        // pane) without burying the "view the actual item" path.
+        .contextMenu {
+            Button("Open Item") { onOpen() }
+            Divider()
+            Button(isSelected ? "Exclude from Collection" : "Include in Collection") {
+                onToggle()
             }
         }
-        .buttonStyle(.plain)
         .help(item.title?.isEmpty == false ? item.title! : item.id)
+    }
+
+    /// Filled checkmark when included, hollow circle when excluded.
+    /// Always visible (vs hover-only) so the selection state is
+    /// scannable across the whole grid at a glance.
+    private var selectionBadge: some View {
+        ZStack {
+            Circle()
+                .fill(isSelected ? Color.accentColor : Color.black.opacity(0.45))
+                .frame(width: 22, height: 22)
+            if isSelected {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.white)
+            } else {
+                Circle()
+                    .strokeBorder(Color.white.opacity(0.9), lineWidth: 1.5)
+                    .frame(width: 22, height: 22)
+            }
+        }
+        .shadow(color: .black.opacity(0.3), radius: 1, x: 0, y: 1)
     }
 }
 

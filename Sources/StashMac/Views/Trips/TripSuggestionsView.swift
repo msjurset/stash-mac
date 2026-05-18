@@ -30,10 +30,22 @@ struct TripSuggestionsView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task { await reload() }
         .sheet(item: $renaming) { suggestion in
+            // Accept only the items still checked in the detail
+            // pane. When the user hasn't opened the detail pane yet,
+            // selectedTripItemIDs is empty for this suggestion and
+            // we fall back to "everything" — preserves the original
+            // one-click-from-the-middle-pane flow.
+            let selected = effectiveSelection(for: suggestion)
             AcceptSheet(
                 suggestion: suggestion,
+                selectedIDs: selected,
                 onAccept: { name, desc in
-                    Task { await accept(suggestion: suggestion, name: name, description: desc) }
+                    Task { await accept(
+                        suggestion: suggestion,
+                        ids: selected,
+                        name: name,
+                        description: desc
+                    ) }
                 }
             )
         }
@@ -163,13 +175,15 @@ struct TripSuggestionsView: View {
 
     private func accept(
         suggestion: StashCLI.TripSuggestion,
+        ids: [String],
         name: String,
         description: String?
     ) async {
+        guard !ids.isEmpty else { return }
         do {
             try await StashCLI.shared.tripSuggestAccept(
                 name: name,
-                ids: suggestion.itemIds,
+                ids: ids,
                 description: description
             )
             // Reload top-level state so the new collection appears in
@@ -181,6 +195,15 @@ struct TripSuggestionsView: View {
             self.error = (error as? LocalizedError)?.errorDescription
                 ?? error.localizedDescription
         }
+    }
+
+    /// IDs to send to accept: the user's per-item selection from the
+    /// detail pane if it covers any item in the suggestion, else
+    /// every item in the suggestion (one-click-without-review path).
+    private func effectiveSelection(for suggestion: StashCLI.TripSuggestion) -> [String] {
+        let allIDs = suggestion.items.map(\.id)
+        let intersected = allIDs.filter { store.selectedTripItemIDs.contains($0) }
+        return intersected.isEmpty ? allIDs : intersected
     }
 }
 
@@ -332,6 +355,7 @@ private struct FilmstripTile: View {
 
 private struct AcceptSheet: View {
     let suggestion: StashCLI.TripSuggestion
+    let selectedIDs: [String]
     let onAccept: (String, String?) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -340,9 +364,11 @@ private struct AcceptSheet: View {
 
     init(
         suggestion: StashCLI.TripSuggestion,
+        selectedIDs: [String],
         onAccept: @escaping (String, String?) -> Void
     ) {
         self.suggestion = suggestion
+        self.selectedIDs = selectedIDs
         self.onAccept = onAccept
         _name = State(initialValue: suggestion.suggestedName)
     }
@@ -351,7 +377,7 @@ private struct AcceptSheet: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Accept Trip Suggestion")
                 .font(.headline)
-            Text("Creates the collection if it doesn't exist and adds \(suggestion.itemCount) items.")
+            Text(detailLine)
                 .font(.callout)
                 .foregroundStyle(.secondary)
 
@@ -381,7 +407,10 @@ private struct AcceptSheet: View {
                     .keyboardShortcut(.cancelAction)
                 Button("Accept") { commit() }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(
+                        name.trimmingCharacters(in: .whitespaces).isEmpty
+                            || selectedIDs.isEmpty
+                    )
             }
             .padding(.top, 4)
         }
@@ -390,9 +419,20 @@ private struct AcceptSheet: View {
 
     private func commit() {
         let trimmedName = name.trimmingCharacters(in: .whitespaces)
-        guard !trimmedName.isEmpty else { return }
+        guard !trimmedName.isEmpty, !selectedIDs.isEmpty else { return }
         let trimmedDesc = description.trimmingCharacters(in: .whitespaces)
         onAccept(trimmedName, trimmedDesc.isEmpty ? nil : trimmedDesc)
         dismiss()
+    }
+
+    /// "Creates the collection… and adds 12 of 19 items." Surfaces
+    /// the user's selection edits so accepting feels intentional.
+    private var detailLine: String {
+        let total = suggestion.items.count
+        let count = selectedIDs.count
+        if count == total {
+            return "Creates the collection if it doesn't exist and adds \(total) items."
+        }
+        return "Creates the collection if it doesn't exist and adds \(count) of \(total) items."
     }
 }

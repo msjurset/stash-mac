@@ -24,6 +24,13 @@ final class StashStore {
     /// suggestion-card tap; consumed by `TripDetailView` in the
     /// detail column to render the cluster's items as a grid.
     var selectedTripSuggestion: StashCLI.TripSuggestion?
+    /// Per-item check state inside the focused trip suggestion.
+    /// Owned by the Trips detail pane (the right column) but read
+    /// by the middle pane's Accept button so the user's edits to
+    /// "what goes into this collection?" survive the round trip
+    /// through the Accept sheet. Defaults to every item when the
+    /// focused suggestion changes.
+    var selectedTripItemIDs: Set<String> = []
     /// Wall-clock of the last successful feed poll. Drives "Last
     /// polled X min ago" in the Inbox header.
     var lastFeedPoll: Date?
