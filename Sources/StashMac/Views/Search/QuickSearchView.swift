@@ -9,6 +9,13 @@ struct QuickSearchView: View {
     @State private var searchTask: Task<Void, Never>?
     @State private var tagMatches: [StashTag] = []
     @State private var tagActiveIndex = 0
+    /// Parallel state for `collection:` chip completion. Only one of
+    /// `tagMatches` / `collectionMatches` is non-empty at a time —
+    /// the cursor can only be inside one chip context per keystroke,
+    /// so the dropdown and key handlers branch on whichever is
+    /// populated.
+    @State private var collectionMatches: [StashCollection] = []
+    @State private var collectionActiveIndex = 0
     /// Regex mode: the query is sent through the CLI's `--regex` flag
     /// (RE2, matched against title+notes+url+extracted text) instead
     /// of the FTS-backed positional search. Tag filters still apply
@@ -124,6 +131,42 @@ struct QuickSearchView: View {
                 }
             }
 
+            // Collection suggestions — same shape as tag dropdown
+            // above; folder icon distinguishes the chip at a glance.
+            if !collectionMatches.isEmpty {
+                Divider()
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            ForEach(Array(collectionMatches.enumerated()), id: \.element.id) { idx, col in
+                                Button {
+                                    commitCollection(col.name)
+                                } label: {
+                                    HStack {
+                                        Label("collection:\(col.name)", systemImage: "folder")
+                                            .font(.body)
+                                        Spacer()
+                                    }
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 6)
+                                    .background(idx == collectionActiveIndex ? Color.accentColor.opacity(0.2) : .clear)
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .id(idx)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                    .frame(maxHeight: 280)
+                    .onChange(of: collectionActiveIndex) { _, newIdx in
+                        withAnimation(.easeOut(duration: 0.12)) {
+                            proxy.scrollTo(newIdx, anchor: .center)
+                        }
+                    }
+                }
+            }
+
             Divider()
 
             // Browse-mode toggles — always visible just under the
@@ -131,12 +174,12 @@ struct QuickSearchView: View {
             // active because results take priority over history.
             browseToggleBar
 
-            if query.isEmpty && tagMatches.isEmpty && results.isEmpty {
+            if query.isEmpty && !hasChipDropdown && results.isEmpty {
                 historyPane
-            } else if results.isEmpty && !query.isEmpty && tagMatches.isEmpty {
+            } else if results.isEmpty && !query.isEmpty && !hasChipDropdown {
                 ContentUnavailableView.search(text: query)
                     .frame(height: 200)
-            } else if tagMatches.isEmpty {
+            } else if !hasChipDropdown {
                 ScrollViewReader { proxy in
                     List(Array(results.enumerated()), id: \.element.id) { idx, item in
                         resultRow(idx: idx, item: item)
@@ -158,7 +201,7 @@ struct QuickSearchView: View {
         .frame(width: 500)
         .onChange(of: query) { _, newQuery in
             recomputeSuggestions()
-            if tagMatches.isEmpty {
+            if !hasChipDropdown {
                 debounceSearch(newQuery)
             } else {
                 searchTask?.cancel()
@@ -477,19 +520,31 @@ struct QuickSearchView: View {
     private func handleKey(_ key: SuggestKey) -> Bool {
         switch key {
         case .tab, .shiftTab:
-            if tagMatches.isEmpty {
-                openDropdownIfPossible()
+            if !tagMatches.isEmpty {
+                if tagMatches.count == 1 {
+                    tabInsertSingle(tagMatches[0].name)
+                    return true
+                }
+                advance(key == .tab ? .down : .up)
                 return true
             }
-            if tagMatches.count == 1 {
-                tabInsertSingle(tagMatches[0].name)
+            if !collectionMatches.isEmpty {
+                if collectionMatches.count == 1 {
+                    tabInsertSingleCollection(collectionMatches[0].name)
+                    return true
+                }
+                advanceCollection(key == .tab ? .down : .up)
                 return true
             }
-            advance(key == .tab ? .down : .up)
+            openDropdownIfPossible()
             return true
         case .arrowDown, .ctrlJ:
             if !tagMatches.isEmpty {
                 advance(.down)
+                return true
+            }
+            if !collectionMatches.isEmpty {
+                advanceCollection(.down)
                 return true
             }
             advanceResult(.down)
@@ -499,6 +554,10 @@ struct QuickSearchView: View {
                 advance(.up)
                 return true
             }
+            if !collectionMatches.isEmpty {
+                advanceCollection(.up)
+                return true
+            }
             advanceResult(.up)
             return true
         case .enter:
@@ -506,6 +565,13 @@ struct QuickSearchView: View {
                 let idx = max(tagActiveIndex, 0)
                 if idx < tagMatches.count {
                     commitTag(tagMatches[idx].name)
+                }
+                return true
+            }
+            if !collectionMatches.isEmpty {
+                let idx = max(collectionActiveIndex, 0)
+                if idx < collectionMatches.count {
+                    commitCollection(collectionMatches[idx].name)
                 }
                 return true
             }
@@ -519,9 +585,8 @@ struct QuickSearchView: View {
             }
             return false
         case .escape:
-            if !tagMatches.isEmpty {
-                tagMatches = []
-                tagActiveIndex = 0
+            if hasChipDropdown {
+                clearChipDropdown()
                 return true
             }
             if !query.isEmpty {
@@ -530,6 +595,14 @@ struct QuickSearchView: View {
             }
             dismiss()
             return true
+        }
+    }
+
+    private func advanceCollection(_ direction: Direction) {
+        guard !collectionMatches.isEmpty else { return }
+        switch direction {
+        case .down: collectionActiveIndex = min(collectionActiveIndex + 1, collectionMatches.count - 1)
+        case .up:   collectionActiveIndex = max(collectionActiveIndex - 1, 0)
         }
     }
 
@@ -556,22 +629,46 @@ struct QuickSearchView: View {
     // MARK: - Tag suggestions
 
     private func recomputeSuggestions() {
-        // Tag completion is meaningless in regex mode — `tag:` may be
-        // a literal substring of the user's pattern.
+        // Chip completion is meaningless in regex mode — `tag:` /
+        // `collection:` may be literal substrings of the user's
+        // pattern.
         if regexMode {
+            clearChipDropdown()
+            return
+        }
+        // `collection:` takes precedence over `tag:` only because
+        // the regexes are checked separately; in practice the
+        // cursor can match at most one trailing chip token.
+        if let match = query.range(
+            of: #"(?:^|\s)collection:(\S*)$"#,
+            options: .regularExpression
+        ) {
+            let token = query[match]
+            guard let colonIdx = token.firstIndex(of: ":") else {
+                clearChipDropdown()
+                return
+            }
+            let partial = String(token[token.index(after: colonIdx)...]).lowercased()
+            // Collections are single-target (the search filter
+            // takes one --collection arg), so an already-committed
+            // collection:NAME elsewhere in the query just means
+            // "the user wants to change which one"; don't filter
+            // the suggestion list against existing tokens.
+            collectionMatches = store.collections
+                .filter { partial.isEmpty || $0.name.lowercased().contains(partial) }
+                .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            collectionActiveIndex = 0
             tagMatches = []
             tagActiveIndex = 0
             return
         }
         guard let match = query.range(of: #"(?:^|\s)tag:(\S*)$"#, options: .regularExpression) else {
-            tagMatches = []
-            tagActiveIndex = 0
+            clearChipDropdown()
             return
         }
         let token = query[match]
         guard let colonIdx = token.firstIndex(of: ":") else {
-            tagMatches = []
-            tagActiveIndex = 0
+            clearChipDropdown()
             return
         }
         let partial = String(token[token.index(after: colonIdx)...]).lowercased()
@@ -589,7 +686,26 @@ struct QuickSearchView: View {
                 return (partial.isEmpty || lower.contains(partial)) && !existing.contains(lower)
             }
         tagActiveIndex = 0
+        collectionMatches = []
+        collectionActiveIndex = 0
     }
+
+    private func clearChipDropdown() {
+        tagMatches = []
+        tagActiveIndex = 0
+        collectionMatches = []
+        collectionActiveIndex = 0
+    }
+
+    /// Number of items in whichever chip dropdown is active (at most
+    /// one is non-empty at a time). Backs the key handlers'
+    /// "is there a dropdown to navigate?" check.
+    private var chipDropdownCount: Int {
+        !tagMatches.isEmpty ? tagMatches.count : collectionMatches.count
+    }
+
+    /// Whether any chip dropdown is open right now.
+    private var hasChipDropdown: Bool { chipDropdownCount > 0 }
 
     /// Tab-opens-dropdown: if we're already in a `tag:` value context,
     /// `recomputeSuggestions` has it covered. Otherwise treat the trailing
@@ -597,9 +713,10 @@ struct QuickSearchView: View {
     /// (`tag:`), replace it with `tag:` — no trailing space — chaining into
     /// value completion.
     private func openDropdownIfPossible() {
-        if query.range(of: #"(?:^|\s)tag:\S*$"#, options: .regularExpression) != nil {
-            return
-        }
+        // Already inside a chip-completion context — recompute
+        // covers it.
+        if query.range(of: #"(?:^|\s)tag:\S*$"#, options: .regularExpression) != nil { return }
+        if query.range(of: #"(?:^|\s)collection:\S*$"#, options: .regularExpression) != nil { return }
 
         let partial: String
         if let wsIdx = query.lastIndex(where: { $0.isWhitespace }) {
@@ -608,8 +725,20 @@ struct QuickSearchView: View {
             partial = query
         }
 
-        let key = "tag:"
-        guard key.hasPrefix(partial.lowercased()) else { return }
+        // Pick whichever chip key the trailing bare word is a prefix
+        // of. Both are valid prefixes of "c…" → only "collection:"
+        // matches; "t…" → only "tag:". An ambiguous empty partial
+        // (Tab on whitespace) defaults to tag: since that's the
+        // original behavior and the more common operation.
+        let lowered = partial.lowercased()
+        let key: String
+        if "collection:".hasPrefix(lowered) && !lowered.isEmpty && lowered.first == "c" {
+            key = "collection:"
+        } else if "tag:".hasPrefix(lowered) {
+            key = "tag:"
+        } else {
+            return
+        }
 
         let end = query.endIndex
         let start = query.index(end, offsetBy: -partial.count)
@@ -635,6 +764,49 @@ struct QuickSearchView: View {
         query = "\(before)\(prefix)tag:\(tagName)"
     }
 
+    private func commitCollection(_ name: String) {
+        guard let range = query.range(of: #"(?:^|\s)collection:\S*$"#, options: .regularExpression) else { return }
+        let before = query[query.startIndex..<range.lowerBound]
+        let prefix = query[range].hasPrefix(" ") ? " " : ""
+        query = "\(before)\(prefix)collection:\(quotedIfNeeded(name)) "
+        clearChipDropdown()
+        debounceSearch(query)
+    }
+
+    private func tabInsertSingleCollection(_ name: String) {
+        guard let range = query.range(of: #"(?:^|\s)collection:\S*$"#, options: .regularExpression) else { return }
+        let before = query[query.startIndex..<range.lowerBound]
+        let prefix = query[range].hasPrefix(" ") ? " " : ""
+        query = "\(before)\(prefix)collection:\(quotedIfNeeded(name))"
+    }
+
+    /// Wrap a value in double quotes when it contains whitespace
+    /// (collection names like "Mark's Favorite Fishing"). Single
+    /// words pass through bare. The parse-out side accepts both
+    /// shapes — see extractCollectionToken in debounceSearch.
+    private func quotedIfNeeded(_ value: String) -> String {
+        if value.contains(where: { $0.isWhitespace }) {
+            return "\"\(value)\""
+        }
+        return value
+    }
+
+    /// Pull the first `collection:` value out of the query, handling
+    /// both quoted ("Mark's Favorite Fishing") and bare (singleword)
+    /// forms. Returns nil when no collection chip is present.
+    /// "First" rather than "last" because the search filter is
+    /// single-target — surfacing the first one matches how users
+    /// read left-to-right.
+    private func extractCollectionToken(from q: String) -> String? {
+        if let m = q.firstMatch(of: /collection:"([^"]+)"/) {
+            return String(m.output.1)
+        }
+        if let m = q.firstMatch(of: /collection:(\S+)/) {
+            return String(m.output.1)
+        }
+        return nil
+    }
+
     /// Parse `tag:xxx` tokens out of the query and pass them as CLI
     /// `--tag` flags. In regex mode the remainder of the query is the
     /// RE2 pattern; in free-text mode it's the FTS query. Tag tokens
@@ -651,14 +823,22 @@ struct QuickSearchView: View {
         // mangle patterns the user actually meant to match (e.g.
         // "tag:.+" intending "literal `tag:` then anything").
         let tagTokens: [String]
+        let collectionToken: String?
         let textQuery: String
         if regexMode {
             tagTokens = []
+            collectionToken = nil
             textQuery = query
         } else {
             tagTokens = query.matches(of: /tag:(\S+)/).map { String($0.output.1) }
+            collectionToken = extractCollectionToken(from: query)
             textQuery = query
                 .replacing(/tag:\S*/, with: "")
+                // Strip both quoted ("name with spaces") and bare
+                // (singleword) collection tokens before passing
+                // the remainder as FTS query.
+                .replacing(/collection:"[^"]*"/, with: "")
+                .replacing(/collection:\S*/, with: "")
                 .trimmingCharacters(in: .whitespaces)
         }
 
@@ -691,10 +871,19 @@ struct QuickSearchView: View {
                         limit: 50,
                         regex: textQuery
                     )
-                } else if textQuery.isEmpty && !tagTokens.isEmpty {
-                    found = try await StashCLI.shared.listItems(tags: tagTokens, limit: 20)
+                } else if textQuery.isEmpty && (!tagTokens.isEmpty || collectionToken != nil) {
+                    found = try await StashCLI.shared.listItems(
+                        tags: tagTokens,
+                        collection: collectionToken,
+                        limit: 20
+                    )
                 } else {
-                    found = try await StashCLI.shared.searchItems(query: textQuery, tags: tagTokens, limit: 20)
+                    found = try await StashCLI.shared.searchItems(
+                        query: textQuery,
+                        tags: tagTokens,
+                        collection: collectionToken,
+                        limit: 20
+                    )
                 }
                 if !Task.isCancelled {
                     results = found
@@ -716,7 +905,7 @@ struct TagAwareSearchField: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NSTextField {
         let field = NoAutoFillTextField()
-        field.placeholderString = "Search stash... (tag: to filter)"
+        field.placeholderString = "Search stash... (tag:, collection: to filter)"
         field.isBordered = false
         field.backgroundColor = .clear
         field.drawsBackground = false

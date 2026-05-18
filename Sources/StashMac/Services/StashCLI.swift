@@ -51,6 +51,7 @@ actor StashCLI {
         query: String,
         type: ItemType? = nil,
         tags: [String] = [],
+        collection: String? = nil,
         limit: Int = 50,
         regex: String? = nil
     ) async throws -> [StashItem] {
@@ -65,6 +66,9 @@ actor StashCLI {
         var args = ["search", "--json", "-l", "\(limit)"]
         if let type { args += ["--type", type.rawValue] }
         for tag in tags { args += ["--tag", tag] }
+        if let collection, !collection.isEmpty {
+            args += ["--collection", collection]
+        }
         if let regex, !regex.isEmpty {
             args += ["--regex", regex]
         }

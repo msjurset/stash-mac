@@ -150,8 +150,8 @@ enum HelpTopic: String, CaseIterable, Identifiable, Codable, Hashable {
                 .heading("Quick Search Panel"),
                 .paragraph("Open the global search panel with ⌘F, ⌘K, or `/`. Results update in real time as you type. Use ↑/↓ (or Ctrl-J/K) to move the highlight, Return to jump to the highlighted result, Escape to dismiss. Selecting a result that lives outside your current sidebar scope automatically switches to All Items so the row is visible and highlighted."),
                 .paragraph("Pressing `/` always opens the panel when no field has focus. When the list filter field has focus *and is empty* (the common state on first launch), `/` opens the panel as well — that way you don't have to click anywhere first. Mid-text `/` stays a literal character so you can include slashes in queries."),
-                .heading("Tag Completion"),
-                .paragraph("Type `tag:` inside the panel to bring up tag suggestions. Tab cycles, Return commits. Repeat for multiple tags. Tag tokens compose with the rest of the free-text query."),
+                .heading("Tag and Collection Completion"),
+                .paragraph("Type `tag:` inside the panel to bring up tag suggestions; type `collection:` to bring up collection suggestions. Tab cycles the dropdown, Return commits. `tag:` may be repeated for multiple-tag filters (every tag must match); `collection:` is single-target — the first one wins. Both compose with the rest of the free-text query. Collection names with spaces auto-quote on commit: `collection:\"Mark's Favorite Fishing\"`."),
                 .heading("Regex Mode"),
                 .paragraph("Click the * button next to the field (or press ⌘R) to switch to RE2 regex. The pattern matches against title + notes + URL + extracted text. A small popover opens with a syntax cheatsheet that stays visible while you type — click outside the panel to dismiss."),
                 .bullet([
@@ -538,7 +538,7 @@ enum HelpTopic: String, CaseIterable, Identifiable, Codable, Hashable {
                 .table(headers: ["Shortcut", "Action"], rows: [
                     ["↑ / ↓",       "Move the result highlight (also: Ctrl-K / Ctrl-J)"],
                     ["Return",      "Open the highlighted result; falls back to the top hit if you haven't moved the highlight"],
-                    ["Tab",         "Open or cycle the tag completion dropdown"],
+                    ["Tab",         "Open or cycle the tag / collection completion dropdown"],
                     ["⌘R",          "Toggle regex mode (RE2 against title + notes + URL + extracted text)"],
                     ["Escape",      "Dismiss the tag dropdown, then clear the field, then close the panel"],
                 ]),
