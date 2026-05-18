@@ -408,7 +408,14 @@ struct ItemListView: View {
     private var gridView: some View {
         ScrollView {
             LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: 140, maximum: 200), spacing: 14)],
+                // alignment: .top so tiles with single-line vs
+                // two-line captions in the same row anchor their
+                // images at the same Y. Default .center pushed
+                // short-caption images downward to match the taller
+                // cell, giving the grid a visibly mis-aligned look.
+                columns: [GridItem(.adaptive(minimum: 140, maximum: 200),
+                                   spacing: 14,
+                                   alignment: .top)],
                 spacing: 14
             ) {
                 ForEach(store.items) { item in

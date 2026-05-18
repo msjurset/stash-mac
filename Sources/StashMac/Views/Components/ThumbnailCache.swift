@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import ImageIO
 
 /// Process-global cache of decoded thumbnail NSImages keyed by their
 /// resolved file path. Backed by NSCache so it auto-evicts under
@@ -72,7 +73,7 @@ final class ThumbnailCache {
         let url = URL(fileURLWithPath: path)
         let img = await Task.detached(priority: .userInitiated) { () -> NSImage? in
             guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-            return NSImage(contentsOf: url)
+            return Self.loadOriented(from: url)
         }.value
 
         guard let img else { return nil }
@@ -91,5 +92,33 @@ final class ThumbnailCache {
     func invalidate(path: String) {
         images.removeObject(forKey: path as NSString)
         aspects.removeValue(forKey: path)
+    }
+
+    /// Decode an image file with EXIF orientation pre-applied.
+    /// NSImage(contentsOf:) silently ignores rotation tags on many
+    /// camera-roll JPEGs, which left portrait-shot photos rendering
+    /// on their side in every Mac surface that loaded them through
+    /// the cache (Browse list, masonry, Moments grid, etc.).
+    /// `kCGImageSourceCreateThumbnailWithTransform: true` bakes the
+    /// rotation into the resulting CGImage so downstream NSImage
+    /// callers don't need orientation-awareness.
+    ///
+    /// `kCGImageSourceThumbnailMaxPixelSize: 1024` caps the decode —
+    /// every consumer renders the result at ≤200pt, so a 12MP
+    /// raster is wasted memory and decode time.
+    nonisolated static func loadOriented(from url: URL) -> NSImage? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
+            return nil
+        }
+        let opts: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: 1024,
+        ]
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, opts as CFDictionary) else {
+            return nil
+        }
+        return NSImage(cgImage: cg,
+                       size: NSSize(width: cg.width, height: cg.height))
     }
 }
