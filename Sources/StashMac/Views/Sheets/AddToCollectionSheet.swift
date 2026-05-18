@@ -117,6 +117,12 @@ struct AddToCollectionSheet: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        // Suppress the SwiftUI focus ring — first-on-load row was
+        // getting the system blue focus outline, which read like a
+        // selection state and confused "I'm focused" with
+        // "I'm checked." Selection state is shown by the
+        // checkmark badge alone.
+        .focusEffectDisabled()
     }
 
     /// The Create-New affordance is split into a "click to expand"
