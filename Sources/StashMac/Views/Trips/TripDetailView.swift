@@ -140,40 +140,43 @@ private struct DetailTile: View {
     let onOpen: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            ZStack(alignment: .topLeading) {
-                TripPreviewImage(item: item)
-                    .aspectRatio(1, contentMode: .fit)
-                    .frame(maxWidth: .infinity)
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6)
-                            .stroke(isSelected
-                                        ? Color.accentColor.opacity(0.7)
-                                        : Color.secondary.opacity(0.25),
-                                    lineWidth: isSelected ? 1.5 : 1)
-                    )
-                    // Dim unselected items so the included set
-                    // visually dominates the canvas. Stronger signal
-                    // than a corner badge alone.
-                    .opacity(isSelected ? 1.0 : 0.4)
+        // Two independent click targets:
+        //   - checkmark badge in the top-left → toggles selection
+        //   - everything else on the tile → opens the item
+        // Right-click surfaces both as menu items so the affordance
+        // is discoverable even when the user doesn't notice the
+        // small badge. Reverted from "whole tile toggles" because
+        // the open-item drill-down is the primary verb users reach
+        // for; gating it behind right-click added friction.
+        Button(action: onOpen) {
+            VStack(alignment: .leading, spacing: 4) {
+                ZStack(alignment: .topLeading) {
+                    TripPreviewImage(item: item)
+                        .aspectRatio(1, contentMode: .fit)
+                        .frame(maxWidth: .infinity)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(isSelected
+                                            ? Color.accentColor.opacity(0.7)
+                                            : Color.secondary.opacity(0.25),
+                                        lineWidth: isSelected ? 1.5 : 1)
+                        )
+                        .opacity(isSelected ? 1.0 : 0.4)
 
-                selectionBadge
-                    .padding(6)
+                    selectionBadge
+                        .padding(6)
+                }
+
+                Text(item.title?.isEmpty == false ? item.title! : item.id)
+                    .font(.caption)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .foregroundStyle(isSelected ? .primary : .secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-
-            Text(item.title?.isEmpty == false ? item.title! : item.id)
-                .font(.caption)
-                .lineLimit(2)
-                .multilineTextAlignment(.leading)
-                .foregroundStyle(isSelected ? .primary : .secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .contentShape(Rectangle())
-        .onTapGesture(perform: onToggle)
-        // Right-click to open in the main list — keeps the primary
-        // click for selection toggle (the dominant action in this
-        // pane) without burying the "view the actual item" path.
+        .buttonStyle(.plain)
         .contextMenu {
             Button("Open Item") { onOpen() }
             Divider()
@@ -185,24 +188,31 @@ private struct DetailTile: View {
     }
 
     /// Filled checkmark when included, hollow circle when excluded.
-    /// Always visible (vs hover-only) so the selection state is
-    /// scannable across the whole grid at a glance.
+    /// Wrapped in a Button so it consumes its own click region
+    /// before the outer Button (whose job is to open the item)
+    /// sees it — separate hit targets, no modifier-key dance.
     private var selectionBadge: some View {
-        ZStack {
-            Circle()
-                .fill(isSelected ? Color.accentColor : Color.black.opacity(0.45))
-                .frame(width: 22, height: 22)
-            if isSelected {
-                Image(systemName: "checkmark")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(.white)
-            } else {
+        Button(action: onToggle) {
+            ZStack {
                 Circle()
-                    .strokeBorder(Color.white.opacity(0.9), lineWidth: 1.5)
+                    .fill(isSelected ? Color.accentColor : Color.black.opacity(0.45))
                     .frame(width: 22, height: 22)
+                if isSelected {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(.white)
+                } else {
+                    Circle()
+                        .strokeBorder(Color.white.opacity(0.9), lineWidth: 1.5)
+                        .frame(width: 22, height: 22)
+                }
             }
+            .shadow(color: .black.opacity(0.3), radius: 1, x: 0, y: 1)
         }
-        .shadow(color: .black.opacity(0.3), radius: 1, x: 0, y: 1)
+        .buttonStyle(.plain)
+        .help(isSelected
+                ? "Exclude from collection"
+                : "Include in collection")
     }
 }
 
