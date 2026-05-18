@@ -1345,6 +1345,44 @@ final class StashStore {
         }
     }
 
+    /// Fold one or more collections into a survivor. CLI runs the
+    /// operation in a transaction; we just reload top-level state
+    /// afterward so the sidebar reflects the new shape.
+    func mergeCollections(survivor: String, others: [String]) async {
+        guard !others.isEmpty else { return }
+        do {
+            try await cli.mergeCollections(survivor: survivor, others: others)
+            loadAll()
+        } catch {
+            self.error = (error as? LocalizedError)?.errorDescription
+                ?? error.localizedDescription
+        }
+    }
+
+    /// Add items from sources (Static or Smart) to one or more
+    /// Static destinations, optionally creating a new destination
+    /// inline. Idempotent on the CLI side — items already in a
+    /// destination collapse silently.
+    func addItemsToCollections(
+        from sources: [String],
+        to destinations: [String],
+        createNew: String?,
+        newDescription: String?
+    ) async {
+        do {
+            try await cli.addItemsToCollections(
+                from: sources,
+                to: destinations,
+                createNew: createNew,
+                newDescription: newDescription
+            )
+            loadAll()
+        } catch {
+            self.error = (error as? LocalizedError)?.errorDescription
+                ?? error.localizedDescription
+        }
+    }
+
     // MARK: - Rules
 
     func loadRules() {

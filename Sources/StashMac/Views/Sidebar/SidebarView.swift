@@ -23,6 +23,13 @@ struct SidebarView: View {
     /// the active drop target.
     @State private var hoveredCollectionID: Int64?
     @State private var showAllCollectionsPopover = false
+    /// When non-nil, the merge sheet is open with this collection
+    /// pre-checked as a source. Picker inside the sheet handles
+    /// the survivor + the rest of the merge set.
+    @State private var mergeSeed: String?
+    /// When non-nil, the add-to sheet is open with this collection
+    /// (Static OR Smart) as the single source.
+    @State private var addToSource: String?
     /// Tag-row equivalent of `hoveredCollectionID`. Tracks which tag
     /// row is the active drop target so we can highlight it during
     /// drag.
@@ -183,6 +190,48 @@ struct SidebarView: View {
         .sheet(isPresented: $showCollectionCreateSheet) {
             CollectionCreateSheet()
         }
+        .sheet(item: Binding(
+            get: { mergeSeed.map(MergeSeed.init) },
+            set: { mergeSeed = $0?.name }
+        )) { seed in
+            MergeCollectionsSheet(
+                candidates: store.collections,
+                seedName: seed.name,
+                onCommit: { survivor, others in
+                    Task { await store.mergeCollections(survivor: survivor, others: others) }
+                }
+            )
+        }
+        .sheet(item: Binding(
+            get: { addToSource.map(AddToSource.init) },
+            set: { addToSource = $0?.name }
+        )) { src in
+            AddToCollectionSheet(
+                sourceLabel: src.name,
+                sources: [src.name],
+                availableDestinations: store.collections,
+                onCommit: { dests, createNew, desc in
+                    Task { await store.addItemsToCollections(
+                        from: [src.name],
+                        to: dests,
+                        createNew: createNew,
+                        newDescription: desc
+                    ) }
+                }
+            )
+        }
+    }
+
+    /// Identifiable wrappers so the merge/add-to sheets can use
+    /// `.sheet(item:)`-style presentation against a stored string
+    /// without forcing a separate Bool flag.
+    private struct MergeSeed: Identifiable {
+        let name: String
+        var id: String { name }
+    }
+    private struct AddToSource: Identifiable {
+        let name: String
+        var id: String { name }
     }
 
     // MARK: - Collections (static + smart, merged)
@@ -251,6 +300,15 @@ struct SidebarView: View {
                             }
                         }
                         .contextMenu {
+                            Button("Add Items to Collection…") {
+                                addToSource = col.name
+                            }
+                            if store.collections.count > 1 {
+                                Button("Merge with…") {
+                                    mergeSeed = col.name
+                                }
+                            }
+                            Divider()
                             Button("Export Collection…") {
                                 exportCollection(col.name)
                             }
@@ -267,6 +325,13 @@ struct SidebarView: View {
                         .contextMenu {
                             Button("Edit…") {
                                 smartCollectionSheet = .edit(ss)
+                            }
+                            // Smart Collections can't merge (no
+                            // stored membership), but they CAN
+                            // snapshot their current results into
+                            // a Static destination via add-to.
+                            Button("Add Items to Collection…") {
+                                addToSource = ss.name
                             }
                             Divider()
                             Button("Delete", role: .destructive) {

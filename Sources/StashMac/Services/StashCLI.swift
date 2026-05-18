@@ -988,6 +988,44 @@ actor StashCLI {
         _ = try await captureOutput(args: ["collection", "touch", name])
     }
 
+    /// Merge `others` into `survivor` (Static-only). The CLI runs
+    /// everything in a single transaction; folded items append at
+    /// the end of the survivor's existing curated order. Duplicate
+    /// memberships collapse silently.
+    func mergeCollections(survivor: String, others: [String]) async throws {
+        var args = ["collection", "merge", "--into", survivor]
+        args.append(contentsOf: others)
+        _ = try await captureOutput(args: args)
+    }
+
+    /// Add items from one or more source collections (Static OR
+    /// Smart) to one or more destination collections (Static only).
+    /// Optionally creates a new Static destination on the fly —
+    /// the primary path for "snapshot a Smart Collection's current
+    /// results into a durable Static one." Upsert semantics: items
+    /// already in a destination are no-ops.
+    func addItemsToCollections(
+        from sources: [String],
+        to destinations: [String],
+        createNew: String? = nil,
+        newDescription: String? = nil
+    ) async throws {
+        var args = ["collection", "add-to"]
+        for src in sources {
+            args += ["--from", src]
+        }
+        for dest in destinations {
+            args += ["--to", dest]
+        }
+        if let createNew, !createNew.isEmpty {
+            args += ["--create", createNew]
+            if let newDescription, !newDescription.isEmpty {
+                args += ["--description", newDescription]
+            }
+        }
+        _ = try await captureOutput(args: args)
+    }
+
     func createCollection(name: String, description: String? = nil) async throws -> StashCollection {
         var args = ["collection", "create", "--json", name]
         if let description { args += ["-d", description] }
