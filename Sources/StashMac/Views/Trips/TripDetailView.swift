@@ -21,7 +21,16 @@ struct TripDetailView: View {
                 Divider()
                 ScrollView {
                     LazyVGrid(
-                        columns: [GridItem(.adaptive(minimum: 160), spacing: 16)],
+                        // alignment: .top so a row with mixed
+                        // single-line and wrapped two-line captions
+                        // top-anchors every image — the default
+                        // center alignment otherwise pushed the
+                        // single-line tile's image down to match the
+                        // two-line tile's overall height, leaving
+                        // images visibly misaligned across the row.
+                        columns: [GridItem(.adaptive(minimum: 160),
+                                           spacing: 16,
+                                           alignment: .top)],
                         spacing: 16
                     ) {
                         ForEach(suggestion.items, id: \.id) { item in
@@ -71,12 +80,17 @@ struct TripDetailView: View {
     @ViewBuilder
     private func header(for suggestion: StashCLI.TripSuggestion) -> some View {
         HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(suggestion.suggestedName)
                     .font(.title3.weight(.semibold))
                 Text(selectionSummary(for: suggestion))
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    // Match the middle-pane header's reserved
+                    // 2-line subtitle so the panes' bottom edges
+                    // line up against the same divider regardless
+                    // of how long the subtitle actually is.
+                    .lineLimit(2, reservesSpace: true)
             }
             Spacer()
             // Bulk toggle: flips between "select all" and "deselect

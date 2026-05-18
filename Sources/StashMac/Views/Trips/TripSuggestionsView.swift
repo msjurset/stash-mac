@@ -79,6 +79,12 @@ struct TripSuggestionsView: View {
                 Text(headerSubtitle)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    // Reserve 2 lines so 1-vs-2-line variations
+                    // ("Scanning…" vs "4 clusters found in last 90
+                    // days.") don't bounce the divider height.
+                    // Matches the right-pane header so the panes'
+                    // bottom edges line up against the same divider.
+                    .lineLimit(2, reservesSpace: true)
             }
             Spacer()
             Toggle(isOn: scanAllBinding) {
@@ -96,7 +102,7 @@ struct TripSuggestionsView: View {
             .help("Refresh")
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 12)
+        .padding(.vertical, 10)
     }
 
     private var headerSubtitle: String {
