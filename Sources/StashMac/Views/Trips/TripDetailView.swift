@@ -19,8 +19,8 @@ struct TripDetailView: View {
                 Divider()
                 ScrollView {
                     LazyVGrid(
-                        columns: [GridItem(.adaptive(minimum: 160), spacing: 12)],
-                        spacing: 12
+                        columns: [GridItem(.adaptive(minimum: 160), spacing: 16)],
+                        spacing: 16
                     ) {
                         ForEach(suggestion.items, id: \.id) { item in
                             DetailTile(
@@ -31,7 +31,8 @@ struct TripDetailView: View {
                             )
                         }
                     }
-                    .padding(16)
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 20)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -143,8 +144,10 @@ private struct DetailTile: View {
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                     .overlay(
                         RoundedRectangle(cornerRadius: 6)
-                            .stroke(isSelected ? Color.accentColor : Color.secondary.opacity(0.25),
-                                    lineWidth: isSelected ? 2 : 1)
+                            .stroke(isSelected
+                                        ? Color.accentColor.opacity(0.7)
+                                        : Color.secondary.opacity(0.25),
+                                    lineWidth: isSelected ? 1.5 : 1)
                     )
                     // Dim unselected items so the included set
                     // visually dominates the canvas. Stronger signal
