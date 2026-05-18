@@ -31,6 +31,21 @@ final class StashStore {
     /// through the Accept sheet. Defaults to every item when the
     /// focused suggestion changes.
     var selectedTripItemIDs: Set<String> = []
+    /// Cached `stash trip-suggest` results. Cached on the store so
+    /// the Trips middle pane renders instantly on every revisit
+    /// (back/forward from a drilled item, sidebar reselection) and
+    /// only re-runs the CLI when the user explicitly refreshes or
+    /// flips the scan-all-history toggle.
+    var tripSuggestions: [StashCLI.TripSuggestion] = []
+    /// Last scope `tripSuggestions` was loaded with. Drives the
+    /// "do I need to re-fetch on toggle flip" decision.
+    var tripSuggestionsScanAll: Bool = false
+    /// True while the trip-suggest CLI call is in flight. Backs the
+    /// header spinner in TripSuggestionsView.
+    var tripSuggestionsLoading: Bool = false
+    /// Last error from `stash trip-suggest`, surfaced inline in the
+    /// view. Cleared on the next successful refresh.
+    var tripSuggestionsError: String?
 
     // MARK: - Navigation history (back / forward)
 
@@ -1784,6 +1799,44 @@ final class StashStore {
         // pipeline that lives there.
         if isApplyingNavigationHistory { return }
         applyNavigation(item)
+    }
+
+    // MARK: - Trip suggestions
+
+    /// Refresh `tripSuggestions` from the CLI. If `forceReload` is
+    /// false AND there's already a cached set loaded with the same
+    /// scope (scanAll), this is a no-op — the user is revisiting the
+    /// view via back/forward and the cards should appear instantly
+    /// rather than waiting for a re-fetch. The explicit Refresh
+    /// button passes forceReload=true.
+    func loadTripSuggestions(scanAll: Bool, forceReload: Bool = false) async {
+        if !forceReload,
+           !tripSuggestions.isEmpty,
+           tripSuggestionsScanAll == scanAll {
+            return
+        }
+        tripSuggestionsLoading = true
+        tripSuggestionsError = nil
+        defer { tripSuggestionsLoading = false }
+        do {
+            let fresh = try await StashCLI.shared.tripSuggestions(scanAll: scanAll)
+            tripSuggestions = fresh
+            tripSuggestionsScanAll = scanAll
+            // Reconcile the focused suggestion with what came back.
+            // If it's gone (accepted into a collection, scope
+            // shrunk), fall forward to the first remaining one so
+            // the detail pane stays useful instead of going blank.
+            if let current = selectedTripSuggestion,
+               !fresh.contains(where: { $0.id == current.id }) {
+                selectedTripSuggestion = fresh.first
+            } else if selectedTripSuggestion == nil {
+                selectedTripSuggestion = fresh.first
+            }
+        } catch {
+            tripSuggestionsError = (error as? LocalizedError)?.errorDescription
+                ?? error.localizedDescription
+            tripSuggestions = []
+        }
     }
 
     // MARK: - Back / forward navigation

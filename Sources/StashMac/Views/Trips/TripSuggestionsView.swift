@@ -13,13 +13,27 @@ import SwiftUI
 /// widens the scan from the default 90-day window to the whole
 /// stash for users who want to retroactively bundle older bursts.
 struct TripSuggestionsView: View {
-    @State private var suggestions: [StashCLI.TripSuggestion] = []
-    @State private var loading = false
-    @State private var error: String?
-    @State private var scanAll = false
     @State private var renaming: StashCLI.TripSuggestion?
 
     @Environment(StashStore.self) private var store
+
+    // Read-through accessors so the body code reads the same as
+    // before. Trip-suggest results live on StashStore so revisiting
+    // this view (back/forward, sidebar reselection) shows the cached
+    // list instantly instead of re-running the CLI on every appear.
+    private var suggestions: [StashCLI.TripSuggestion] { store.tripSuggestions }
+    private var loading: Bool { store.tripSuggestionsLoading }
+    private var error: String? { store.tripSuggestionsError }
+    private var scanAll: Bool { store.tripSuggestionsScanAll }
+    private var scanAllBinding: Binding<Bool> {
+        Binding(
+            get: { store.tripSuggestionsScanAll },
+            set: { newValue in
+                guard newValue != store.tripSuggestionsScanAll else { return }
+                Task { await store.loadTripSuggestions(scanAll: newValue, forceReload: true) }
+            }
+        )
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -28,7 +42,13 @@ struct TripSuggestionsView: View {
             content
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .task { await reload() }
+        .task {
+            // Cache-aware: returns immediately if the store already
+            // has a list loaded with the current scope. Only the
+            // first visit (or a flipped scanAll, or the Refresh
+            // button) actually hits the CLI.
+            await store.loadTripSuggestions(scanAll: scanAll)
+        }
         .sheet(item: $renaming) { suggestion in
             // Accept only the items still checked in the detail
             // pane. When the user hasn't opened the detail pane yet,
@@ -61,17 +81,14 @@ struct TripSuggestionsView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            Toggle(isOn: $scanAll) {
+            Toggle(isOn: scanAllBinding) {
                 Text("Scan all history")
                     .font(.caption)
             }
             .toggleStyle(.switch)
             .controlSize(.mini)
-            .onChange(of: scanAll) { _, _ in
-                Task { await reload() }
-            }
             Button {
-                Task { await reload() }
+                Task { await store.loadTripSuggestions(scanAll: scanAll, forceReload: true) }
             } label: {
                 Image(systemName: "arrow.clockwise")
             }
@@ -103,7 +120,9 @@ struct TripSuggestionsView: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
-                Button("Retry") { Task { await reload() } }
+                Button("Retry") {
+                    Task { await store.loadTripSuggestions(scanAll: scanAll, forceReload: true) }
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding()
@@ -149,30 +168,6 @@ struct TripSuggestionsView: View {
         }
     }
 
-    private func reload() async {
-        loading = true
-        defer { loading = false }
-        error = nil
-        do {
-            suggestions = try await StashCLI.shared.tripSuggestions(scanAll: scanAll)
-        } catch {
-            self.error = (error as? LocalizedError)?.errorDescription
-                ?? error.localizedDescription
-            suggestions = []
-        }
-        // Reconcile the detail-pane selection with what came back.
-        // If the previously-selected suggestion is gone (accepted into
-        // a collection, scan-window shrunk, etc.), fall forward to the
-        // first remaining one so the right pane stays useful instead
-        // of going blank.
-        if let current = store.selectedTripSuggestion,
-           !suggestions.contains(where: { $0.id == current.id }) {
-            store.selectedTripSuggestion = suggestions.first
-        } else if store.selectedTripSuggestion == nil {
-            store.selectedTripSuggestion = suggestions.first
-        }
-    }
-
     private func accept(
         suggestion: StashCLI.TripSuggestion,
         ids: [String],
@@ -187,12 +182,12 @@ struct TripSuggestionsView: View {
                 description: description
             )
             // Reload top-level state so the new collection appears in
-            // the sidebar, then refresh suggestions so the
+            // the sidebar, then force-refresh suggestions so the
             // now-grouped cluster drops out of the list.
             store.loadAll()
-            await reload()
+            await store.loadTripSuggestions(scanAll: scanAll, forceReload: true)
         } catch {
-            self.error = (error as? LocalizedError)?.errorDescription
+            store.tripSuggestionsError = (error as? LocalizedError)?.errorDescription
                 ?? error.localizedDescription
         }
     }
