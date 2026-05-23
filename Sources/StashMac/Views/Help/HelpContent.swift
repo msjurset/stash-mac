@@ -28,6 +28,7 @@ enum HelpTopic: String, CaseIterable, Identifiable, Codable, Hashable {
     case aiIdentify = "Identify with AI"
     case location = "Location"
     case moments = "Moments"
+    case vimMode = "Vim & Slash Commands"
     case keyboard = "Keyboard Shortcuts"
 
     var id: String { rawValue }
@@ -51,6 +52,7 @@ enum HelpTopic: String, CaseIterable, Identifiable, Codable, Hashable {
         case .aiIdentify: return "sparkles"
         case .location: return "mappin.and.ellipse"
         case .moments: return "calendar.badge.clock"
+        case .vimMode: return "keyboard.fill"
         case .keyboard: return "keyboard"
         }
     }
@@ -150,8 +152,32 @@ enum HelpTopic: String, CaseIterable, Identifiable, Codable, Hashable {
                 .heading("Quick Search Panel"),
                 .paragraph("Open the global search panel with ⌘F, ⌘K, or `/`. Results update in real time as you type. Use ↑/↓ (or Ctrl-J/K) to move the highlight, Return to jump to the highlighted result, Escape to dismiss. Selecting a result that lives outside your current sidebar scope automatically switches to All Items so the row is visible and highlighted."),
                 .paragraph("Pressing `/` always opens the panel when no field has focus. When the list filter field has focus *and is empty* (the common state on first launch), `/` opens the panel as well — that way you don't have to click anywhere first. Mid-text `/` stays a literal character so you can include slashes in queries."),
-                .heading("Tag and Collection Completion"),
-                .paragraph("Type `tag:` inside the panel to bring up tag suggestions; type `collection:` to bring up collection suggestions. Tab cycles the dropdown, Return commits. `tag:` may be repeated for multiple-tag filters (every tag must match); `collection:` is single-target — the first one wins. Both compose with the rest of the free-text query. Collection names with spaces auto-quote on commit: `collection:\"Mark's Favorite Fishing\"`."),
+                .heading("Search Tokens"),
+                .paragraph("Stash supports structured tokens in both the global panel and list filter field. Type the prefix followed by the name; name completion (Tab/Return) works for tags and collections."),
+                .table(headers: ["Token", "Match Effect"], rows: [
+                    ["tag:name", "Items carrying the tag"],
+                    ["!tag:name", "Items NOT carrying the tag"],
+                    ["-tag:name", "Same as !tag — exclude the tag"],
+                    ["^tag:name", "Exact tag match (no sub-tags or broader matches)"],
+                    ["collection:name", "Items in the specified collection"],
+                    ["type:url/image/...", "Filter by item type"],
+                ]),
+                .heading("Global Commands"),
+                .paragraph("Type a slash followed by a command name in the global search panel for quick access to system-wide views:"),
+                .table(headers: ["Command", "Goes to…"], rows: [
+                    ["/today", "Items captured today"],
+                    ["/yesterday", "Items captured yesterday"],
+                    ["/untagged", "All items with no tags"],
+                    ["/favorites", "All items carrying your Favorite tag (e.g. #fav)"],
+                    ["/links", "All URL items"],
+                    ["/files", "All File items"],
+                    ["/images", "All Image items"],
+                    ["/emails", "All Email items"],
+                    ["/dupes", "The Duplicate items view"],
+                    ["/stats", "The Statistics dashboard"],
+                    ["/health", "The Health Check view"],
+                    ["/rules", "The Rules editor"],
+                ]),
                 .heading("Regex Mode"),
                 .paragraph("Click the * button next to the field (or press ⌘R) to switch to RE2 regex. The pattern matches against title + notes + URL + extracted text. A small popover opens with a syntax cheatsheet that stays visible while you type — click outside the panel to dismiss."),
                 .bullet([
@@ -438,34 +464,23 @@ enum HelpTopic: String, CaseIterable, Identifiable, Codable, Hashable {
                 .heading("Setup"),
                 .numbered([
                     "Open Settings (⌘,) → AI tab.",
-                    "Pick a provider from the picker at the top (currently Google Gemini; Claude / OpenAI plug-ins land in the same dropdown when added).",
+                    "Pick a provider from the picker at the top (Google Gemini or Anthropic Claude).",
                     "Paste the provider's API key into the field and click Save. The key is stored in UserDefaults and never leaves this Mac except in outbound requests to that provider's endpoint.",
                     "Optionally click Test to verify the key with a small round trip.",
-                    "Edit the identify prompt if you want different output shape — the parser handles `TITLE:` / `NOTES:` markers as well as `Common Name:` / `Subject:` fallbacks.",
+                    "Edit the identify prompt if you want different output shape — the default asks for `TITLE:` / `NOTES:` markers.",
                 ]),
                 .heading("Using It"),
                 .bullet([
                     "Right-click any image item in the list or grid and choose Identify with <active provider>.",
                     "Title is filled only when it's currently blank — the provider doesn't overwrite a title you typed yourself.",
                     "Notes are appended (separated by a blank line) so repeat identifies on the same item don't lose earlier output.",
-                    "A flash message reports progress (\"Identifying abc123… with Google Gemini\") and completion (\"Identified ✓\").",
+                    "A flash message reports progress and completion.",
+                    "**Gemini only:** Identifies include an OCR transcript of any text found in the image, stored in the item's Extracted Text field.",
                 ]),
                 .heading("1Password Integration"),
-                .paragraph("Instead of pasting a raw API key, you can paste a 1Password reference: `op://Private/Stash Gemini API Key/password`. The app resolves it via the 1Password CLI (`op read`) on every request, so the actual secret never lives in UserDefaults — only the reference does."),
-                .bullet([
-                    "Install the CLI: `brew install 1password-cli`.",
-                    "Sign in: `op signin` (or `eval $(op signin)` for a session-scoped login).",
-                    "The Settings field shows a lock-shield hint when a reference is detected and `op` is available; a yellow warning if `op` isn't installed yet.",
-                    "Swap keys in 1Password without touching the app — the next identify resolves the new value.",
-                ]),
-                .heading("Adding More Providers"),
-                .paragraph("The provider list is driven by `AIProviderRegistry`. To add Claude or OpenAI: implement the `AIProvider` protocol in a new file, add a case to `AIProviderID`, and register the concrete type in the registry. The Settings picker, prefs storage, and menu wiring pick up the new entry automatically."),
-                .heading("Notes"),
-                .bullet([
-                    "The menu item only appears for image-type items when an API key is configured.",
-                    "Each provider keeps its own key and prompt; switching the picker doesn't lose other providers' values.",
-                    "Mac and Android Stash share the Gemini prompt shape but maintain independent keys / drafts.",
-                ]),
+                .paragraph("Instead of pasting a raw API key, you can paste a 1Password reference: `op://Vault/Item/Field`. The app resolves it via the 1Password CLI (`op read`) on every request."),
+                .heading("Cost Tracking"),
+                .paragraph("The AI tab in Settings shows real-time token usage and cost forecasts for Google Gemini calls. It aggregates spend from this Mac and the `stash serve` daemon (if running), with 30-day projections based on your recent activity."),
             ]
 
         case .location:
@@ -517,6 +532,50 @@ enum HelpTopic: String, CaseIterable, Identifiable, Codable, Hashable {
                 .heading("CLI equivalent"),
                 .paragraph("The Mac view is a thin wrapper over `stash moments`. The same clusters surface from the terminal:"),
                 .code("stash moments --json | jq '.[0]'\nstash moments accept --name \"Beach trip 2026-05\" ID ID ID"),
+            ]
+
+        case .vimMode:
+            return [
+                .paragraph("Stash includes a built-in Vim engine for multi-line text fields. It provides modal editing (Normal/Insert/Visual), standard motions, and powerful text transformations via slash commands."),
+                .heading("Toggling Vim"),
+                .paragraph("Type `/vim` in any multi-line editor (Notes, Extracted Text, AI Prompt) to toggle Vim mode on or off. A `VIM:N` or `VIM:I` badge appears at the bottom of the field when active."),
+                .heading("Slash Commands"),
+                .paragraph("In Normal mode, type `/` followed by a command name and Return to transform the entire field content:"),
+                .table(headers: ["Command", "Action"], rows: [
+                    ["/vim",   "Toggle Vim mode on/off"],
+                    ["/uc",    "Convert all text to UPPERCASE"],
+                    ["/lc",    "Convert all text to lowercase"],
+                    ["/trim",  "Remove leading/trailing whitespace"],
+                    ["/sort",  "Sort lines alphabetically"],
+                    ["/unique","Remove duplicate lines"],
+                    ["/reverse","Reverse the line order"],
+                    ["/date",  "Append current date (YYYY-MM-DD)"],
+                    ["/link",  "Wrap URLs in Markdown [label](url) syntax"],
+                    ["/code",  "Wrap content in Markdown code fences (```)"],
+                ]),
+                .heading("AI Commands (Item-specific)"),
+                .paragraph("When editing notes or extracted text for a specific item, these commands use the active AI provider to transform the text:"),
+                .table(headers: ["Command", "Action"], rows: [
+                    ["/fix",   "Fix spelling and grammar mistakes"],
+                    ["/sum",   "Summarize the content into a concise paragraph"],
+                    ["/tags",  "Suggest relevant tags based on the text"],
+                ]),
+                .heading("Normal Mode Basics"),
+                .bullet([
+                    "**i / a** — Enter Insert mode (before / after cursor)",
+                    "**v** — Enter Visual mode (character selection)",
+                    "**V** — Enter Visual Line mode (line selection)",
+                    "**h / j / k / l** — Move cursor (left / down / up / right)",
+                    "**w / b** — Move by word (forward / backward)",
+                    "**0 / $** — Move to start / end of line",
+                    "**gg / G** — Move to start / end of document",
+                    "**x** — Delete character under cursor",
+                    "**dd** — Delete current line",
+                    "**y** — Yank (copy) selection",
+                    "**p** — Paste yanked text",
+                    "**u / Ctrl-R** — Undo / Redo",
+                    "**Escape** — Return to Normal mode from Insert/Visual",
+                ]),
             ]
 
         case .keyboard:
