@@ -415,26 +415,54 @@ struct EditItemSheet: View {
 
         Task {
             defer { Task { @MainActor in isIdentifying = false } }
-            do {
-                let resolved = try await AIKeyResolver.resolve(key)
-                var images: [AIImage] = []
-                let primary = try Data(contentsOf: fileURL)
-                images.append(AIImage(data: primary, mimeType: mime))
-                for (u, m) in attachedURLs {
-                    let data = try Data(contentsOf: u)
-                    images.append(AIImage(data: data, mimeType: m))
+            // Same transient-retry shape as the right-click identify
+            // in StashStore: 3/7/15/30/60s progressive backoff for
+            // 503/429/network blips (~2 minutes total), immediate
+            // surface for permanent errors (bad key / quota).
+            let backoffs: [UInt64] = [
+                3_000_000_000,
+                7_000_000_000,
+                15_000_000_000,
+                30_000_000_000,
+                60_000_000_000,
+            ]
+            var attempt = 0
+            var lastError: Error? = nil
+            var result: AIIdentifyResult? = nil
+            while attempt <= backoffs.count {
+                do {
+                    let resolved = try await AIKeyResolver.resolve(key)
+                    var images: [AIImage] = []
+                    let primary = try Data(contentsOf: fileURL)
+                    images.append(AIImage(data: primary, mimeType: mime))
+                    for (u, m) in attachedURLs {
+                        let data = try Data(contentsOf: u)
+                        images.append(AIImage(data: data, mimeType: m))
+                    }
+                    // Single-image identify: send the original at full
+                    // quality. Multi-image: downscale each so the
+                    // bundle fits comfortably in the request budget.
+                    let sendImages = images.count > 1
+                        ? images.map { downscaleForIdentify($0) }
+                        : images
+                    result = try await provider.identify(
+                        apiKey: resolved,
+                        images: sendImages,
+                        promptText: prompt
+                    )
+                    lastError = nil
+                    break
+                } catch {
+                    lastError = error
+                    if isTransientIdentifyError(error), attempt < backoffs.count {
+                        try? await Task.sleep(nanoseconds: backoffs[attempt])
+                        attempt += 1
+                        continue
+                    }
+                    break
                 }
-                // Single-image identify: send the original at full
-                // quality. Multi-image: downscale each so the
-                // bundle fits comfortably in the request budget.
-                let sendImages = images.count > 1
-                    ? images.map { downscaleForIdentify($0) }
-                    : images
-                let result = try await provider.identify(
-                    apiKey: resolved,
-                    images: sendImages,
-                    promptText: prompt
-                )
+            }
+            if let result {
                 await MainActor.run {
                     // Always replace Title with the identified value
                     // here — unlike the right-click path (which writes
@@ -450,10 +478,29 @@ struct EditItemSheet: View {
                     // repeat identifies don't lose earlier output.
                     let existing = note.trimmingCharacters(in: .whitespacesAndNewlines)
                     note = existing.isEmpty ? result.notes : existing + "\n\n" + result.notes
+                    // Transcript (Gemini's vision-OCR): replace the
+                    // existing extractedText when the model produced
+                    // a transcript. This is the manual-rescue path
+                    // for items whose Android-side identify failed
+                    // (e.g. Gemini was returning 503s at capture
+                    // time) — re-running identify here with the
+                    // Mac's own API key + retry budget gives a
+                    // second shot at proper OCR. Wholesale replace
+                    // (not append) because the existing value is
+                    // almost always ML Kit's mediocre first-pass
+                    // that we want to discard. If the model returns
+                    // no transcript (NONE / no text in image), we
+                    // leave the existing value alone.
+                    if let t = result.transcript?.trimmingCharacters(in: .whitespacesAndNewlines),
+                       !t.isEmpty {
+                        extractedText = t
+                    }
                 }
-            } catch {
-                let msg = (error as? LocalizedError)?.errorDescription
-                    ?? error.localizedDescription
+            } else if let lastError {
+                let msg = friendlyIdentifyErrorMessage(
+                    provider: provider.displayName,
+                    error: lastError
+                )
                 await MainActor.run {
                     identifyError = msg
                 }

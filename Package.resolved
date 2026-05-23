@@ -1,0 +1,15 @@
+{
+  "originHash" : "d06c736ba224939af605aaaea9024d860c7a38e8f5e723e326adf9755a9857f8",
+  "pins" : [
+    {
+      "identity" : "swift-vim-engine",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/msjurset/swift-vim-engine.git",
+      "state" : {
+        "revision" : "cc36f4b613ddc089a766e423238215f4c09e92d4",
+        "version" : "2.0.1"
+      }
+    }
+  ],
+  "version" : 3
+}

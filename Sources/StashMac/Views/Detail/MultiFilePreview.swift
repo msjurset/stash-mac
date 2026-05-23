@@ -31,7 +31,7 @@ struct MultiFilePreview: View {
     @ViewBuilder
     private var mainPreview: some View {
         if let url = activeFileURL {
-            ImagePreviewSection(fileURL: url)
+            ImagePreviewSection(fileURL: url, allURLs: allSlots.compactMap { $0.url })
         } else if !anySlotResolves, let fallback = thumbnailFallbackURL {
             // Every slot's blob has gone missing on disk (dedup
             // delete, manual cleanup, broken backup restore). Show
@@ -76,7 +76,7 @@ struct MultiFilePreview: View {
     /// main view; right-click for primary/detach actions.
     private var filmstrip: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            LazyHStack(spacing: 6) {
+            LazyHStack(alignment: .top, spacing: 6) {
                 ForEach(allSlots.indices, id: \.self) { idx in
                     slotThumbnail(slot: allSlots[idx], index: idx)
                 }

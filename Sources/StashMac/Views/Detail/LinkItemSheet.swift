@@ -4,6 +4,7 @@ struct LinkItemSheet: View {
     @Environment(StashStore.self) private var store
     @Environment(\.dismiss) private var dismiss
     let sourceItemID: String
+    var targetItemID: String? = nil
 
     @State private var searchText = ""
     @State private var label = ""
@@ -19,38 +20,57 @@ struct LinkItemSheet: View {
             Text("Link Item")
                 .font(.headline)
 
-            FilterField(
-                placeholder: "Search for target item...",
-                text: $searchText,
-                isBordered: true
-            )
-            .onChange(of: searchText) {
-                performSearch()
-            }
-
-            if !searchResults.isEmpty {
-                List(searchResults, selection: Binding(
-                    get: { selectedTarget?.id },
-                    set: { id in selectedTarget = searchResults.first { $0.id == id } }
-                )) { item in
-                    HStack {
-                        Image(systemName: item.type.icon)
+            if targetItemID != nil, let target = selectedTarget {
+                // Fixed-target mode (from multi-select context menu)
+                HStack {
+                    Image(systemName: target.type.icon)
+                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading) {
+                        Text(target.title)
+                        Text(target.shortID)
+                            .font(.caption)
                             .foregroundStyle(.secondary)
-                        VStack(alignment: .leading) {
-                            Text(item.title)
-                            Text(item.shortID)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
                     }
-                    .tag(item.id)
+                    Spacer()
                 }
-                .frame(height: 200)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-            } else if isSearching {
-                Text("No results.")
-                    .foregroundStyle(.secondary)
+                .padding()
+                .background(Color.primary.opacity(0.05))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            } else {
+                // Searchable mode (standard Cmd+L)
+                FilterField(
+                    placeholder: "Search for target item...",
+                    text: $searchText,
+                    isBordered: true
+                )
+                .onChange(of: searchText) {
+                    performSearch()
+                }
+
+                if !searchResults.isEmpty {
+                    List(searchResults, selection: Binding(
+                        get: { selectedTarget?.id },
+                        set: { id in selectedTarget = searchResults.first { $0.id == id } }
+                    )) { item in
+                        HStack {
+                            Image(systemName: item.type.icon)
+                                .foregroundStyle(.secondary)
+                            VStack(alignment: .leading) {
+                                Text(item.title)
+                                Text(item.shortID)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .tag(item.id)
+                    }
                     .frame(height: 200)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                } else if isSearching {
+                    Text("No results.")
+                        .foregroundStyle(.secondary)
+                        .frame(height: 200)
+                }
             }
 
             FilterField(
@@ -76,7 +96,12 @@ struct LinkItemSheet: View {
             }
         }
         .padding()
-        .frame(width: 400, height: 450)
+        .frame(width: 400, height: targetItemID != nil ? 300 : 450)
+        .onAppear {
+            if let targetID = targetItemID {
+                selectedTarget = store.items.first { $0.id == targetID }
+            }
+        }
     }
 
     private func performSearch() {

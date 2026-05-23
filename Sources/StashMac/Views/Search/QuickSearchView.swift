@@ -44,6 +44,10 @@ struct QuickSearchView: View {
     /// Rollup loaded from `stash search-history list`. Reloaded on
     /// view appear and whenever `browseMode` flips.
     @State private var history: [SearchHistoryEntry] = []
+    @State private var commandMatches: [GlobalCommand] = []
+    @State private var commandActiveIndex = 0
+
+    private let commandRegistry = GlobalCommandRegistry.shared
 
     enum BrowseMode: String, CaseIterable, Identifiable {
         case recent, frequent
@@ -124,6 +128,44 @@ struct QuickSearchView: View {
                         // Keep the keyboard-active row visible when
                         // the user arrows / Tabs past the bottom of
                         // the visible window.
+                        withAnimation(.easeOut(duration: 0.12)) {
+                            proxy.scrollTo(newIdx, anchor: .center)
+                        }
+                    }
+                }
+            }
+
+            // Global commands
+            if !commandMatches.isEmpty {
+                Divider()
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            ForEach(Array(commandMatches.enumerated()), id: \.element.id) { idx, cmd in
+                                Button {
+                                    commitCommand(cmd)
+                                } label: {
+                                    HStack {
+                                        Label("/\(cmd.name)", systemImage: cmd.icon)
+                                            .font(.body)
+                                        Text(cmd.description)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                        Spacer()
+                                    }
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 6)
+                                    .background(idx == commandActiveIndex ? Color.accentColor.opacity(0.2) : .clear)
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .id(idx)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                    .frame(maxHeight: 280)
+                    .onChange(of: commandActiveIndex) { _, newIdx in
                         withAnimation(.easeOut(duration: 0.12)) {
                             proxy.scrollTo(newIdx, anchor: .center)
                         }
@@ -520,6 +562,10 @@ struct QuickSearchView: View {
     private func handleKey(_ key: SuggestKey) -> Bool {
         switch key {
         case .tab, .shiftTab:
+            if !commandMatches.isEmpty {
+                advanceCommand(key == .tab ? .down : .up)
+                return true
+            }
             if !tagMatches.isEmpty {
                 if tagMatches.count == 1 {
                     tabInsertSingle(tagMatches[0].name)
@@ -539,6 +585,10 @@ struct QuickSearchView: View {
             openDropdownIfPossible()
             return true
         case .arrowDown, .ctrlJ:
+            if !commandMatches.isEmpty {
+                advanceCommand(.down)
+                return true
+            }
             if !tagMatches.isEmpty {
                 advance(.down)
                 return true
@@ -550,6 +600,10 @@ struct QuickSearchView: View {
             advanceResult(.down)
             return true
         case .arrowUp, .ctrlK:
+            if !commandMatches.isEmpty {
+                advanceCommand(.up)
+                return true
+            }
             if !tagMatches.isEmpty {
                 advance(.up)
                 return true
@@ -561,6 +615,13 @@ struct QuickSearchView: View {
             advanceResult(.up)
             return true
         case .enter:
+            if !commandMatches.isEmpty {
+                let idx = max(commandActiveIndex, 0)
+                if idx < commandMatches.count {
+                    commitCommand(commandMatches[idx])
+                }
+                return true
+            }
             if !tagMatches.isEmpty {
                 let idx = max(tagActiveIndex, 0)
                 if idx < tagMatches.count {
@@ -595,6 +656,14 @@ struct QuickSearchView: View {
             }
             dismiss()
             return true
+        }
+    }
+
+    private func advanceCommand(_ direction: Direction) {
+        guard !commandMatches.isEmpty else { return }
+        switch direction {
+        case .down: commandActiveIndex = min(commandActiveIndex + 1, commandMatches.count - 1)
+        case .up:   commandActiveIndex = max(commandActiveIndex - 1, 0)
         }
     }
 
@@ -636,6 +705,18 @@ struct QuickSearchView: View {
             clearChipDropdown()
             return
         }
+
+        // Global commands start with /
+        if query.hasPrefix("/") && !query.contains(" ") {
+            commandMatches = commandRegistry.match(prefix: query)
+            commandActiveIndex = 0
+            tagMatches = []
+            collectionMatches = []
+            return
+        } else {
+            commandMatches = []
+        }
+
         // `collection:` takes precedence over `tag:` only because
         // the regexes are checked separately; in practice the
         // cursor can match at most one trailing chip token.
@@ -695,13 +776,16 @@ struct QuickSearchView: View {
         tagActiveIndex = 0
         collectionMatches = []
         collectionActiveIndex = 0
+        commandMatches = []
+        commandActiveIndex = 0
     }
 
     /// Number of items in whichever chip dropdown is active (at most
     /// one is non-empty at a time). Backs the key handlers'
     /// "is there a dropdown to navigate?" check.
     private var chipDropdownCount: Int {
-        !tagMatches.isEmpty ? tagMatches.count : collectionMatches.count
+        if !commandMatches.isEmpty { return commandMatches.count }
+        return !tagMatches.isEmpty ? tagMatches.count : collectionMatches.count
     }
 
     /// Whether any chip dropdown is open right now.
@@ -745,6 +829,11 @@ struct QuickSearchView: View {
         var updated = query
         updated.replaceSubrange(start..<end, with: key)
         query = updated
+    }
+
+    private func commitCommand(_ cmd: GlobalCommand) {
+        store.handleGlobalAction(cmd.action)
+        dismiss()
     }
 
     private func commitTag(_ tagName: String) {

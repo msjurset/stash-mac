@@ -8,6 +8,7 @@ import Foundation
 struct ClaudeProvider: AIProvider {
     var id: AIProviderID { .claude }
     var displayName: String { "Anthropic Claude" }
+    var iconName: String { "wand.and.stars" }
     var keyPlaceholder: String { "sk-ant-…" }
     var keyURL: URL { URL(string: "https://console.anthropic.com/settings/keys")! }
     var defaultPrompt: String { AIPrompts.defaultIdentify }

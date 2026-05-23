@@ -30,11 +30,36 @@ struct ItemRow: View {
             // clicks worked normally. Leading icon stays
             // hit-testable because it has its own popover gesture.
             VStack(alignment: .leading, spacing: 2) {
-                Text(item.title)
-                    .lineLimit(1)
-                    .font(.body)
-                    .fontWeight(isUnseen ? .bold : .regular)
-                    .foregroundStyle(isUnseen ? .blue : .primary)
+                HStack(spacing: 6) {
+                    // Favorite indicator — small filled star to
+                    // the left of the title when the canonical
+                    // `fav` tag is present. Read-only here; the
+                    // detail toolbar (or ⌘F there) is where the
+                    // toggle happens.
+                    if item.tags?.contains(where: { $0.name == FavoriteTag.name }) ?? false {
+                        Image(systemName: "star.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.yellow)
+                            .accessibilityLabel("Favorite")
+                    }
+                    Text(item.title)
+                        .lineLimit(1)
+                        .font(.body)
+                        .fontWeight(isUnseen ? .bold : .regular)
+                        .foregroundStyle(isUnseen ? .blue : .primary)
+                    // In-flight identify indicator. Reads from the
+                    // store's identifyingItemIDs set — populated when
+                    // right-click → Identify with X fires, cleared on
+                    // success/failure. Small enough to not shift the
+                    // row layout, prominent enough to signal "Stash
+                    // is still working on this."
+                    if store.identifyingItemIDs.contains(item.id) {
+                        ProgressView()
+                            .controlSize(.small)
+                            .scaleEffect(0.7)
+                            .frame(width: 12, height: 12)
+                    }
+                }
 
                 HStack(spacing: 6) {
                     if let lang = item.language {

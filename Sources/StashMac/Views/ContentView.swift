@@ -169,6 +169,7 @@ struct ContentView: View {
             }
         }
         .background(SearchKeyMonitor(
+            isEnabled: !showQuickSearch,
             onSearch: { showQuickSearch = true },
             onHelp: { openHelpForCurrentContext() }
         ))
@@ -186,11 +187,32 @@ struct ContentView: View {
             "Something went wrong",
             isPresented: Binding(
                 get: { store.error != nil },
-                set: { if !$0 { store.error = nil } }
+                set: {
+                    if !$0 {
+                        store.error = nil
+                        store.identifyRetry = nil
+                    }
+                }
             ),
             presenting: store.error
         ) { _ in
-            Button("OK", role: .cancel) { store.error = nil }
+            // Retry shown only for transient identify failures (the
+            // store sets identifyRetry from the right-click identify
+            // path after the retry budget exhausts). Tapping fires
+            // the same identify call again with a fresh budget. OK
+            // dismisses without retrying.
+            if let retry = store.identifyRetry {
+                Button("Retry") {
+                    let toRun = retry
+                    store.error = nil
+                    store.identifyRetry = nil
+                    toRun()
+                }
+            }
+            Button("OK", role: .cancel) {
+                store.error = nil
+                store.identifyRetry = nil
+            }
         } message: { message in
             Text(message)
         }
@@ -272,11 +294,13 @@ private extension View {
 /// keystrokes pass through unchanged so the user can type literal
 /// slashes / question-marks inside fields.
 struct SearchKeyMonitor: NSViewRepresentable {
+    var isEnabled: Bool = true
     let onSearch: () -> Void
     let onHelp: () -> Void
 
     func makeNSView(context: Context) -> NSView {
         let view = KeyMonitorView()
+        view.isEnabled = isEnabled
         view.onSearch = onSearch
         view.onHelp = onHelp
         return view
@@ -284,11 +308,13 @@ struct SearchKeyMonitor: NSViewRepresentable {
 
     func updateNSView(_ nsView: NSView, context: Context) {
         guard let view = nsView as? KeyMonitorView else { return }
+        view.isEnabled = isEnabled
         view.onSearch = onSearch
         view.onHelp = onHelp
     }
 
     class KeyMonitorView: NSView {
+        var isEnabled: Bool = true
         var onSearch: (() -> Void)?
         var onHelp: (() -> Void)?
         private var monitor: Any?
@@ -297,7 +323,7 @@ struct SearchKeyMonitor: NSViewRepresentable {
             super.viewDidMoveToWindow()
             guard monitor == nil else { return }
             monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-                guard let self else { return event }
+                guard let self, self.isEnabled else { return event }
 
                 let chars = event.charactersIgnoringModifiers
                 let withModifiers = event.characters

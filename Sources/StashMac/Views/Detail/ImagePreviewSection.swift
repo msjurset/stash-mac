@@ -12,6 +12,7 @@ import SwiftUI
 /// full-screen viewer.
 struct ImagePreviewSection: View {
     let fileURL: URL
+    var allURLs: [URL] = []
     @State private var image: NSImage?
 
     var body: some View {
@@ -24,7 +25,9 @@ struct ImagePreviewSection: View {
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                     .contentShape(RoundedRectangle(cornerRadius: 6))
                     .onTapGesture {
-                        ImagePreviewPresenter.present(image: image)
+                        let urls = allURLs.isEmpty ? [fileURL] : allURLs
+                        let index = urls.firstIndex(of: fileURL) ?? 0
+                        ImagePreviewPresenter.present(urls: urls, initialIndex: index)
                     }
                     .onHover { hovering in
                         if hovering {

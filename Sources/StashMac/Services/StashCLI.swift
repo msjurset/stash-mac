@@ -37,12 +37,14 @@ actor StashCLI {
     func listItems(
         type: ItemType? = nil,
         tags: [String] = [],
+        excludeTags: [String] = [],
         collection: String? = nil,
         limit: Int = 50
     ) async throws -> [StashItem] {
         var args = ["list", "--json", "-l", "\(limit)"]
         if let type { args += ["--type", type.rawValue] }
         for tag in tags { args += ["--tag", tag] }
+        for tag in excludeTags { args += ["--exclude-tag", tag] }
         if let collection { args += ["--collection", collection] }
         return try await captureJSON(args: args)
     }
@@ -51,6 +53,7 @@ actor StashCLI {
         query: String,
         type: ItemType? = nil,
         tags: [String] = [],
+        excludeTags: [String] = [],
         collection: String? = nil,
         limit: Int = 50,
         regex: String? = nil
@@ -66,6 +69,7 @@ actor StashCLI {
         var args = ["search", "--json", "-l", "\(limit)"]
         if let type { args += ["--type", type.rawValue] }
         for tag in tags { args += ["--tag", tag] }
+        for tag in excludeTags { args += ["--exclude-tag", tag] }
         if let collection, !collection.isEmpty {
             args += ["--collection", collection]
         }
@@ -1314,6 +1318,48 @@ actor StashCLI {
         guard !ids.isEmpty else { return }
         var args = ["archive", "--json"]
         args += ids
+        _ = try await captureOutput(args: args)
+    }
+
+    func askAI(itemID: String, question: String) async throws -> StashItem {
+        return try await captureJSON(args: ["edit", "--json", itemID, "--ask-ai", "--ask-question", question])
+    }
+
+    func reindex() async throws {
+        _ = try await captureOutput(args: ["reindex"])
+    }
+
+    func cleanOrphans() async throws -> Int {
+        struct CleanResult: Decodable { let orphans_deleted: Int }
+        let res: CleanResult = try await captureJSON(args: ["clean-orphans", "--json"])
+        return res.orphans_deleted
+    }
+
+    func fixSpelling(text: String) async throws -> String {
+        return try await aiTransform(kind: "fix", text: text)
+    }
+
+    func summarize(text: String) async throws -> String {
+        return try await aiTransform(kind: "summary", text: text)
+    }
+
+    func suggestTags(text: String) async throws -> String {
+        return try await aiTransform(kind: "tags", text: text)
+    }
+
+    private func aiTransform(kind: String, text: String) async throws -> String {
+        struct TransformResult: Decodable { let result: String }
+        // The backend expects a POST body, but our CLI captureJSON(args:)
+        // only supports GET with args. Let's add a proper POST handler
+        // or use captureJSONWithStdin if the backend supports it.
+        // Actually, the current captureJSON uses the HTTP client to the
+        // local server. I need a way to send a POST body.
+        return try await captureJSONWithStdin(args: ["ai-\(kind)", "--json"], input: text)
+    }
+
+    func createBackup(dbOnly: Bool = false) async throws {
+        var args = ["backup"]
+        if dbOnly { args += ["--db-only"] }
         _ = try await captureOutput(args: args)
     }
 

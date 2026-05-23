@@ -3,6 +3,7 @@ import UniformTypeIdentifiers
 
 struct ItemDetailView: View {
     @Environment(StashStore.self) private var store
+    @Environment(AIPrefsStore.self) private var aiPrefs
     let item: StashItem
     @Binding var showEditSheet: Bool
     @State private var showDeleteConfirm = false
@@ -27,7 +28,38 @@ struct ItemDetailView: View {
                         .font(.title2)
                         .foregroundStyle(.secondary)
                     VStack(alignment: .leading) {
-                        titleView
+                        HStack(spacing: 8) {
+                            titleView
+                            // Favorite toggle — inline with title so
+                            // it reads like Mail's flag or Photos'
+                            // heart (action sits on the thing it
+                            // affects, not in a separate toolbar
+                            // group). Filled yellow when on, hollow
+                            // gray otherwise. Keyboard shortcut F
+                            // (no modifier) when the detail view
+                            // has focus and no text field is active.
+                            let isFavorite = item.tags?.contains(where: { $0.name == FavoriteTag.name }) ?? false
+                            Button {
+                                store.setFavorite(itemID: item.id, favorite: !isFavorite)
+                            } label: {
+                                Image(systemName: isFavorite ? "star.fill" : "star")
+                                    .font(.title3)
+                                    .foregroundStyle(isFavorite ? Color.yellow : Color.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .keyboardShortcut("f", modifiers: [])
+                            .help(isFavorite ? "Remove from favorites (F)" : "Mark as favorite (F)")
+
+                            // In-flight identify spinner mirrors the
+                            // list-row indicator so the user has a
+                            // visible signal that Stash is still
+                            // working when they pick "Identify with X"
+                            // from the right-click menu.
+                            if store.identifyingItemIDs.contains(item.id) {
+                                ProgressView()
+                                    .controlSize(.small)
+                            }
+                        }
                         HStack(spacing: 4) {
                             Text(item.type.label.dropLast() + " \u{2022} " + item.shortID)
                                 .font(.caption)
@@ -139,9 +171,9 @@ struct ItemDetailView: View {
                 // open a full popout editor (mirrors Extracted Text).
                 // Long notes truncate to 500 chars with Show More;
                 // single click toggles expand when truncated.
-                if let notes = item.notes, !notes.isEmpty {
-                    NotesView(text: notes, itemID: item.id)
-                }
+                //
+                // AI Follow-up Chat is also hosted inside NotesView.
+                NotesView(text: item.notes ?? "", itemID: item.id)
 
                 // Location — only shown when an item has a stored
                 // latitude/longitude (auto-extracted from EXIF on
@@ -389,7 +421,19 @@ struct ItemDetailView: View {
                         if item.type == .email {
                             EmailContentView(text: text)
                         } else {
-                            ExtractedTextView(text: text, itemID: item.id)
+                            // Audio file items (voice memos, podcast
+                            // clips, etc.) get a "Transcript" heading
+                            // since the text is ASR output, not OCR
+                            // or page-content. Everything else stays
+                            // generic "Extracted Text".
+                            let isAudio = item.type == .file &&
+                                (item.mimeType?.hasPrefix("audio/") ?? false)
+                            ExtractedTextView(
+                                text: text,
+                                itemID: item.id,
+                                sectionTitle: isAudio ? "Transcript" : "Extracted Text",
+                                editorTitle: isAudio ? "Edit Transcript" : "Edit Extracted Text",
+                            )
                         }
                     }
                 } else if item.type == .url {
@@ -438,9 +482,9 @@ struct ItemDetailView: View {
                 }
                 .keyboardShortcut("o", modifiers: .command)
                 .help("Open in default application (⌘O)")
-                ShareButton(items: { SharePayload.build(for: item) })
+                ShareButton(item: { item })
                     .frame(width: 22, height: 22)
-                    .help("Share via Mail, Messages, AirDrop, etc.")
+                    .help("Copy image / caption / link to clipboard, or open the macOS share sheet")
                 Button { showEditSheet = true } label: {
                     Label("Edit", systemImage: "pencil")
                 }
@@ -483,7 +527,6 @@ struct ItemDetailView: View {
     /// Apple / Google Maps, and a small source badge so the user
     /// can tell at a glance whether the value came from EXIF,
     /// mobile capture, or a manual edit.
-    @ViewBuilder
     private func locationRow(loc: ItemLocation) -> some View {
         HStack(spacing: 10) {
             Image(systemName: "mappin.and.ellipse")
@@ -679,13 +722,21 @@ enum InfoRowBuilder {
 
 struct DetailSection<Content: View>: View {
     let title: String
+    var showIndicator: Bool = false
     @ViewBuilder let content: Content
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(title)
-                .font(.headline)
-                .foregroundStyle(.secondary)
+            HStack(spacing: 4) {
+                Text(title)
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
+                if showIndicator {
+                    Circle()
+                        .fill(Color.blue)
+                        .frame(width: 6, height: 6)
+                }
+            }
             content
                 .padding(.leading, 14)
         }

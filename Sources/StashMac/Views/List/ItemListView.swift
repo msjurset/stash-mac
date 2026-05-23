@@ -47,10 +47,17 @@ struct ItemListView: View {
     /// silently presented with 0 items because the array update
     /// hadn't propagated before the sheet body ran.
     @State private var mergeRequest: MergeRequest?
+    @State private var linkRequest: LinkRequest?
 
     struct MergeRequest: Identifiable {
         let id = UUID()
         let itemIDs: [String]
+    }
+
+    struct LinkRequest: Identifiable {
+        let id = UUID()
+        let sourceID: String
+        let targetID: String?
     }
 
     struct TagPickerTarget: Equatable {
@@ -263,6 +270,9 @@ struct ItemListView: View {
                 },
                 onCancel: { mergeRequest = nil }
             )
+        }
+        .sheet(item: $linkRequest) { req in
+            LinkItemSheet(sourceItemID: req.sourceID, targetItemID: req.targetID)
         }
     }
 
@@ -542,12 +552,12 @@ struct ItemListView: View {
     /// the query) does NOT count as "used" — it should still suggest itself.
     private func recomputeSuggestions() {
         let query = store.searchQuery
-        guard let match = query.range(of: #"(?:^|\s)tag:(\S*)$"#, options: .regularExpression) else {
+        guard let match = query.range(of: #"(?:^|\s)[!^-]?tag:[^\s]*$"#, options: .regularExpression) else {
             state.matches = []
             state.activeIndex = 0
             return
         }
-        let token = query[match]
+        let token = query[match].trimmingCharacters(in: .whitespaces)
         guard let colonIdx = token.firstIndex(of: ":") else {
             state.matches = []
             state.activeIndex = 0
@@ -557,7 +567,7 @@ struct ItemListView: View {
 
         // Already-committed tag tokens, excluding the one being edited at cursor.
         var existing = Set(
-            query.matches(of: /tag:(\S+)/).map { String($0.output.1).lowercased() }
+            query.matches(of: /[!^-]?tag:(\S+)/).map { String($0.output.1).lowercased() }
         )
         if !partial.isEmpty {
             existing.remove(partial)
@@ -586,7 +596,7 @@ struct ItemListView: View {
         let query = store.searchQuery
 
         // Already in value context? recompute handles it; avoid rewriting.
-        if query.range(of: #"(?:^|\s)tag:\S*$"#, options: .regularExpression) != nil {
+        if query.range(of: #"(?:^|\s)[!^-]?tag:[^\s]*$"#, options: .regularExpression) != nil {
             return
         }
 
@@ -600,10 +610,9 @@ struct ItemListView: View {
             partial = query
         }
 
-        // Key completion: only one key exists. Commit it if the partial is a
-        // prefix; otherwise no candidates → silent no-op.
-        let key = "tag:"
-        guard key.hasPrefix(partial.lowercased()) else { return }
+        // Key completion: commit if partial matches any tag-key prefix.
+        let keys = ["tag:", "!tag:", "-tag:", "^tag:"]
+        guard let key = keys.first(where: { $0.hasPrefix(partial.lowercased()) }) else { return }
 
         // Replace the partial with the key (no trailing space — chain into
         // value completion).
@@ -617,11 +626,16 @@ struct ItemListView: View {
     /// Commit an accepted tag: replace `tag:<partial>` with `tag:<name> ` and
     /// dismiss the dropdown. The trailing space lets the user keep typing.
     private func commitTag(_ tagName: String) {
-        guard let range = store.searchQuery.range(of: #"(?:^|\s)tag:\S*$"#, options: .regularExpression) else { return }
+        guard let range = store.searchQuery.range(of: #"(?:^|\s)[!^-]?tag:[^\s]*$"#, options: .regularExpression) else { return }
         let query = store.searchQuery
+        let token = query[range]
         let before = query[query.startIndex..<range.lowerBound]
-        let prefix = query[range].hasPrefix(" ") ? " " : ""
-        store.searchQuery = "\(before)\(prefix)tag:\(tagName) "
+
+        let leadingSpace = token.hasPrefix(" ") ? " " : ""
+        let trimmedToken = token.trimmingCharacters(in: .whitespaces)
+        let tagPrefix = trimmedToken.replacing(/:\S*$/, with: ":")
+
+        store.searchQuery = "\(before)\(leadingSpace)\(tagPrefix)\(tagName) "
         state.matches = []
         state.activeIndex = 0
         store.debouncedRefresh()
@@ -631,11 +645,16 @@ struct ItemListView: View {
     /// trailing space, and keep the dropdown open. Recompute so the dropdown
     /// reflects the new cursor position (it will narrow to match itself).
     private func tabInsertSingle(_ tagName: String) {
-        guard let range = store.searchQuery.range(of: #"(?:^|\s)tag:\S*$"#, options: .regularExpression) else { return }
+        guard let range = store.searchQuery.range(of: #"(?:^|\s)[!^-]?tag:[^\s]*$"#, options: .regularExpression) else { return }
         let query = store.searchQuery
+        let token = query[range]
         let before = query[query.startIndex..<range.lowerBound]
-        let prefix = query[range].hasPrefix(" ") ? " " : ""
-        store.searchQuery = "\(before)\(prefix)tag:\(tagName)"
+
+        let leadingSpace = token.hasPrefix(" ") ? " " : ""
+        let trimmedToken = token.trimmingCharacters(in: .whitespaces)
+        let tagPrefix = trimmedToken.replacing(/:\S*$/, with: ":")
+
+        store.searchQuery = "\(before)\(leadingSpace)\(tagPrefix)\(tagName)"
         // recomputeSuggestions runs via onChange; activeIndex resets to 0.
     }
 
@@ -772,6 +791,12 @@ struct ItemListView: View {
                 Divider()
                 Button("Merge Selected (\(selected.count))…") {
                     mergeRequest = MergeRequest(itemIDs: Array(selected))
+                }
+                if selected.count == 2 {
+                    let otherID = selected.first { $0 != rightClickedID }!
+                    Button("Link Selected Items…") {
+                        linkRequest = LinkRequest(sourceID: rightClickedID, targetID: otherID)
+                    }
                 }
             }
             Divider()

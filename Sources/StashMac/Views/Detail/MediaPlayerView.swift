@@ -1,7 +1,31 @@
 import AVKit
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 import WebKit
+
+/// Best-guess MIME for an AVURLAsset based on the original file's
+/// extension. The Mac stores blobs content-addressed (no extension
+/// on disk), so AVFoundation can't sniff one from the URL — and
+/// when the server-recorded MIME is wrong (Google Recorder ships
+/// .m4a files with Content-Type: audio/mpeg, which AVFoundation
+/// then misreads as MP3), playback silently fails. Looking up the
+/// type from the source filename's extension via UTType gives a
+/// reliable answer because the extension itself is preserved on
+/// the item's sourcePath. Returns nil when we can't resolve, so
+/// callers can fall back to whatever the server recorded.
+private func mediaMIMEHint(forSourcePath sourcePath: String?, mimeType: String?) -> String? {
+    if let sourcePath, let ext = (sourcePath as NSString).pathExtension.nilIfEmpty,
+       let utType = UTType(filenameExtension: ext),
+       let mime = utType.preferredMIMEType {
+        return mime
+    }
+    return mimeType
+}
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
+}
 
 /// Top-level media area for the detail view. Switches layout based
 /// on the item's media shape:
@@ -51,13 +75,27 @@ struct MediaSection: View {
                         item: item,
                         importDialogPresented: $importDialogPresented
                     )
-                    DirectMediaPlayer(url: url, isVideo: false)
-                        .frame(maxWidth: .infinity)
+                    DirectMediaPlayer(
+                        url: url,
+                        isVideo: false,
+                        mimeHint: mediaMIMEHint(
+                            forSourcePath: item.sourcePath,
+                            mimeType: item.mimeType
+                        )
+                    )
+                    .frame(maxWidth: .infinity)
                 }
 
             case .videoTapToPlay(let url):
                 if videoActivated {
-                    DirectMediaPlayer(url: url, isVideo: true)
+                    DirectMediaPlayer(
+                        url: url,
+                        isVideo: true,
+                        mimeHint: mediaMIMEHint(
+                            forSourcePath: item.sourcePath,
+                            mimeType: item.mimeType
+                        )
+                    )
                 } else {
                     ThumbnailTile(
                         item: item,
@@ -176,6 +214,12 @@ private struct EmbedWebView: NSViewRepresentable {
 struct DirectMediaPlayer: View {
     let url: URL
     let isVideo: Bool
+    /// MIME the player should report to AVFoundation. Caller-derived
+    /// from the item's source filename extension (preferred) or its
+    /// stored mimeType (fallback). Bypasses the
+    /// AVFoundation-can't-sniff-extensionless-files problem the
+    /// content-addressed blob store creates.
+    var mimeHint: String?
     @State private var status: PlayState = .checking
 
     private enum PlayState { case checking, playable, notPlayable }
@@ -193,9 +237,21 @@ struct DirectMediaPlayer: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 8)
             case .playable:
-                AVPlayerNSView(url: url, isVideo: isVideo)
-                    .frame(height: isVideo ? 360 : 36)
-                    .clipShape(RoundedRectangle(cornerRadius: isVideo ? 6 : 4))
+                if isVideo {
+                    AVPlayerNSView(url: url, isVideo: true, mimeHint: mimeHint)
+                        .frame(height: 360)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                } else {
+                    // Audio path: skip AVPlayerView entirely. Its
+                    // control bar paints a translucent gray pill
+                    // that there's no public way to suppress, and
+                    // it looked out of place against Stash's dark
+                    // surface. CustomAudioPlayer is a thin SwiftUI
+                    // shell over AVPlayer with our own controls and
+                    // zero background chrome.
+                    CustomAudioPlayer(url: url, mimeHint: mimeHint)
+                        .frame(height: 36)
+                }
             case .notPlayable:
                 HStack {
                     Text("Format not supported by macOS player")
@@ -212,23 +268,40 @@ struct DirectMediaPlayer: View {
         }
         .task(id: url) {
             status = .checking
-            let asset = AVURLAsset(url: url)
+            let asset = AVURLAsset(url: url, options: assetOptions())
             let playable = (try? await asset.load(.isPlayable)) ?? false
             status = playable ? .playable : .notPlayable
         }
+    }
+
+    private func assetOptions() -> [String: Any]? {
+        guard let mimeHint else { return nil }
+        return ["AVURLAssetOutOfBandMIMETypeKey": mimeHint]
     }
 }
 
 private struct AVPlayerNSView: NSViewRepresentable {
     let url: URL
     let isVideo: Bool
+    /// Optional out-of-band MIME hint — applied to the AVURLAsset
+    /// so AVFoundation parses the bytes against the right
+    /// container format. Without this, an extensionless blob
+    /// labeled with the wrong MIME (e.g. Google Recorder's
+    /// .m4a-as-audio/mpeg quirk) won't play.
+    var mimeHint: String?
 
     func makeNSView(context: Context) -> AVPlayerView {
         let view = AVPlayerView()
         view.controlsStyle = isVideo ? .floating : .default
         view.showsFullScreenToggleButton = isVideo
         view.allowsPictureInPicturePlayback = isVideo
-        view.player = AVPlayer(url: url)
+        // Clear the view's own backdrop so only AVKit's control
+        // pill draws — without this the gray fill of the NSView
+        // extends edge-to-edge inside our frame, showing as
+        // padding on either side of the audio control bar.
+        view.wantsLayer = true
+        view.layer?.backgroundColor = NSColor.clear.cgColor
+        view.player = AVPlayer(playerItem: makeItem())
         return view
     }
 
@@ -238,6 +311,170 @@ private struct AVPlayerNSView: NSViewRepresentable {
            asset.url == url {
             return
         }
-        nsView.player?.replaceCurrentItem(with: AVPlayerItem(url: url))
+        nsView.player?.replaceCurrentItem(with: makeItem())
+    }
+
+    private func makeItem() -> AVPlayerItem {
+        let opts: [String: Any]? = mimeHint.map {
+            ["AVURLAssetOutOfBandMIMETypeKey": $0]
+        }
+        let asset = AVURLAsset(url: url, options: opts)
+        return AVPlayerItem(asset: asset)
+    }
+}
+
+/// Pure-SwiftUI audio control bar. Sits on whatever background the
+/// parent draws (transparent by default) and renders only the
+/// controls — no AVPlayerView chrome, no translucent pill. Layout:
+///   [⏮15] [▶︎/⏸] [⏭15]  current  ━━●━━━━━━  total
+///
+/// Time observers update the displayed position once per ~200ms.
+/// Scrubber edits seek immediately. Mime hint flows into the asset
+/// just like the video path so extensionless content-addressed
+/// blobs play correctly.
+private struct CustomAudioPlayer: View {
+    let url: URL
+    var mimeHint: String?
+
+    @State private var player = AVPlayer()
+    @State private var isPlaying = false
+    @State private var currentSeconds: Double = 0
+    @State private var durationSeconds: Double = 0
+    @State private var scrubbingTo: Double? = nil
+    @State private var timeObserver: Any? = nil
+    @State private var endObserver: NSObjectProtocol? = nil
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Button(action: { skip(-15) }) {
+                Image(systemName: "gobackward.15")
+                    .font(.system(size: 16))
+            }
+            .buttonStyle(.plain)
+            .help("Skip back 15s")
+
+            Button(action: togglePlayPause) {
+                Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                    .font(.system(size: 20))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Color.accentColor)
+
+            Button(action: { skip(15) }) {
+                Image(systemName: "goforward.15")
+                    .font(.system(size: 16))
+            }
+            .buttonStyle(.plain)
+            .help("Skip forward 15s")
+
+            Text(formatTime(scrubbingTo ?? currentSeconds))
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .frame(width: 44, alignment: .trailing)
+
+            Slider(
+                value: Binding(
+                    get: { scrubbingTo ?? currentSeconds },
+                    set: { newValue in scrubbingTo = newValue }
+                ),
+                in: 0...(max(durationSeconds, 0.1)),
+                onEditingChanged: { editing in
+                    if !editing, let target = scrubbingTo {
+                        seek(to: target)
+                        scrubbingTo = nil
+                    }
+                }
+            )
+
+            Text(formatTime(durationSeconds))
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .frame(width: 44, alignment: .leading)
+        }
+        .padding(.horizontal, 4)
+        .task(id: url) {
+            await loadAndObserve()
+        }
+        .onDisappear { tearDown() }
+    }
+
+    // MARK: - Lifecycle
+
+    private func loadAndObserve() async {
+        let opts: [String: Any]? = mimeHint.map {
+            ["AVURLAssetOutOfBandMIMETypeKey": $0]
+        }
+        let asset = AVURLAsset(url: url, options: opts)
+        let item = AVPlayerItem(asset: asset)
+        player.replaceCurrentItem(with: item)
+        if let dur = try? await asset.load(.duration) {
+            durationSeconds = max(0, CMTimeGetSeconds(dur))
+        }
+
+        // 5Hz position tick — fine enough for a scrubber, light
+        // enough to not thrash the UI.
+        let interval = CMTime(seconds: 0.2, preferredTimescale: 600)
+        timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { time in
+            currentSeconds = max(0, CMTimeGetSeconds(time))
+        }
+
+        endObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: item,
+            queue: .main
+        ) { _ in
+            isPlaying = false
+            // Snap back to the start so the next play tap restarts.
+            player.seek(to: .zero)
+            currentSeconds = 0
+        }
+    }
+
+    private func tearDown() {
+        if let observer = timeObserver {
+            player.removeTimeObserver(observer)
+            timeObserver = nil
+        }
+        if let observer = endObserver {
+            NotificationCenter.default.removeObserver(observer)
+            endObserver = nil
+        }
+        player.pause()
+    }
+
+    // MARK: - Actions
+
+    private func togglePlayPause() {
+        if isPlaying {
+            player.pause()
+            isPlaying = false
+        } else {
+            player.play()
+            isPlaying = true
+        }
+    }
+
+    private func skip(_ deltaSeconds: Double) {
+        let target = (scrubbingTo ?? currentSeconds) + deltaSeconds
+        seek(to: target.clamped(to: 0...max(durationSeconds, 0.1)))
+    }
+
+    private func seek(to seconds: Double) {
+        let time = CMTime(seconds: seconds, preferredTimescale: 600)
+        player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
+    }
+
+    private func formatTime(_ seconds: Double) -> String {
+        guard seconds.isFinite, seconds >= 0 else { return "0:00" }
+        let total = Int(seconds.rounded())
+        let m = total / 60
+        let s = total % 60
+        return String(format: "%d:%02d", m, s)
+    }
+}
+
+private extension Double {
+    func clamped(to range: ClosedRange<Double>) -> Double {
+        Swift.min(Swift.max(self, range.lowerBound), range.upperBound)
     }
 }

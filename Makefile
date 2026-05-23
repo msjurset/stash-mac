@@ -3,8 +3,15 @@ BUNDLE := $(APP_NAME).app
 INSTALL_DIR := /Applications
 SIGN_IDENTITY := Stash Dev
 
-build: clean
+build:
 	swift build -c release
+
+# Force a full from-scratch build by wiping the SwiftPM cache
+# first. Use when something looks stale (corrupted incremental
+# state, suspect dep version mismatch). Normal `make deploy`
+# relies on swift's incremental builder so VimEngine and other
+# unchanged dependencies don't recompile on every iteration.
+rebuild: clean build
 
 bundle: build icon
 	@mkdir -p $(BUNDLE)/Contents/MacOS $(BUNDLE)/Contents/Resources
@@ -91,4 +98,9 @@ phantom-check:
 	fi; \
 	exit $$status
 
-.PHONY: build bundle icon deploy clean test cert phantom-check
+update-vim:
+	@echo "Updating swift-vim-engine to the latest tagged release in the configured range..."
+	@swift package update swift-vim-engine
+	@echo "Review Package.resolved, smoke-test /vim in the app, then commit."
+
+.PHONY: build rebuild bundle icon deploy clean test cert phantom-check update-vim

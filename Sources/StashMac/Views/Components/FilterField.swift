@@ -222,6 +222,7 @@ final class NoAutoFillTextField: NSTextField {
 /// the popup on first focus per session.
 final class NoAutoFillTextFieldCell: NSTextFieldCell {
     override func setUpFieldEditorAttributes(_ textObj: NSText) -> NSText {
+        print("[PHANTOM] NoAutoFillTextFieldCell.setUpFieldEditorAttributes for window: \(String(describing: textObj.window?.title))")
         let configured = super.setUpFieldEditorAttributes(textObj)
         if let editor = configured as? NSTextView {
             NoAutoFillTextField.disableAutoFeatures(on: editor)

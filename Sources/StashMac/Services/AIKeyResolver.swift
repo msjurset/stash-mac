@@ -26,13 +26,38 @@ enum AIKeyResolver {
     /// cleaned input as-is (whitespace + surrounding quotes stripped
     /// — copy-pasting references from code samples often brings
     /// quotes along for the ride).
+    ///
+    /// **Caching**: resolved `op://` secrets are kept in an
+    /// in-memory cache keyed by the reference string, for the
+    /// lifetime of the running app process. Without it every
+    /// identify call (and every Test click in Settings) shelled
+    /// out to `op read`, which triggers a TouchID prompt — a
+    /// rapid burst of identifies meant a burst of prompts. The
+    /// cache preserves the security property "secret never lives
+    /// in Stash storage on disk" while removing the per-call
+    /// auth tax inside one launch. Cache is cleared when the
+    /// user changes the key in Settings, see `clearCache()`.
     static func resolve(_ raw: String) async throws -> String {
         let cleaned = clean(raw)
         guard cleaned.lowercased().hasPrefix("op://") else { return cleaned }
+
+        if let cached = await ResolvedKeyCache.shared.get(cleaned) {
+            return cached
+        }
         guard let opPath = findOpBinary() else {
             throw ResolverError.opNotFound
         }
-        return try await runOpRead(opPath: opPath, reference: cleaned)
+        let resolved = try await runOpRead(opPath: opPath, reference: cleaned)
+        await ResolvedKeyCache.shared.set(cleaned, value: resolved)
+        return resolved
+    }
+
+    /// Drop any cached resolved values. Call from the key-change
+    /// path in `AIPrefsStore.setKey` so swapping the reference in
+    /// Settings actually triggers a fresh `op read` next call
+    /// rather than serving the stale value from the previous key.
+    static func clearCache() async {
+        await ResolvedKeyCache.shared.clear()
     }
 
     /// True when the value is a 1Password reference. Used by the
@@ -104,4 +129,21 @@ enum AIKeyResolver {
             }
         }
     }
+}
+
+/// In-memory cache for resolved `op://` secrets, scoped to the
+/// running app process. Keyed by the reference string so different
+/// `op://vault/item/field` paths cache independently. Stored as an
+/// actor for thread-safe access from concurrent identify calls.
+/// Never persists to disk — quitting the app drops everything,
+/// which is the security property we want from the 1Password
+/// indirection in the first place.
+private actor ResolvedKeyCache {
+    static let shared = ResolvedKeyCache()
+
+    private var entries: [String: String] = [:]
+
+    func get(_ reference: String) -> String? { entries[reference] }
+    func set(_ reference: String, value: String) { entries[reference] = value }
+    func clear() { entries.removeAll() }
 }

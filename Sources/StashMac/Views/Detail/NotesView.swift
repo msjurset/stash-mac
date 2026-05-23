@@ -3,12 +3,15 @@ import AppKit
 
 struct NotesView: View {
     @Environment(StashStore.self) private var store
+    @Environment(AIPrefsStore.self) private var aiPrefs
     let text: String
     let itemID: String
 
     @State private var isExpanded = false
     @State private var showEditor = false
     @State private var editedText = ""
+    @State private var isShowingAIChat = false
+    @State private var aiQuestion = ""
 
     private var isTruncated: Bool { text.count > 500 }
 
@@ -17,32 +20,107 @@ struct NotesView: View {
     }
 
     var body: some View {
-        DetailSection(title: "Notes") {
+        DetailSection(title: "Notes", showIndicator: store.hasUpdate(itemID)) {
             VStack(alignment: .leading, spacing: 8) {
-                MarkdownText(displayText, isSelectable: true)
-                    .padding(10)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(.quaternary)
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                    .background(ClickCatcher(
-                        onSingleClick: {
-                            if isTruncated {
-                                withAnimation { isExpanded.toggle() }
-                            }
-                        },
-                        onDoubleClick: openEditor
-                    ))
-                    .popover(isPresented: $showEditor, arrowEdge: .top) {
-                        editorPopover
-                    }
+                if !text.isEmpty {
+                    MarkdownText(displayText, isSelectable: true)
+                        .padding(10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(.quaternary)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .background(ClickCatcher(
+                            onSingleClick: {
+                                store.markSeen(itemID)
+                                if isTruncated {
+                                    withAnimation { isExpanded.toggle() }
+                                }
+                            },
+                            onDoubleClick: openEditor
+                        ))
+                        .popover(isPresented: $showEditor, arrowEdge: .top) {
+                            editorPopover
+                        }
 
-                if isTruncated {
-                    Button(isExpanded ? "Show Less" : "Show More") {
-                        withAnimation { isExpanded.toggle() }
+                    if isTruncated {
+                        Button(isExpanded ? "Show Less" : "Show More") {
+                            store.markSeen(itemID)
+                            withAnimation { isExpanded.toggle() }
+                        }
+                        .font(.caption)
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.blue)
                     }
-                    .font(.caption)
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.blue)
+                } else {
+                    // Empty state affordance — double-click the empty section
+                    // to add notes, or use the AI button below.
+                    Color.clear
+                        .frame(height: 1)
+                        .contentShape(Rectangle())
+                        .background(ClickCatcher(onSingleClick: {}, onDoubleClick: openEditor))
+                        .popover(isPresented: $showEditor, arrowEdge: .top) {
+                            editorPopover
+                        }
+                }
+
+                // AI Follow-up Chat
+                if aiPrefs.hasKey {
+                    HStack(spacing: 8) {
+                        Button {
+                            if !store.identifyingItemIDs.contains(itemID) {
+                                withAnimation(.spring(duration: 0.25)) {
+                                    isShowingAIChat.toggle()
+                                    if isShowingAIChat {
+                                        store.markSeen(itemID)
+                                    }
+                                }
+                            }
+                        } label: {
+                            HStack(spacing: 6) {
+                                if store.identifyingItemIDs.contains(itemID) {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                        .scaleEffect(0.6)
+                                        .frame(width: 15, height: 15)
+                                } else {
+                                    Image(systemName: aiPrefs.activeProvider.iconName)
+                                        .font(.system(size: 14, weight: .semibold))
+                                        .frame(width: 15, height: 15)
+                                }
+
+                                if !isShowingAIChat {
+                                    Text(store.identifyingItemIDs.contains(itemID) ? "Thinking..." : "Ask \(aiPrefs.activeProvider.displayName.replacingOccurrences(of: "Google ", with: "").replacingOccurrences(of: "Anthropic ", with: ""))")
+                                        .font(.subheadline)
+                                        .fontWeight(.medium)
+                                }
+                            }
+                            .foregroundStyle(isShowingAIChat ? Color.accentColor : Color.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Ask \(aiPrefs.activeProvider.displayName) a follow-up question")
+                        .disabled(store.identifyingItemIDs.contains(itemID))
+
+                        if isShowingAIChat {
+                            TextField("Ask a follow-up...", text: $aiQuestion)
+                                .textFieldStyle(.plain)
+                                .font(.system(size: 13))
+                                .onSubmit {
+                                    let q = aiQuestion.trimmingCharacters(in: .whitespaces)
+                                    guard !q.isEmpty else { return }
+                                    store.askAI(id: itemID, question: q)
+                                    aiQuestion = ""
+                                    isShowingAIChat = false
+                                }
+                                .transition(.asymmetric(
+                                    insertion: .move(edge: .leading).combined(with: .opacity),
+                                    removal: .opacity
+                                ))
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Color.primary.opacity(0.05))
+                    .clipShape(Capsule())
+                    .padding(.top, text.isEmpty ? 0 : 4)
                 }
             }
         }
@@ -66,7 +144,12 @@ struct NotesView: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
             Divider()
-            NotesTextEditor(text: $editedText)
+            NotesTextEditor(itemID: itemID, text: $editedText, onAction: { action in
+                if action.name == "archive" {
+                    store.archiveItems(ids: [itemID])
+                    showEditor = false
+                }
+            })
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(width: 780, height: 520)
@@ -87,47 +170,30 @@ struct NotesView: View {
     }
 }
 
-private struct NotesTextEditor: NSViewRepresentable {
+/// Notes editor for the detail pane. Now backed by VimAwareEditor
+/// so `/vim` is available — the user can switch to vim keybindings
+/// inside the notes editor without leaving the row. Visual config
+/// matches the previous NotesTextEditor: monospaced 13pt, 12pt
+/// container inset, transparent background.
+///
+/// Uses `.bottomFooter` for the vim status line — keeps the
+/// indicator out of the text body and matches vim's native
+/// status-bar placement.
+private struct NotesTextEditor: View {
+    let itemID: String?
     @Binding var text: String
+    var onAction: ((ActionCommand) -> Void)? = nil
 
-    func makeNSView(context: Context) -> NSScrollView {
-        let scroll = NSTextView.scrollableTextView()
-        scroll.drawsBackground = false
-        scroll.hasVerticalScroller = true
-        scroll.autohidesScrollers = true
-
-        guard let textView = scroll.documentView as? NSTextView else { return scroll }
-        textView.delegate = context.coordinator
-        textView.isEditable = true
-        textView.isRichText = false
-        textView.allowsUndo = true
-        textView.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
-        textView.textColor = .textColor
-        textView.drawsBackground = false
-        textView.textContainerInset = NSSize(width: 12, height: 12)
-        textView.isAutomaticQuoteSubstitutionEnabled = false
-        textView.isAutomaticDashSubstitutionEnabled = false
-        textView.isAutomaticTextReplacementEnabled = false
-        textView.isAutomaticSpellingCorrectionEnabled = false
-        textView.string = text
-        return scroll
-    }
-
-    func updateNSView(_ nsView: NSScrollView, context: Context) {
-        guard let textView = nsView.documentView as? NSTextView else { return }
-        if textView.string != text {
-            textView.string = text
-        }
-    }
-
-    func makeCoordinator() -> Coordinator { Coordinator(self) }
-
-    @MainActor class Coordinator: NSObject, NSTextViewDelegate {
-        var parent: NotesTextEditor
-        init(_ parent: NotesTextEditor) { self.parent = parent }
-        func textDidChange(_ notification: Notification) {
-            guard let textView = notification.object as? NSTextView else { return }
-            parent.text = textView.string
-        }
+    var body: some View {
+        VimAwareEditor(
+            itemID: itemID,
+            text: $text,
+            onAction: onAction,
+            badgePlacement: .bottomFooter,
+            font: .systemFont(ofSize: 13),
+            textContainerInset: NSSize(width: 12, height: 12),
+            drawsBackground: false,
+            monospaced: true
+        )
     }
 }

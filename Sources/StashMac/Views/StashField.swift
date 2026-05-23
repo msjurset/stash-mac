@@ -39,6 +39,7 @@ struct StashField: View {
 }
 
 struct StashTextEditor: View {
+    var itemID: String? = nil
     @Binding var text: String
     /// Heights for the unfocused and focused states. Set
     /// `focusedHeight` larger than `idleHeight` to get the
@@ -48,22 +49,48 @@ struct StashTextEditor: View {
     /// entirely up to the caller via `.frame(minHeight:)`.
     var idleHeight: CGFloat? = nil
     var focusedHeight: CGFloat? = nil
-    @FocusState private var isFocused: Bool
+    var monospaced: Bool = false
+    var onAction: ((ActionCommand) -> Void)? = nil
+    @State private var isFocused: Bool = false
 
     var body: some View {
         let activeHeight = isFocused ? (focusedHeight ?? idleHeight) : idleHeight
-        TextEditor(text: $text)
-            .font(.body)
-            .scrollContentBackground(.hidden)
-            .padding(4)
-            .frame(minHeight: activeHeight)
-            .background(isFocused ? Color.accentColor.opacity(0.08) : Color.primary.opacity(0.04))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(isFocused ? Color.accentColor.opacity(0.5) : Color.primary.opacity(0.1), lineWidth: 1)
-            )
-            .focused($isFocused)
-            .animation(.easeInOut(duration: 0.18), value: isFocused)
+        // Backed by VimAwareEditor so `/vim` activates vim
+        // keybindings in any place StashTextEditor renders —
+        // EditItemSheet Notes / Extracted Text, AddItemSheet snippet,
+        // RuleDetailView rule body. Visual chrome (background,
+        // accent overlay, focus ring) is layered on top of the
+        // host editor's transparent body. Focus tracking comes back
+        // through onFocusChanged since @FocusState doesn't see the
+        // underlying NSTextView.
+        //
+        // Badge placement: .bottomFooter renders a vim-style status
+        // line inside the field's rounded clip when vim is active.
+        // The line shows the mode badge (VIM:N / VIM:I / :q / /term)
+        // on the left and a cheatsheet + close button pair on the
+        // right. The previous top-right overlay collided with text
+        // in wider editors; the footer stays clear of the content.
+        VimAwareEditor(
+            itemID: itemID,
+            text: $text,
+            onAction: onAction,
+            onFocusChanged: { focused in
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    isFocused = focused
+                }
+            },
+            badgePlacement: .bottomFooter,
+            font: .systemFont(ofSize: 13),
+            textContainerInset: NSSize(width: 4, height: 4),
+            drawsBackground: false,
+            monospaced: monospaced
+        )
+        .frame(minHeight: activeHeight)
+        .background(isFocused ? Color.accentColor.opacity(0.08) : Color.primary.opacity(0.04))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(isFocused ? Color.accentColor.opacity(0.5) : Color.primary.opacity(0.1), lineWidth: 1)
+        )
     }
 }

@@ -22,12 +22,12 @@ enum ImagePreviewPresenter {
     private static var current: KeyableBorderlessPanel?
     private static var resignObserver: NSObjectProtocol?
 
-    static func present(image: NSImage) {
+    static func present(urls: [URL], initialIndex: Int = 0) {
         // If something's already open, dismiss it first so we don't
         // stack windows on rapid double-clicks.
         dismiss()
 
-        let view = ImagePreviewView(image: image, onDismiss: dismiss)
+        let view = ImagePreviewView(urls: urls, initialIndex: initialIndex, onDismiss: dismiss)
         let host = NSHostingController(rootView: view)
         let panel = KeyableBorderlessPanel(contentViewController: host)
         panel.styleMask = [.borderless, .resizable]
@@ -59,10 +59,22 @@ enum ImagePreviewPresenter {
         // first responder, and this panel has no focusable element, so
         // we catch cancelOperation at the panel level instead.
         panel.onCancel = { Self.dismiss() }
+        panel.onArrowKey = { delta in
+            NotificationCenter.default.post(name: .imagePreviewArrowKey, object: nil, userInfo: ["delta": delta])
+        }
 
         current = panel
         panel.center()
         panel.makeKeyAndOrderFront(nil)
+
+        // Ensure the panel is actually key and its content is focused
+        // so arrow keys work immediately without a click.
+        DispatchQueue.main.async {
+            panel.makeKey()
+            if let contentView = panel.contentView {
+                panel.makeFirstResponder(contentView)
+            }
+        }
     }
 
     static func dismiss() {
@@ -90,18 +102,39 @@ final class KeyableBorderlessPanel: NSPanel {
     /// for us if the hosted view had any focusable subview, but a pure
     /// image viewer has none — so we hook in one level lower.
     var onCancel: (() -> Void)?
+    var onArrowKey: ((Int) -> Void)?
 
     override func cancelOperation(_ sender: Any?) {
         onCancel?()
     }
+
+    override func keyDown(with event: NSEvent) {
+        switch event.keyCode {
+        case 123: // Left
+            onArrowKey?(-1)
+        case 124: // Right
+            onArrowKey?(1)
+        default:
+            super.keyDown(with: event)
+        }
+    }
+}
+
+extension Notification.Name {
+    static let imagePreviewArrowKey = Notification.Name("stash.imagePreviewArrowKey")
 }
 
 /// Full-window image viewer rendered inside `ImagePreviewPresenter`'s
 /// floating NSPanel. Click disambiguation runs after a short delay so
 /// the single-click "dismiss" doesn't pre-empt a double-click "zoom".
 struct ImagePreviewView: View {
-    let image: NSImage
+    let urls: [URL]
+    let initialIndex: Int
     let onDismiss: () -> Void
+
+    @State private var currentIndex: Int = 0
+    @State private var image: NSImage?
+    @State private var isLoading = false
 
     @State private var zoom: CGFloat = 1.0
     /// Zoom level captured at the start of the in-progress pinch
@@ -146,18 +179,108 @@ struct ImagePreviewView: View {
                     .gesture(magnification(in: geo.size))
                     .simultaneousGesture(panOrTapGesture(in: geo.size))
 
-                Image(nsImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .scaleEffect(zoom)
-                    .offset(x: committedPan.width + liveDrag.width,
-                            y: committedPan.height + liveDrag.height)
-                    .allowsHitTesting(false)
+                Group {
+                    if let image {
+                        Image(nsImage: image)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .scaleEffect(zoom)
+                            .offset(x: committedPan.width + liveDrag.width,
+                                    y: committedPan.height + liveDrag.height)
+                    } else if isLoading {
+                        ProgressView()
+                            .colorInvert()
+                            .brightness(1)
+                    }
+                }
+                .allowsHitTesting(false)
+
+                // Navigation overlays
+                if urls.count > 1 && zoom <= 1.0 {
+                    HStack {
+                        navButton(systemImage: "chevron.left") {
+                            advance(by: -1)
+                        }
+                        .disabled(currentIndex == 0)
+                        .opacity(currentIndex == 0 ? 0.3 : 1)
+
+                        Spacer()
+
+                        navButton(systemImage: "chevron.right") {
+                            advance(by: 1)
+                        }
+                        .disabled(currentIndex == urls.count - 1)
+                        .opacity(currentIndex == urls.count - 1 ? 0.3 : 1)
+                    }
+                    .padding(.horizontal, 20)
+                }
+
+                // Index indicator
+                if urls.count > 1 && zoom <= 1.0 {
+                    VStack {
+                        Spacer()
+                        Text("\(currentIndex + 1) / \(urls.count)")
+                            .font(.caption)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(.black.opacity(0.4))
+                            .clipShape(Capsule())
+                            .foregroundStyle(.white)
+                            .padding(.bottom, 10)
+                    }
+                }
             }
             .frame(width: geo.size.width, height: geo.size.height)
             .onExitCommand { dismiss() }
         }
         .frame(width: target.width, height: target.height)
+        .onAppear {
+            currentIndex = initialIndex
+            load()
+        }
+        .onChange(of: currentIndex) { _, _ in load() }
+        .focusable()
+        .onExitCommand { dismiss() }
+        .onReceive(NotificationCenter.default.publisher(for: .imagePreviewArrowKey)) { note in
+            if let delta = note.userInfo?["delta"] as? Int {
+                advance(by: delta)
+            }
+        }
+    }
+
+    private func navButton(systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 24, weight: .bold))
+                .padding(12)
+                .background(.black.opacity(0.3))
+                .clipShape(Circle())
+                .foregroundStyle(.white)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func advance(by delta: Int) {
+        let next = currentIndex + delta
+        guard next >= 0, next < urls.count else { return }
+        withAnimation(.easeInOut(duration: 0.18)) {
+            currentIndex = next
+            zoom = 1.0
+            committedPan = .zero
+        }
+    }
+
+    private func load() {
+        guard currentIndex < urls.count else { return }
+        let url = urls[currentIndex]
+        isLoading = true
+        Task.detached(priority: .userInitiated) {
+            let img = ThumbnailCache.loadOriented(from: url)
+            await MainActor.run {
+                self.image = img
+                self.isLoading = false
+            }
+        }
     }
 
     /// Sheets on macOS ignore `idealWidth`/`idealHeight` and only honor
@@ -167,7 +290,7 @@ struct ImagePreviewView: View {
     private func sheetSize() -> CGSize {
         let screen = NSScreen.main?.visibleFrame.size ?? CGSize(width: 1400, height: 900)
         let maxByScreen = CGSize(width: screen.width * 0.9, height: screen.height * 0.9)
-        let imageSize = image.size
+        let imageSize = image?.size ?? CGSize(width: 800, height: 600)
         guard imageSize.width > 0, imageSize.height > 0 else { return maxByScreen }
         // Floor to a usable minimum so very small images still get a
         // generous viewer pane.

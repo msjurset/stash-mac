@@ -72,8 +72,7 @@ struct AIPrefsView: View {
             }
 
             Section {
-                TextEditor(text: $promptDraft)
-                    .font(.body.monospaced())
+                StashTextEditor(text: $promptDraft, monospaced: true)
                     .frame(minHeight: 160)
                     .overlay(alignment: .bottomTrailing) {
                         Text("\(promptDraft.count) chars")
@@ -98,6 +97,14 @@ struct AIPrefsView: View {
                 Text("Sent to \(prefs.activeProvider.displayName) with every photo. The default asks for `TITLE:` and `NOTES:` lines so the response slots into the item's Title and Notes fields. Edit freely — the parser handles `Common Name:` / free-form fallbacks too.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+
+            // Usage / cost panel — only meaningful for Gemini today
+            // (the cost table is gemini-specific). Hidden under
+            // other providers so Claude users don't see misleading
+            // gemini-rate numbers.
+            if prefs.activeID == .gemini {
+                GeminiUsageSection()
             }
         }
         .formStyle(.grouped)
@@ -234,5 +241,145 @@ struct AIPrefsView: View {
         let msg = (error as? LocalizedError)?.errorDescription
             ?? error.localizedDescription
         return msg
+    }
+}
+
+/// Gemini usage + cost forecaster panel. Reads from
+/// GeminiUsageStore.shared, which the HTTP layer updates after
+/// every successful identify response that carries usageMetadata.
+/// Shows today's calls / tokens / cost, all-time totals, and a
+/// 30-day projection so the user can spot a runaway-burn pattern
+/// before the credit card surprise (the Recruit-style $11/mo lesson).
+private struct GeminiUsageSection: View {
+    @Bindable var store: GeminiUsageStore = .shared
+    @Bindable var daemonStore: GeminiDaemonUsageStore = .shared
+
+    var body: some View {
+        let local = store.usage
+        let daemon = daemonStore.usage
+        let rate = GeminiPricing.rate(for: GeminiPricing.defaultModel)
+
+        // Combined totals — sum the two stores at render time so
+        // the user sees aggregate spend, with the breakdown rows
+        // beneath for attribution.
+        let combinedTodayCalls = local.todayCalls + daemon.todayCalls
+        let combinedTodayInput = local.todayInputTokens + daemon.today.totalInputTokens
+        let combinedTodayOutput = local.todayOutputTokens + daemon.today.totalOutputTokens
+        let combinedTodayCost = local.todayCostUsd() + daemon.todayCostUsd()
+        let combinedAllCalls = local.allTimeCalls + daemon.allTimeCalls
+        let combinedAllInput = local.allTimeInputTokens + daemon.allTime.totalInputTokens
+        let combinedAllOutput = local.allTimeOutputTokens + daemon.allTime.totalOutputTokens
+        let combinedAllCost = local.allTimeCostUsd() + daemon.allTimeCostUsd()
+
+        Section {
+            UsageRow(
+                label: "Today (\(local.date))",
+                calls: combinedTodayCalls,
+                inputTokens: combinedTodayInput,
+                outputTokens: combinedTodayOutput,
+                costUsd: combinedTodayCost
+            )
+            UsageRow(
+                label: "All-time",
+                calls: combinedAllCalls,
+                inputTokens: combinedAllInput,
+                outputTokens: combinedAllOutput,
+                costUsd: combinedAllCost
+            )
+            if daemon.loaded {
+                // Daemon contribution as a sub-row so the user
+                // can see how much of the combined number came
+                // from auto-identify vs. interactive Mac use.
+                HStack {
+                    Text("• Auto-identify (daemon)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Text(
+                        "\(daemon.allTimeCalls) call\(daemon.allTimeCalls == 1 ? "" : "s") all-time · " +
+                        "$\(String(format: "%.4f", daemon.allTimeCostUsd()))"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                }
+            }
+            if local.allTimeCalls + daemon.allTimeCalls > 0 {
+                HStack {
+                    Text("30-day projection")
+                    Spacer()
+                    // Forecast uses the Mac's local first-seen
+                    // date for the day count — it's the most
+                    // reliable anchor across daemon restarts.
+                    let projected = (local.thirtyDayProjectionUsd() / max(local.allTimeCostUsd(), .leastNonzeroMagnitude))
+                        * combinedAllCost
+                    let dailyAvg = projected / 30.0
+                    Text(
+                        "≈ $\(String(format: "%.2f", projected.isFinite ? projected : 0)) " +
+                        "($\(String(format: "%.4f", dailyAvg.isFinite ? dailyAvg : 0))/day avg)"
+                    )
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                }
+            }
+            HStack {
+                Button("Reset all-time") {
+                    store.resetAllTime()
+                }
+                Spacer()
+            }
+        } header: {
+            Text("Usage & cost")
+        } footer: {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(
+                    "Tracks every Gemini call this app makes. Tokens come from Google's usageMetadata on each response. " +
+                    "Cost is computed from current Gemini 2.5 Flash paid-tier rates " +
+                    "($\(String(format: "%.2f", rate.inputPerMillion))/M input, $\(String(format: "%.2f", rate.outputPerMillion))/M output). " +
+                    "Pair with a GCP billing budget alert for belt-and-suspenders."
+                )
+                Text("Rates loaded from \(GeminiPricing.configFileDisplayPath) (served to phones via gostash GET /pricing).")
+                if daemon.loaded {
+                    Text("Daemon spend read from \(GeminiDaemonUsageStore.ledgerDisplayPath) (written by `stash serve`).")
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        .onAppear { daemonStore.startPolling() }
+        .onDisappear { daemonStore.stopPolling() }
+    }
+}
+
+private struct UsageRow: View {
+    let label: String
+    let calls: Int
+    let inputTokens: Int64
+    let outputTokens: Int64
+    let costUsd: Double
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Text(label)
+                Spacer()
+                Text("\(calls) \(calls == 1 ? "call" : "calls") · $\(String(format: "%.4f", costUsd))")
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+            Text(
+                "in \(formatTokens(inputTokens)) · out \(formatTokens(outputTokens))"
+            )
+            .font(.caption)
+            .foregroundStyle(.tertiary)
+        }
+    }
+}
+
+private func formatTokens(_ t: Int64) -> String {
+    switch t {
+    case 0..<1_000: return "\(t)"
+    case 0..<1_000_000: return String(format: "%.1fk", Double(t) / 1_000)
+    default: return String(format: "%.2fM", Double(t) / 1_000_000)
     }
 }

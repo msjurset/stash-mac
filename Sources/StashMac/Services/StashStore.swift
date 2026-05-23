@@ -486,6 +486,10 @@ final class StashStore {
     var seenItemIDs: Set<String> = {
         Set(UserDefaults.standard.stringArray(forKey: "seenItemIDs") ?? [])
     }()
+    /// IDs of items that have received new AI follow-up content
+    /// since they were last marked as seen. Drives the "new content"
+    /// indicator in the UI.
+    var updatedItemIDs: Set<String> = []
 
     private let cli = StashCLI.shared
     private var searchTask: Task<Void, Never>?
@@ -733,28 +737,40 @@ final class StashStore {
     /// `loadAll()` (items + tags/collections/saved-searches/graph).
     private func fetchFilteredItems() async throws -> [StashItem] {
         var allTags = Array(filterTags)
+        var excludeTags: [String] = []
         var textQuery = searchQuery
 
         if !searchQuery.isEmpty {
-            let pattern = /tag:(\S+)/
-            let inlineMatches = searchQuery.matches(of: pattern)
+            // Negative tags (!tag:foo, -tag:foo, ^tag:foo)
+            let excludeMatches = searchQuery.matches(of: /[!^-]tag:(\S+)/)
+            excludeTags = excludeMatches.map { String($0.output.1) }
+
+            // Positive tags (strip negative ones first to avoid overlap)
+            let tempQuery = searchQuery.replacing(/[!^-]tag:?\S*/, with: "")
+            let inlineMatches = tempQuery.matches(of: /tag:(\S+)/)
             allTags += inlineMatches.map { String($0.output.1) }
-            textQuery = searchQuery.replacing(/tag:\S*/, with: "").trimmingCharacters(in: .whitespaces)
+
+            textQuery = searchQuery
+                .replacing(/[!^-]?tag:?\S*/, with: "")
+                .trimmingCharacters(in: .whitespaces)
         }
 
         if textQuery.isEmpty {
             return try await cli.listItems(
                 type: filterType,
                 tags: allTags,
+                excludeTags: excludeTags,
                 collection: filterCollection,
-                limit: 100
+                limit: 10000
             )
         }
         return try await cli.searchItems(
             query: textQuery,
             type: filterType,
             tags: allTags,
-            limit: 100
+            excludeTags: excludeTags,
+            collection: filterCollection,
+            limit: 10000
         )
     }
 
@@ -819,6 +835,29 @@ final class StashStore {
                 if shouldAutoThumbnail(item) {
                     _ = try? await ThumbnailService.shared.generate(for: item)
                     loadAll()
+                }
+                // Opportunistic OCR — when the user drag-drops or
+                // file-picks a photo that happens to contain text
+                // (book page, sign, handwritten note), pull the
+                // text into `extracted_text` so search finds it and
+                // the detail view's "Recognized text" section
+                // surfaces it. Threshold suppresses casual photos
+                // with no meaningful text — Vision's accurate
+                // recognizer would otherwise grab single words
+                // from signs / watermarks that pollute the field.
+                if item.type == .image, item.extractedText?.isEmpty ?? true {
+                    if let recognized = await TextRecognizer.recognize(fileURL: URL(fileURLWithPath: path)),
+                       TextRecognizer.looksSubstantial(recognized) {
+                        editItem(
+                            id: item.id,
+                            title: nil,
+                            note: nil,
+                            extractedText: recognized,
+                            addTags: [],
+                            removeTags: [],
+                            collection: nil
+                        )
+                    }
                 }
             } catch {
                 self.error = error.localizedDescription
@@ -980,6 +1019,95 @@ final class StashStore {
                 if ids.contains(selectedItemID ?? "") { selectedItemID = nil }
                 pruneCheckResult(removingIDs: Set(ids))
                 loadAll()
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
+    }
+
+    func handleGlobalAction(_ action: GlobalAction) {
+        switch action {
+        case .showStats:
+            applyNavigation(.stats)
+        case .showCheck:
+            applyNavigation(.check)
+        case .showLogs:
+            applyNavigation(.ruleActivity)
+        case .showDupes:
+            applyNavigation(.dupes)
+        case .openDataDir:
+            let home = FileManager.default.homeDirectoryForCurrentUser
+            let url = home.appending(path: ".stash")
+            NSWorkspace.shared.open(url)
+        case .backup:
+            Task {
+                do {
+                    try await cli.createBackup(dbOnly: true)
+                    flashMessage = "Backup complete ✓"
+                } catch {
+                    self.error = "Backup failed: \(error.localizedDescription)"
+                }
+            }
+        case .reindex:
+            flashMessage = "Reindexing…"
+            Task {
+                do {
+                    try await cli.reindex()
+                    flashMessage = "Reindex complete ✓"
+                } catch {
+                    self.error = "Reindex failed: \(error.localizedDescription)"
+                }
+            }
+        case .cleanOrphans:
+            flashMessage = "Scanning for orphans…"
+            Task {
+                do {
+                    let count = try await cli.cleanOrphans()
+                    flashMessage = "Deleted \(count) orphaned file(s) ✓"
+                } catch {
+                    self.error = "Cleanup failed: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    func fixSpelling(itemID: String, text: String) {
+        flashMessage = "Fixing spelling…"
+        Task {
+            do {
+                let fixed = try await cli.fixSpelling(text: text)
+                _ = try await cli.editItem(id: itemID, note: fixed)
+                refresh()
+                flashMessage = "Fixed ✓"
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
+    }
+
+    func summarize(itemID: String, text: String) {
+        flashMessage = "Summarizing…"
+        Task {
+            do {
+                let summary = try await cli.summarize(text: text)
+                _ = try await cli.editItem(id: itemID, note: summary)
+                refresh()
+                flashMessage = "Summarized ✓"
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
+    }
+
+    func suggestTags(itemID: String, text: String) {
+        flashMessage = "Getting tags…"
+        Task {
+            do {
+                let tagsStr = try await cli.suggestTags(text: text)
+                let tags = tagsStr.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
+                _ = try await cli.editItem(id: itemID, addTags: tags)
+                refresh()
+                flashMessage = "Suggested: \(tagsStr) ✓"
             } catch {
                 self.error = error.localizedDescription
             }
@@ -1667,6 +1795,7 @@ final class StashStore {
     }
 
     func markSeen(_ id: String) {
+        updatedItemIDs.remove(id)
         if seenItemIDs.insert(id).inserted {
             // Keep the set from growing unbounded — trim to last 2000
             if seenItemIDs.count > 2000 {
@@ -1678,6 +1807,10 @@ final class StashStore {
 
     func isUnseen(_ id: String) -> Bool {
         !seenItemIDs.contains(id)
+    }
+
+    func hasUpdate(_ id: String) -> Bool {
+        updatedItemIDs.contains(id)
     }
 
     func addTagToItem(id: String, tag: String) {
@@ -1695,6 +1828,27 @@ final class StashStore {
         Task {
             do {
                 _ = try await cli.editItem(id: id, addTags: tags)
+                loadAll()
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
+    }
+
+    /// Toggle the canonical favorite tag (see `FavoriteTag.name`)
+    /// on an item. Idempotent — passing `true` adds the tag,
+    /// `false` removes it; the CLI's edit verb is a no-op if the
+    /// tag is already in the requested state. Drives the star
+    /// button in the detail toolbar (⌘F) and the row indicator
+    /// in the list view.
+    func setFavorite(itemID: String, favorite: Bool) {
+        Task {
+            do {
+                _ = try await cli.editItem(
+                    id: itemID,
+                    addTags: favorite ? [FavoriteTag.name] : [],
+                    removeTags: favorite ? [] : [FavoriteTag.name]
+                )
                 loadAll()
             } catch {
                 self.error = error.localizedDescription
@@ -2279,6 +2433,15 @@ final class StashStore {
     /// small spinner next to the title while the call's in flight.
     var identifyingItemIDs: Set<String> = []
 
+    /// Set when the most-recent identify call exhausted its retry
+    /// budget AND was due to a transient/recoverable cause (model
+    /// overloaded, rate limited, network blip). Holding a closure
+    /// here lets the error alert offer a single-click "Retry" so
+    /// the user doesn't have to right-click → Identify again to
+    /// kick off another round of attempts. Cleared on success,
+    /// on manual retry, and when the alert is dismissed.
+    var identifyRetry: (() -> Void)?
+
     /// Right-click → Identify with <provider> on an image item.
     /// Reads the image bytes from the local file store, sends them
     /// to the active AI provider with the user's configured prompt
@@ -2322,39 +2485,94 @@ final class StashStore {
         }
 
         identifyingItemIDs.insert(id)
-        flashMessage = "Identifying \(shortID(id)) with \(provider.displayName)…"
+        // Fresh invocation clears any prior Retry closure — only the
+        // most recent failure should be retryable. (The previous
+        // closure may have captured stale prefs anyway.)
+        identifyRetry = nil
+        let shortened = shortID(id)
+        flashMessage = "Identifying \(shortened) with \(provider.displayName)…"
 
         Task { [weak self] in
             defer { Task { @MainActor in self?.identifyingItemIDs.remove(id) } }
-            do {
-                // `op://` references resolve here, just before the
-                // network call — the actual secret never leaves
-                // 1Password's keychain.
-                let resolvedKey = try await AIKeyResolver.resolve(key)
-                var images: [AIImage] = []
-                let primaryBytes = try Data(contentsOf: url)
-                images.append(AIImage(data: primaryBytes, mimeType: mime))
-                for (fileURL, fileMime) in attachedURLs {
-                    let data = try Data(contentsOf: fileURL)
-                    images.append(AIImage(data: data, mimeType: fileMime))
+
+            // Retry policy: transient errors (HTTP 503 / 429 / network
+            // blips) get up to 5 automatic retries with progressive
+            // backoff (3s, 7s, 15s, 30s, 60s) — total ~2 minutes of
+            // waiting. Most Gemini overload windows clear inside
+            // that envelope. Permanent errors (bad key, quota
+            // exceeded) skip the retry loop and surface
+            // immediately. Once the budget is exhausted, the final
+            // error is rewritten to a friendlier sentence AND the
+            // store stashes a Retry closure so the alert can offer
+            // a one-click re-attempt.
+            let backoffs: [UInt64] = [
+                3_000_000_000,
+                7_000_000_000,
+                15_000_000_000,
+                30_000_000_000,
+                60_000_000_000,
+            ]
+            var attempt = 0
+            var lastError: Error? = nil
+            while attempt <= backoffs.count {
+                do {
+                    // `op://` references resolve here, just before the
+                    // network call — the actual secret never leaves
+                    // 1Password's keychain.
+                    let resolvedKey = try await AIKeyResolver.resolve(key)
+                    var images: [AIImage] = []
+                    let primaryBytes = try Data(contentsOf: url)
+                    images.append(AIImage(data: primaryBytes, mimeType: mime))
+                    for (fileURL, fileMime) in attachedURLs {
+                        let data = try Data(contentsOf: fileURL)
+                        images.append(AIImage(data: data, mimeType: fileMime))
+                    }
+                    // Only downscale when bundling multiple — a single
+                    // image at native quality gives the model the most
+                    // detail and has always fit fine in the request
+                    // budget. Stored blobs are never modified by this.
+                    let sendImages = images.count > 1
+                        ? images.map { downscaleForIdentify($0) }
+                        : images
+                    let result = try await provider.identify(
+                        apiKey: resolvedKey,
+                        images: sendImages,
+                        promptText: prompt
+                    )
+                    await self?.applyIdentifyResult(itemID: id, result: result)
+                    return
+                } catch {
+                    lastError = error
+                    if isTransientIdentifyError(error), attempt < backoffs.count {
+                        // Surface a quieter status while we wait so the
+                        // user knows it's still trying.
+                        await MainActor.run {
+                            self?.flashMessage =
+                                "Identifying \(shortened) with \(provider.displayName)… (\(provider.displayName) is busy, retrying)"
+                        }
+                        try? await Task.sleep(nanoseconds: backoffs[attempt])
+                        attempt += 1
+                        continue
+                    }
+                    break
                 }
-                // Only downscale when bundling multiple — a single
-                // image at native quality gives the model the most
-                // detail and has always fit fine in the request
-                // budget. Stored blobs are never modified by this.
-                let sendImages = images.count > 1
-                    ? images.map { downscaleForIdentify($0) }
-                    : images
-                let result = try await provider.identify(
-                    apiKey: resolvedKey,
-                    images: sendImages,
-                    promptText: prompt
+            }
+
+            await MainActor.run {
+                self?.flashMessage = nil
+                self?.error = friendlyIdentifyErrorMessage(
+                    provider: provider.displayName,
+                    error: lastError
                 )
-                await self?.applyIdentifyResult(itemID: id, result: result)
-            } catch {
-                await MainActor.run {
-                    self?.flashMessage = nil
-                    self?.error = "\(provider.displayName) identify failed: \(error.localizedDescription)"
+                // If the failure was transient, the alert path can
+                // offer a Retry — kicks the same call again with a
+                // fresh retry budget. Permanent errors (auth/quota)
+                // don't get the Retry button since the call would
+                // just fail the same way.
+                if let lastError, isTransientIdentifyError(lastError) {
+                    self?.identifyRetry = { [weak self] in
+                        self?.identifyImageItem(id: id, with: prefs)
+                    }
                 }
             }
         }
@@ -2365,9 +2583,19 @@ final class StashStore {
         guard let item = items.first(where: { $0.id == itemID })
                 ?? fetchedItem.flatMap({ $0.id == itemID ? $0 : nil })
         else { return }
-        let currentTitle = item.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let newTitle = (currentTitle.isEmpty ? result.title : nil)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        // Right-click "Identify with X" is an explicit user action
+        // asking for a fresh identification — including the title.
+        // Earlier this path preserved any existing title to avoid
+        // clobbering a user-typed one, but most items hitting this
+        // path are auto-titled (filename like "1000003715.jpg") and
+        // the user expects the better label. The EditItemSheet
+        // Identify button has always replaced the title; right-click
+        // now matches that. Users who want partial updates can edit
+        // post-hoc.
+        let newTitle: String? = {
+            let t = result.title?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return (t?.isEmpty == false) ? t : nil
+        }()
         let existingNotes = item.notes?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let combinedNotes: String
         if existingNotes.isEmpty {
@@ -2375,11 +2603,24 @@ final class StashStore {
         } else {
             combinedNotes = existingNotes + "\n\n" + result.notes
         }
+        // Transcript (Gemini's vision-OCR) replaces extractedText
+        // wholesale when present. The right-click Identify path is
+        // most often used as a *rescue* for items whose Android-side
+        // identify failed (e.g. capture-time Gemini 503s left the
+        // item with ML Kit's mediocre OCR or no transcript at all).
+        // Wholesale replace is the right call there. When the model
+        // returns no transcript (NONE / image has no text), pass
+        // nil so editItem leaves the field untouched.
+        let newExtracted: String? = {
+            let t = result.transcript?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return (t?.isEmpty == false) ? t : nil
+        }()
         do {
             _ = try await cli.editItem(
                 id: itemID,
                 title: newTitle?.isEmpty == false ? newTitle : nil,
                 note: combinedNotes,
+                extractedText: newExtracted,
                 addTags: [],
                 removeTags: []
             )
@@ -2467,6 +2708,26 @@ final class StashStore {
             } catch {
                 flashMessage = nil
                 self.error = "Couldn't merge: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    func askAI(id: String, question: String) {
+        identifyingItemIDs.insert(id)
+        Task {
+            do {
+                let updated = try await cli.askAI(itemID: id, question: question)
+                if let idx = items.firstIndex(where: { $0.id == id }) {
+                    items[idx] = updated
+                }
+                if fetchedItem?.id == id {
+                    fetchedItem = updated
+                }
+                updatedItemIDs.insert(id)
+                identifyingItemIDs.remove(id)
+            } catch {
+                self.error = error.localizedDescription
+                identifyingItemIDs.remove(id)
             }
         }
     }

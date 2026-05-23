@@ -7,6 +7,14 @@ import Foundation
 struct AIIdentifyResult: Equatable {
     var title: String?
     var notes: String
+    /// Verbatim text extracted from the photo when any is readable
+    /// — printed, typed, or handwritten. Gemini and Claude both
+    /// produce noticeably better OCR than Vision's
+    /// VNRecognizeTextRequest on handwriting and stylized print,
+    /// so the default prompt now asks for a TRANSCRIPT: section.
+    /// Nil when the photo has no meaningful text (prompt instructs
+    /// the model to write "NONE" in that case).
+    var transcript: String? = nil
 }
 
 /// Plug-in surface for AI image-identification backends.
@@ -25,6 +33,8 @@ protocol AIProvider: Sendable {
     /// Human-readable name for the Settings picker and the right-
     /// click "Identify with <Name>" menu item.
     var displayName: String { get }
+    /// SF Symbol name for this provider's branding.
+    var iconName: String { get }
     /// First few characters of a valid key for this provider — shown
     /// as the placeholder inside the API-key field so the user has
     /// a visual cue they pasted something of the right shape.
@@ -99,10 +109,11 @@ enum AIPrompts {
     static let defaultIdentify: String = """
 Identify the main subject in this photo.
 
-Respond with exactly these two lines, no preamble, no markdown:
+Respond with exactly these three lines, no preamble, no markdown:
 
 TITLE: <common name; include scientific name in parentheses when applicable>
 NOTES: <natural prose, three to six sentences. Open by naming the subject in plain language — e.g. "This is the YYYY mushroom (Scientificus nameus), also known as XXXX..." or "This is the eastern bluebird (Sialia sialis), a small thrush native to..." Then cover, where relevant: notable visual characteristics; habitat, range, or season; edibility / toxicity / safety; species commonly confused with it; what specific features visible in this photo helped identify it; and any other interesting facts a curious naturalist would want to know. Be generous with detail — the user will trim what they don't want.>
+TRANSCRIPT: <if the photo contains readable text — printed, typed, OR handwritten (including cursive) — transcribe it verbatim here, preserving line breaks where they're meaningful. Cover the entire visible text, not just a sample. If the image contains no meaningful text (e.g. it's a flower, animal, landscape with no signs / labels / writing), write exactly NONE.>
 
 If you can't identify confidently, write TITLE: Unknown and explain your best guess and the reasoning in NOTES.
 """
@@ -115,6 +126,79 @@ If you can't identify confidently, write TITLE: Unknown and explain your best gu
     static func multiImageHint(count: Int) -> String {
         "The following \(count) photos are of the same subject from different angles or states. Identify the subject using all photos together.\n\n"
     }
+}
+
+// MARK: - Identify error classification + friendly messaging
+
+/// True when the error is one we expect to clear on its own —
+/// model overload (HTTP 503 with "UNAVAILABLE" status), short-
+/// window rate limits (HTTP 429 without quota body), and any
+/// networking-shaped failure. The identify retry loop in
+/// StashStore uses this to decide whether to back off and try
+/// again or surface the failure immediately.
+///
+/// **Quota errors are NOT transient.** Gemini returns HTTP 429
+/// for both per-minute rate limits AND daily/free-tier quota
+/// exhaustion. We need to distinguish them: quota errors won't
+/// clear for hours, so retrying burns more of the user's
+/// remaining budget without ever succeeding. The Gemini 429
+/// body contains "quota exceeded" / "free_tier_requests" /
+/// "current quota" when it's quota; plain rate limits don't.
+func isTransientIdentifyError(_ error: Error) -> Bool {
+    let msg = error.localizedDescription.lowercased()
+    if msg.contains("503") || msg.contains("unavailable") || msg.contains("high demand") {
+        return true
+    }
+    if msg.contains("quota") || msg.contains("free_tier") || msg.contains("billing") {
+        // 429-with-quota — permanent for the current quota window.
+        // Don't retry.
+        return false
+    }
+    if msg.contains("429") || msg.contains("rate limit") || msg.contains("rate-limit") {
+        return true
+    }
+    if error is URLError { return true }
+    return false
+}
+
+/// Translate a raw identify error into something the user can
+/// actually act on. Suppresses the long JSON body for 503s and
+/// distinguishes "wait it out" failures from "your key is wrong."
+/// Called when the retry loop has given up.
+func friendlyIdentifyErrorMessage(provider: String, error: Error?) -> String {
+    guard let error else {
+        return "\(provider) identify failed."
+    }
+    let msg = error.localizedDescription
+    let lower = msg.lowercased()
+    if lower.contains("503") || lower.contains("unavailable") || lower.contains("high demand") {
+        return "\(provider) is currently overloaded. Try again in a few minutes."
+    }
+    // Quota check MUST come before the 429 check — Gemini returns
+    // 429 for both per-minute rate limits and daily / free-tier
+    // quota exhaustion, and we need to surface the latter as a
+    // hard "stop and upgrade or wait until tomorrow" rather than
+    // a "try again shortly" that nudges the user into more
+    // futile retries.
+    if lower.contains("free_tier") || lower.contains("free tier") {
+        return "\(provider) free-tier quota exhausted. Wait for the quota window to reset, or add billing on the API key."
+    }
+    if lower.contains("quota") || lower.contains("billing") {
+        return "\(provider) quota exceeded on this key. Add billing or wait for the quota to reset."
+    }
+    if lower.contains("429") || lower.contains("rate limit") || lower.contains("rate-limit") {
+        return "\(provider) rate limit reached. Try again shortly."
+    }
+    if lower.contains("401") || lower.contains("403") || lower.contains("api key") || lower.contains("api_key") {
+        return "\(provider) rejected the API key. Update it in Settings → AI."
+    }
+    if error is URLError {
+        return "Network error while talking to \(provider). Check your connection and try again."
+    }
+    // Fall through for truly unknown errors — still strip the
+    // verbose JSON body to keep the alert readable.
+    let trimmed = msg.count > 200 ? String(msg.prefix(200)) + "…" : msg
+    return "\(provider) identify failed: \(trimmed)"
 }
 
 // MARK: - Image downscaling (identify-only)
@@ -171,10 +255,11 @@ func downscaleForIdentify(
 /// If no title marker matches, title returns nil and the entire
 /// response goes in notes.
 enum AIResponseParser {
-    static func parse(_ raw: String) -> AIIdentifyResult {
-        let titleMarkers = ["TITLE", "Title", "Common Name", "Common name", "Name", "Subject"]
-        let notesMarkers = ["NOTES", "Notes", "Description", "Details"]
+    private static let titleMarkers = ["TITLE", "Title", "Common Name", "Common name", "Name", "Subject"]
+    private static let notesMarkers = ["NOTES", "Notes", "Description", "Details"]
+    private static let transcriptMarkers = ["TRANSCRIPT", "Transcript", "Text", "OCR"]
 
+    static func parse(_ raw: String) -> AIIdentifyResult {
         let lines = raw.components(separatedBy: "\n")
         var title: String? = nil
         var notes: String? = nil
@@ -189,12 +274,30 @@ enum AIResponseParser {
             if title != nil && notes != nil { break }
         }
 
+        // Capture TRANSCRIPT as a multi-line block — unlike title /
+        // notes which are single-line values, transcripts are
+        // paragraphs verbatim from the photo. Walks from the
+        // marker line to the next known marker or EOF. "NONE" or
+        // empty → nil so callers treat as "no readable text".
+        let transcriptLines = extractMultilineValue(lines, markers: transcriptMarkers)
+        let transcript: String? = transcriptLines.map { lines in
+            lines.joined(separator: "\n")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .cleanInlineMarkers()
+        }.flatMap { s in
+            if s.isEmpty || s.caseInsensitiveCompare("NONE") == .orderedSame { return nil }
+            return s
+        }
+        let transcriptLineSet = Set(transcriptLines ?? [])
+
         let notesText: String
         if let n = notes {
             notesText = n
         } else {
             let filtered = lines.filter { line in
-                extractValue(line, markers: titleMarkers) == nil
+                extractValue(line, markers: titleMarkers) == nil &&
+                    extractValue(line, markers: transcriptMarkers) == nil &&
+                    !transcriptLineSet.contains(line)
             }
             let joined = filtered.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
             notesText = joined.isEmpty ? raw : joined
@@ -202,8 +305,30 @@ enum AIResponseParser {
 
         return AIIdentifyResult(
             title: title?.isEmpty == false ? title : nil,
-            notes: notesText
+            notes: notesText,
+            transcript: transcript
         )
+    }
+
+    /// Capture a multi-line block following a marker line, stopping
+    /// at the next known marker or EOF. The value on the marker
+    /// line itself (after the colon) is the first element. Returns
+    /// nil when no marker line is found.
+    private static func extractMultilineValue(_ lines: [String], markers: [String]) -> [String]? {
+        guard let startIdx = lines.firstIndex(where: { extractValue($0, markers: markers) != nil })
+        else { return nil }
+        var out: [String] = []
+        if let first = extractValue(lines[startIdx], markers: markers), !first.isEmpty {
+            out.append(first)
+        }
+        for i in (startIdx + 1)..<lines.count {
+            let line = lines[i]
+            if extractValue(line, markers: titleMarkers) != nil { break }
+            if extractValue(line, markers: notesMarkers) != nil { break }
+            if extractValue(line, markers: transcriptMarkers) != nil { break }
+            out.append(line)
+        }
+        return out
     }
 
     private static func extractValue(_ line: String, markers: [String]) -> String? {

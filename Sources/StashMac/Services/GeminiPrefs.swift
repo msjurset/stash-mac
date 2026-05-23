@@ -98,6 +98,12 @@ final class AIPrefsStore {
         } else {
             defaults.set(cleaned, forKey: "ai.\(target.rawValue).apiKey")
         }
+        // Clear the in-memory resolved-key cache so a changed
+        // reference triggers a fresh `op read` next call rather
+        // than serving the stale value from the previous key.
+        // Fire-and-forget — the cache is an actor so this is the
+        // standard async-to-sync handoff.
+        Task { await AIKeyResolver.clearCache() }
     }
 
     func setPrompt(_ value: String, for id: AIProviderID? = nil) {

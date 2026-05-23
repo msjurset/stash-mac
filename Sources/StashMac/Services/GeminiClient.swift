@@ -13,6 +13,7 @@ import Foundation
 struct GeminiProvider: AIProvider {
     var id: AIProviderID { .gemini }
     var displayName: String { "Google Gemini" }
+    var iconName: String { "sparkle" }
     var keyPlaceholder: String { "AIza…" }
     var keyURL: URL { URL(string: "https://aistudio.google.com/app/apikey")! }
     var defaultPrompt: String { AIPrompts.defaultIdentify }
@@ -111,6 +112,7 @@ struct GeminiProvider: AIProvider {
 
     private struct GenerateResponse: Decodable {
         let candidates: [Candidate]?
+        let usageMetadata: UsageMetadata?
         struct Candidate: Decodable {
             let content: Content?
             struct Content: Decodable {
@@ -119,6 +121,11 @@ struct GeminiProvider: AIProvider {
                     let text: String?
                 }
             }
+        }
+        struct UsageMetadata: Decodable {
+            let promptTokenCount: Int?
+            let candidatesTokenCount: Int?
+            let totalTokenCount: Int?
         }
     }
 
@@ -139,14 +146,39 @@ struct GeminiProvider: AIProvider {
         let enc = JSONEncoder()
         req.httpBody = try enc.encode(body)
 
+        let bodySize = req.httpBody?.count ?? 0
+        let keyTail = apiKey.suffix(4)
+        let startedAt = Date()
+        logGemini("POST \(model) — body=\(bodySize) bytes, key=…\(keyTail)")
+
         let (data, response) = try await urlSession.data(for: req)
         let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+        let elapsed = Date().timeIntervalSince(startedAt)
         if status < 200 || status >= 300 {
             let text = String(data: data, encoding: .utf8) ?? ""
+            logGemini("✗ HTTP \(status) after \(String(format: "%.1f", elapsed))s — body head: \(text.prefix(400))")
             throw GeminiError.http(status: status, body: text)
         }
+        logGemini("✓ HTTP \(status) after \(String(format: "%.1f", elapsed))s — \(data.count) bytes")
         do {
             let decoded = try JSONDecoder().decode(GenerateResponse.self, from: data)
+            // Record billed token usage when present — Gemini puts
+            // prompt/candidate counts in usageMetadata for every
+            // successful response. Falls back silently when the
+            // field is missing (older API versions, errors that
+            // came back as 2xx, etc).
+            if let usage = decoded.usageMetadata {
+                let inputTokens = usage.promptTokenCount
+                let outputTokens = usage.candidatesTokenCount
+                let modelName = self.model
+                Task { @MainActor in
+                    GeminiUsageStore.shared.record(
+                        model: modelName,
+                        promptTokens: inputTokens,
+                        candidateTokens: outputTokens
+                    )
+                }
+            }
             let firstText = decoded.candidates?
                 .first?
                 .content?
@@ -159,5 +191,28 @@ struct GeminiProvider: AIProvider {
             let text = String(data: data, encoding: .utf8) ?? ""
             throw GeminiError.decode("\(error.localizedDescription) — head: \(text.prefix(160))")
         }
+    }
+}
+
+/// Diagnostic log helper for the Gemini identify path. Writes to
+/// stderr (visible if the app is run from Terminal), to NSLog (lands
+/// in Console.app under the StashMac process), AND appends to
+/// `/tmp/stash-gemini.log` — that last channel is the surefire one
+/// because the user can just `tail -f /tmp/stash-gemini.log` and
+/// watch live without fighting Console.app filters. The file
+/// rolls implicitly when /tmp gets purged on reboot; no rotation
+/// needed.
+private func logGemini(_ message: String) {
+    let ts = ISO8601DateFormatter().string(from: Date())
+    let line = "[\(ts)] [GeminiClient] \(message)\n"
+    FileHandle.standardError.write(line.data(using: .utf8) ?? Data())
+    NSLog("[GeminiClient] %@", message)
+    let path = "/tmp/stash-gemini.log"
+    if let fh = FileHandle(forWritingAtPath: path) {
+        fh.seekToEndOfFile()
+        fh.write(line.data(using: .utf8) ?? Data())
+        try? fh.close()
+    } else {
+        try? line.data(using: .utf8)?.write(to: URL(fileURLWithPath: path))
     }
 }

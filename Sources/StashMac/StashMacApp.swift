@@ -105,6 +105,7 @@ struct StashMacApp: App {
                 .environment(store)
                 .environment(aiPrefs)
                 .preferredColorScheme(appTheme.colorScheme)
+                .overlay(alignment: .top) { ToastOverlay() }
         }
         .defaultSize(width: 1100, height: 700)
         .commands {

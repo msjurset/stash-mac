@@ -111,7 +111,24 @@ struct InlineTagInput: View {
                 .padding(.top, 2)
             }
         }
-        .background(ClickOutsideMonitor(onClickOutside: onCancel))
+        .background(ClickOutsideMonitor(onClickOutside: commitOnClickOutside))
+    }
+
+    /// Click-off behavior: commit if the user typed anything,
+    /// otherwise dismiss without side effects. Matches the
+    /// project-wide "inline edit fields commit on focus loss"
+    /// convention — explicit cancel is Escape only. Without this,
+    /// users who type a tag and click anywhere else (away from
+    /// the field) lose their input — a real "did I save?" trap.
+    private func commitOnClickOutside() {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: ","))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            onCancel()
+        } else {
+            onCommit(text)
+        }
     }
 
     // MARK: - Key handlers
