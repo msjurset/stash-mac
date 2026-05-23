@@ -3,6 +3,13 @@ import SwiftUI
 struct DupesView: View {
     @Environment(StashStore.self) private var store
     @State private var confirmDeleteID: String?
+    @State private var mergeRequest: MergeRequest?
+    @State private var isFetchingMerge = false
+
+    struct MergeRequest: Identifiable {
+        let id = UUID()
+        let items: [StashItem]
+    }
 
     var body: some View {
         ScrollView {
@@ -54,6 +61,21 @@ struct DupesView: View {
                     .animation(.easeInOut, value: store.flashMessage)
             }
         }
+        .overlay {
+            if isFetchingMerge {
+                ZStack {
+                    Color.black.opacity(0.2)
+                    VStack(spacing: 12) {
+                        ProgressView()
+                        Text("Fetching items for merge...")
+                            .font(.caption)
+                    }
+                    .padding(20)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+                }
+                .ignoresSafeArea()
+            }
+        }
         .toolbar {
             ToolbarItem {
                 Button {
@@ -80,6 +102,23 @@ struct DupesView: View {
             }
         } message: {
             Text("This item will be permanently deleted.")
+        }
+        .sheet(item: $mergeRequest) { req in
+            MergeItemsSheet(
+                items: req.items,
+                onMerge: { targetID, sourceIDs in
+                    store.mergeItems(targetID: targetID, sourceIDs: sourceIDs)
+                    // After merge, we need to refresh the dupes list because
+                    // some items are gone and the "keeper" might no longer
+                    // be a duplicate (or might still be).
+                    mergeRequest = nil
+                    Task {
+                        try? await Task.sleep(for: .seconds(1))
+                        store.loadDupes()
+                    }
+                },
+                onCancel: { mergeRequest = nil }
+            )
         }
     }
 
@@ -109,7 +148,7 @@ struct DupesView: View {
 
             // Items in group
             ForEach(group.items) { item in
-                dupeItemRow(item)
+                dupeItemRow(item, in: group)
             }
         }
         .padding(.vertical, 6)
@@ -118,7 +157,7 @@ struct DupesView: View {
     }
 
     @ViewBuilder
-    private func dupeItemRow(_ item: DupeItem) -> some View {
+    private func dupeItemRow(_ item: DupeItem, in group: DupeResult) -> some View {
         let isSelected = store.selectedItemID == item.id
         HStack {
             Text(item.title)
@@ -151,8 +190,34 @@ struct DupesView: View {
                 store.openItem(id: item.id)
             }
             Divider()
+            Button("Merge Group...") {
+                fetchAndShowMerge(for: group)
+            }
             Button("Delete Duplicate", role: .destructive) {
                 confirmDeleteID = item.id
+            }
+        }
+    }
+
+    private func fetchAndShowMerge(for group: DupeResult) {
+        Task {
+            isFetchingMerge = true
+            defer { isFetchingMerge = false }
+            
+            var fetched: [StashItem] = []
+            for di in group.items {
+                do {
+                    let item = try await store.getItem(id: di.id)
+                    fetched.append(item)
+                } catch {
+                    print("Failed to fetch item \(di.id) for merge: \(error)")
+                }
+            }
+            
+            if fetched.count > 1 {
+                mergeRequest = MergeRequest(items: fetched)
+            } else {
+                store.error = "Could not fetch items for merge. Check connection and try again."
             }
         }
     }

@@ -1867,6 +1867,10 @@ final class StashStore {
     /// out of those views. Pass true from QuickSearchView's
     /// commit-result path so a global search hit lands in the list
     /// where the highlight is visible.
+    func getItem(id: String) async throws -> StashItem {
+        try await cli.getItem(id: id)
+    }
+
     func selectItemByID(_ id: String, revealInList: Bool = false) {
         selectedItemID = id
         selectedItems = [id]
