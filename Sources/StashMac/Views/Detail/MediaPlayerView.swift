@@ -415,7 +415,9 @@ private struct CustomAudioPlayer: View {
         // enough to not thrash the UI.
         let interval = CMTime(seconds: 0.2, preferredTimescale: 600)
         timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { time in
-            currentSeconds = max(0, CMTimeGetSeconds(time))
+            Task { @MainActor in
+                self.currentSeconds = max(0, CMTimeGetSeconds(time))
+            }
         }
 
         endObserver = NotificationCenter.default.addObserver(
@@ -423,10 +425,12 @@ private struct CustomAudioPlayer: View {
             object: item,
             queue: .main
         ) { _ in
-            isPlaying = false
-            // Snap back to the start so the next play tap restarts.
-            player.seek(to: .zero)
-            currentSeconds = 0
+            Task { @MainActor in
+                self.isPlaying = false
+                // Snap back to the start so the next play tap restarts.
+                self.player.seek(to: .zero)
+                self.currentSeconds = 0
+            }
         }
     }
 

@@ -386,6 +386,9 @@ struct ItemDetailView: View {
                     }
                 }
 
+                // From the Web — asynchronous Google search for related images/links
+                FromTheWebSection(item: item)
+
                 // Provenance — capture / rule / tag timeline reconstructed
                 // from capture.log and tags.log. Sits right after Info
                 // because both sections are "metadata about the item"
