@@ -1136,6 +1136,29 @@ final class StashStore {
         }
     }
 
+    /// Finds tags that appear as words or phrases within `text`
+    /// (case-insensitive). Useful for backfilling tag suggestions
+    /// after an identify run without a separate model call.
+    func matchTags(in text: String, exclude: [String]) -> [String] {
+        let content = text.lowercased()
+        let excludeSet = Set(exclude.map { $0.lowercased() })
+        
+        return tags
+            .filter { !excludeSet.contains($0.name.lowercased()) }
+            .filter { tag in
+                let lowerTag = tag.name.lowercased()
+                // Word boundary check
+                let pattern = "\\b\(NSRegularExpression.escapedPattern(for: lowerTag))\\b"
+                guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else {
+                    return false
+                }
+                let range = NSRange(location: 0, length: content.utf16.count)
+                return regex.firstMatch(in: content, options: [], range: range) != nil
+            }
+            .sorted { $0.name.count > $1.name.count } // Prefer longer matches
+            .map { $0.name }
+    }
+
     /// Add (or remove) one tag across many items in a single CLI
     /// call. Used by the sidebar drop-destination (drag items onto
     /// a tag row) and the tag-picker popover. Refreshes the items

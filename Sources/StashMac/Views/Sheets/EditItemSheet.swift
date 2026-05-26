@@ -18,6 +18,7 @@ struct EditItemSheet: View {
     @State private var collection = ""
     @State private var isIdentifying = false
     @State private var identifyError: String?
+    @State private var suggestedTags: [String] = []
     @State private var latText: String
     @State private var lonText: String
     @State private var locationSource: String
@@ -191,6 +192,50 @@ struct EditItemSheet: View {
                         .clipShape(Capsule())
                     }
                 }
+
+                if !suggestedTags.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text("Suggestions")
+                                .font(.caption2.bold())
+                                .foregroundStyle(.primary)
+                            Spacer()
+                            Button {
+                                suggestedTags = []
+                            } label: {
+                                Image(systemName: "xmark")
+                                    .font(.caption2)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        FlowLayout(spacing: 6) {
+                            ForEach(suggestedTags, id: \.self) { tag in
+                                Button {
+                                    if !currentTags.contains(tag) {
+                                        tagsToAdd.append(tag)
+                                    }
+                                    suggestedTags.removeAll { $0 == tag }
+                                } label: {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "plus")
+                                            .font(.caption2)
+                                        Text(tag)
+                                            .font(.caption)
+                                    }
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 3)
+                                    .background(Color.accentColor.opacity(0.12))
+                                    .clipShape(Capsule())
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                    .padding(8)
+                    .background(Color.accentColor.opacity(0.05))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                }
+
                 EditTagInput(
                     text: $newTag,
                     allTags: store.tags,
@@ -478,6 +523,11 @@ struct EditItemSheet: View {
                     // repeat identifies don't lose earlier output.
                     let existing = note.trimmingCharacters(in: .whitespacesAndNewlines)
                     note = existing.isEmpty ? result.notes : existing + "\n\n" + result.notes
+                    
+                    // Local tag suggestions backfilled from history
+                    let combined = "\(title) \(note)"
+                    suggestedTags = store.matchTags(in: combined, exclude: currentTags)
+                    
                     // Transcript (Gemini's vision-OCR): replace the
                     // existing extractedText when the model produced
                     // a transcript. This is the manual-rescue path
