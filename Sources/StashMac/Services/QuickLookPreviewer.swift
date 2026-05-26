@@ -16,30 +16,35 @@ final class QuickLookPreviewer: NSObject {
     private var items: [PreviewItem] = []
     private var stagingDir: URL?
 
-    /// Show the panel previewing the given items. Two staging paths:
-    ///   - Items with a stored blob (file/image) → hardlink (or
-    ///     copy) into the staging dir under a real extension so QL
-    ///     dispatches its type-specific generators.
-    ///   - Items with only `extractedText` (snippet/email) → write
-    ///     the text to a `.md` file (the extractor already produces
-    ///     markdown-formatted content) so QL renders it as text.
-    /// URL items with neither are silently skipped.
-    func show(items requested: [StashItem]) {
-        cleanup()
+    /// Update the current panel with new content without closing/reopening.
+    /// Used when the selection changes while previewing.
+    func refresh(paths: [String]) {
+        let dir = ensureStagingDir()
 
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("stash-ql-\(UUID().uuidString)", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        stagingDir = dir
+        var staged: [PreviewItem] = []
+        for path in paths {
+            let source = URL(fileURLWithPath: path)
+            let ext = getExtension(for: source)
+            let filename = source.lastPathComponent
+            let dest = dir.appendingPathComponent("\(filename)\(ext.isEmpty ? "" : ".")\(ext)")
+            
+            if !FileManager.default.fileExists(atPath: dest.path) {
+                try? FileManager.default.linkItem(at: source, to: dest)
+            }
+            staged.append(PreviewItem(url: dest, title: filename))
+        }
+
+        self.items = staged
+        if let panel = QLPreviewPanel.shared(), panel.isVisible {
+            panel.reloadData()
+        }
+    }
+
+    func refresh(items requested: [StashItem]) {
+        let dir = ensureStagingDir()
 
         var staged: [PreviewItem] = []
         for item in requested {
-            // Email items have a stored `.eml` blob, but QL's email
-            // renderer refuses to display the body inline regardless
-            // of MIME shape — confirmed empirically across `.txt`,
-            // `.md`, and `.eml` extensions. Skip stageBlob for them
-            // and use the text path, which strips headers and
-            // renders the body as markdown.
             if item.type == .email {
                 if let dest = stageText(for: item, in: dir) {
                     staged.append(PreviewItem(url: dest, title: item.title))
@@ -56,13 +61,58 @@ final class QuickLookPreviewer: NSObject {
             }
         }
 
-        guard !staged.isEmpty else { return }
-        items = staged
+        self.items = staged
+        if let panel = QLPreviewPanel.shared(), panel.isVisible {
+            panel.reloadData()
+        }
+    }
+
+    private func ensureStagingDir() -> URL {
+        if let existing = stagingDir { return existing }
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("stash-ql-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        stagingDir = dir
+        return dir
+    }
+
+    func togglePaths(paths: [String]) {
+        if let panel = QLPreviewPanel.shared(), panel.isVisible {
+            panel.orderOut(nil)
+        } else {
+            showPaths(paths: paths)
+        }
+    }
+
+    func toggleItems(items requested: [StashItem]) {
+        if let panel = QLPreviewPanel.shared(), panel.isVisible {
+            panel.orderOut(nil)
+        } else {
+            show(items: requested)
+        }
+    }
+
+    /// Show the panel previewing raw file paths.
+    func showPaths(paths: [String]) {
+        cleanup()
+        refresh(paths: paths)
+        
+        guard let panel = QLPreviewPanel.shared() else { return }
+        panel.dataSource = self
+        panel.delegate = self
+        if !panel.isVisible {
+            panel.makeKeyAndOrderFront(nil)
+        }
+    }
+
+    /// Show the panel previewing the given items.
+    func show(items requested: [StashItem]) {
+        cleanup()
+        refresh(items: requested)
 
         guard let panel = QLPreviewPanel.shared() else { return }
         panel.dataSource = self
         panel.delegate = self
-        panel.reloadData()
         if !panel.isVisible {
             panel.makeKeyAndOrderFront(nil)
         }
@@ -77,6 +127,7 @@ final class QuickLookPreviewer: NSObject {
         let dest = dir.appendingPathComponent(
             "\(item.id)\(ext.isEmpty ? "" : ".")\(ext)"
         )
+        if FileManager.default.fileExists(atPath: dest.path) { return dest }
         do {
             try FileManager.default.linkItem(at: source, to: dest)
             return dest
@@ -90,21 +141,11 @@ final class QuickLookPreviewer: NSObject {
 
     private func stageText(for item: StashItem, in dir: URL) -> URL? {
         guard let text = item.extractedText, !text.isEmpty else { return nil }
-        // Emails: macOS's Mail QL plugin recognizes any RFC 822
-        // shape (incl. proper `.eml` with full MIME headers) and
-        // routes to the email renderer — but that renderer fails
-        // to display the body inline regardless of how the message
-        // is formatted. Confirmed empirically: `.txt`, `.md`, and
-        // `.eml` all hit the same dead end. Workaround is to strip
-        // the header block and lead with `# {title}` so QL stays
-        // on the markdown renderer. Headers remain visible in the
-        // detail view (right pane), so nothing is hidden — the QL
-        // preview just shows the message body, which is the part
-        // you actually want when scanning.
         let content = item.type == .email
             ? bodyOnlyMarkdown(text, title: item.title)
             : text
         let dest = dir.appendingPathComponent("\(item.id).md")
+        if FileManager.default.fileExists(atPath: dest.path) { return dest }
         do {
             try content.write(to: dest, atomically: true, encoding: .utf8)
             return dest
@@ -113,9 +154,6 @@ final class QuickLookPreviewer: NSObject {
         }
     }
 
-    /// Drop the From/To/Subject/Date header block from extractedText
-    /// (RFC 822 boundary = first blank line) and lead with the
-    /// item's title as a markdown H1.
     private func bodyOnlyMarkdown(_ raw: String, title: String) -> String {
         let parts = raw.components(separatedBy: "\n\n")
         let body = parts.count > 1
@@ -124,8 +162,6 @@ final class QuickLookPreviewer: NSObject {
         return "# \(title)\n\n\(body)"
     }
 
-    /// Clear staged files. Called automatically when the panel
-    /// closes; safe to call eagerly when starting a new preview.
     private func cleanup() {
         items = []
         if let dir = stagingDir {
@@ -146,6 +182,38 @@ final class QuickLookPreviewer: NSObject {
         }
         return ""
     }
+
+    private func getExtension(for url: URL) -> String {
+        var ext = (try? url.resourceValues(forKeys: [.contentTypeKey]).contentType?.preferredFilenameExtension) ?? ""
+        if ext.isEmpty {
+            if let type = sniffType(at: url) {
+                ext = type.preferredFilenameExtension ?? ""
+            }
+        }
+        return ext
+    }
+
+    private func sniffType(at url: URL) -> UTType? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        
+        guard let data = try? handle.read(upToCount: 512) else { return nil }
+        
+        if data.starts(with: [0xFF, 0xD8, 0xFF]) { return .jpeg }
+        if data.starts(with: [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) { return .png }
+        if data.starts(with: [0x47, 0x49, 0x46, 0x38]) { return .gif }
+        if data.count >= 12, data.subdata(in: 4..<12) == Data([0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63]) { return .heic }
+        if data.starts(with: [0x25, 0x50, 0x44, 0x46]) { return .pdf }
+        if data.count >= 8, data.subdata(in: 4..<8) == Data([0x66, 0x74, 0x79, 0x70]) { return .mpeg4Movie }
+        
+        if let s = String(data: data, encoding: .utf8)?.lowercased() {
+            let headers = ["return-path:", "received:", "from:", "delivered-to:", "content-type:", "message-id:"]
+            if headers.contains(where: { s.contains($0) }) { return .emailMessage }
+            if !data.contains(where: { $0 < 32 && ![9, 10, 13].contains($0) }) { return .plainText }
+        }
+        
+        return nil
+    }
 }
 
 extension QuickLookPreviewer: @preconcurrency QLPreviewPanelDataSource {
@@ -164,18 +232,10 @@ extension QuickLookPreviewer: @preconcurrency QLPreviewPanelDelegate {
     }
 }
 
-/// `QLPreviewItem` is `@objc` so we have to bridge through NSObject.
-/// `previewItemTitle` lets us show the stash item's user-facing
-/// title in the panel chrome instead of the staged temp filename.
 private final class PreviewItem: NSObject, QLPreviewItem {
     let url: URL
     let title: String
-
-    init(url: URL, title: String) {
-        self.url = url
-        self.title = title
-    }
-
+    init(url: URL, title: String) { self.url = url; self.title = title }
     var previewItemURL: URL? { url }
     var previewItemTitle: String? { title }
 }

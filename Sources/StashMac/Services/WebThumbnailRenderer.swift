@@ -34,8 +34,8 @@ final class WebThumbnailRenderer {
     func render(
         url: URL,
         viewport: CGSize = CGSize(width: 1024, height: 768),
-        settleDelay: Duration = .seconds(2),
-        timeout: Duration = .seconds(20)
+        settleDelay: Duration = .seconds(4),
+        timeout: Duration = .seconds(25)
     ) async throws -> NSImage {
         // Each render gets a fresh session — easier than reusing one
         // WKWebView across calls (avoids stale state, cancellation
@@ -94,7 +94,7 @@ private final class RenderSession: NSObject, WKNavigationDelegate {
         // a current Safari UA gets us the same content a regular
         // browser sees. Matches the UA used by the CLI's
         // `internal/fetch.URL` and `cmd/stash/check.tryRequest`.
-        webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
+        webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Safari/605.1.15"
         webView.navigationDelegate = self
         self.webView = webView
 

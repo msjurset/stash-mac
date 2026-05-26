@@ -67,7 +67,9 @@ final class FieldEditorInterceptor: NSObject, NSWindowDelegate {
 
     @MainActor
     func windowWillReturnFieldEditor(_ sender: NSWindow, to client: Any?) -> Any? {
-        print("[PHANTOM] FieldEditorInterceptor.windowWillReturnFieldEditor for window: \(sender.title)")
+        let frame = sender.frame
+        let level = sender.level
+        print("[PHANTOM] FieldEditorInterceptor.windowWillReturnFieldEditor for window: \"\(sender.title)\" class: \(type(of: sender)) level: \(level.rawValue) frame: \(frame)")
         // Re-apply flags every time AppKit asks for the editor — some of
         // these are reset between editor uses, and Sequoia in particular
         // re-enables `inlinePredictionType` on reuse.

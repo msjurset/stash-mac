@@ -1680,6 +1680,23 @@ final class StashStore {
         }
     }
 
+    func deleteOrphanedFiles(relativePaths: [String]) {
+        let filesDir = (NSString(string: "~/.stash/files") as NSString).expandingTildeInPath
+        Task {
+            for rel in relativePaths {
+                let abs = (filesDir as NSString).appendingPathComponent(rel)
+                try? FileManager.default.removeItem(atPath: abs)
+            }
+            // Optimistically prune the results so the UI updates
+            // immediately without a full re-scan (which is slow).
+            if var current = checkResult, let orphans = current.orphanedFiles {
+                let set = Set(relativePaths)
+                current.orphanedFiles = orphans.filter { !set.contains($0) }
+                checkResult = current
+            }
+        }
+    }
+
     private func apply(_ event: CheckEvent) {
         var result = checkResult ?? CheckResult()
         switch event.type {
