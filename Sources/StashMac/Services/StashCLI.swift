@@ -39,6 +39,7 @@ actor StashCLI {
         tags: [String] = [],
         excludeTags: [String] = [],
         collection: String? = nil,
+        archived: Bool = false,
         limit: Int = 50
     ) async throws -> [StashItem] {
         var args = ["list", "--json", "-l", "\(limit)"]
@@ -46,6 +47,7 @@ actor StashCLI {
         for tag in tags { args += ["--tag", tag] }
         for tag in excludeTags { args += ["--exclude-tag", tag] }
         if let collection { args += ["--collection", collection] }
+        if archived { args += ["--archived"] }
         return try await captureJSON(args: args)
     }
 
@@ -55,6 +57,7 @@ actor StashCLI {
         tags: [String] = [],
         excludeTags: [String] = [],
         collection: String? = nil,
+        archived: Bool = false,
         limit: Int = 50,
         regex: String? = nil
     ) async throws -> [StashItem] {
@@ -72,6 +75,9 @@ actor StashCLI {
         for tag in excludeTags { args += ["--exclude-tag", tag] }
         if let collection, !collection.isEmpty {
             args += ["--collection", collection]
+        }
+        if archived {
+            args += ["--archived"]
         }
         if let regex, !regex.isEmpty {
             args += ["--regex", regex]
@@ -129,6 +135,43 @@ actor StashCLI {
         if let note { args += ["-n", note] }
         if let collection { args += ["-c", collection] }
         return try await captureJSONWithStdin(args: args, input: text)
+    }
+
+    func patchItem(
+        id: String,
+        title: String? = nil,
+        notes: String? = nil,
+        url: String? = nil,
+        tags: [String]? = nil,
+        collection: String? = nil,
+        archived: Bool? = nil,
+        extractedText: String? = nil
+    ) async throws -> StashItem {
+        // The Mac app primarily talks to the local CLI, but unarchiving
+        // (Undo) requires a PATCH to the Go server (since the CLI 'edit'
+        // doesn't have an --unarchive flag). We assume the server
+        // is at localhost:8080.
+        let serverURL = URL(string: "http://localhost:8080/items/\(id)")!
+        var req = URLRequest(url: serverURL)
+        req.httpMethod = "PATCH"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("Stash 12345", forHTTPHeaderField: "Authorization")
+        
+        var body: [String: Any] = [:]
+        if let title { body["title"] = title }
+        if let notes { body["notes"] = notes }
+        if let u = url { body["url"] = u }
+        if let tags { body["tags"] = tags }
+        if let archived { body["archived"] = archived }
+        if let et = extractedText { body["extracted_text"] = et }
+        
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        
+        let (data, response) = try await URLSession.shared.data(for: req)
+        guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
+            throw CLIError.failed("PATCH failed: \(String(data: data, encoding: .utf8) ?? "unknown error")")
+        }
+        return try JSONDecoder().decode(StashItem.self, from: data)
     }
 
     func editItem(

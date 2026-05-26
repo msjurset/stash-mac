@@ -50,20 +50,6 @@ struct ItemDetailView: View {
                             .buttonStyle(.plain)
                             .keyboardShortcut("f", modifiers: [])
                             .help(isFavorite ? "Remove from favorites (F)" : "Mark as favorite (F)")
-                            
-                            // Web Search — inline with title so the user
-                            // can instantly jump out to a Google search for
-                            // the item. Uses the reverse-geocoded location
-                            // (if available) to improve results.
-                            Button {
-                                openGoogleSearch(for: item)
-                            } label: {
-                                Image(systemName: "magnifyingglass")
-                                    .font(.title3)
-                                    .foregroundStyle(Color.secondary)
-                            }
-                            .buttonStyle(.plain)
-                            .help("Search Google for this item")
 
                             // In-flight identify spinner mirrors the
                             // list-row indicator so the user has a
@@ -76,7 +62,7 @@ struct ItemDetailView: View {
                             }
                         }
                         HStack(spacing: 4) {
-                            Text(item.type.label.dropLast() + " \u{2022} " + item.shortID)
+                            Text("\(String(item.type.label.dropLast())) \u{2022} \(item.shortID)")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             Button {
@@ -497,6 +483,26 @@ struct ItemDetailView: View {
                 }
                 .keyboardShortcut("o", modifiers: .command)
                 .help("Open in default application (⌘O)")
+                
+                let isVideo = item.type == .file && item.mimeType?.hasPrefix("video/") == true
+                if item.type == .image || item.type == .snippet || isVideo {
+                    Button {
+                        openGoogleSearch(for: item)
+                    } label: {
+                        Label("Search", systemImage: "magnifyingglass")
+                    }
+                    .help("Search the Web")
+                }
+                
+                if item.archived == true {
+                    Button {
+                        store.unarchiveItems(ids: [item.id])
+                    } label: {
+                        Label("Restore", systemImage: "arrow.uturn.backward")
+                    }
+                    .help("Restore from archive")
+                }
+                
                 ShareButton(item: { item })
                     .frame(width: 22, height: 22)
                     .help("Copy image / caption / link to clipboard, or open the macOS share sheet")
@@ -670,7 +676,15 @@ struct ItemDetailView: View {
     private func openGoogleSearch(for item: StashItem) {
         Task {
             var q = item.title
-            if let loc = item.location {
+            
+            // Snippets: Search the exact extracted text instead of the title,
+            // and omit any location logic since it's a text clip, not a physical capture.
+            if item.type == .snippet, let text = item.extractedText, !text.isEmpty {
+                // Take the first couple sentences or up to ~100 chars to form a valid query
+                let snippetPreview = String(text.prefix(150)).trimmingCharacters(in: .whitespacesAndNewlines)
+                q = "\"\(snippetPreview)\""
+            } else if let loc = item.location {
+                // Images/Videos: Use Title + Reverse Geocoded Location
                 let clLoc = CoreLocation.CLLocation(latitude: loc.lat, longitude: loc.lon)
                 if let placemarks = try? await CoreLocation.CLGeocoder().reverseGeocodeLocation(clLoc),
                    let place = placemarks.first {
@@ -684,6 +698,7 @@ struct ItemDetailView: View {
                     q += " \(loc.lat), \(loc.lon)"
                 }
             }
+            
             await MainActor.run {
                 var comps = URLComponents(string: "https://www.google.com/search")
                 comps?.queryItems = [URLQueryItem(name: "q", value: q)]

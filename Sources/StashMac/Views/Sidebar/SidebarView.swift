@@ -79,6 +79,8 @@ struct SidebarView: View {
                     .tag(NavigationItem.inbox)
                     Label("All Items", systemImage: "tray.full")
                         .tag(NavigationItem.allItems)
+                    Label("Archive", systemImage: "archivebox")
+                        .tag(NavigationItem.archive)
                 }
                 .opacity(ineligibleSectionOpacity)
 

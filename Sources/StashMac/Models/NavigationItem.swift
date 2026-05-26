@@ -3,6 +3,7 @@ import Foundation
 enum NavigationItem: Hashable {
     case allItems
     case inbox
+    case archive
     case type(ItemType)
     case tag(StashTag)
     case collection(StashCollection)
@@ -26,6 +27,7 @@ extension NavigationItem {
         switch self {
         case .allItems:               return "allItems"
         case .inbox:                  return "inbox"
+        case .archive:                return "archive"
         case .tagGraph:               return "tagGraph"
         case .dupes:                  return "dupes"
         case .stats:                  return "stats"
@@ -53,6 +55,7 @@ extension NavigationItem {
         switch key {
         case "allItems":      return .allItems
         case "inbox":         return .inbox
+        case "archive":       return .archive
         case "tagGraph":      return .tagGraph
         case "dupes":         return .dupes
         case "stats":         return .stats

@@ -231,7 +231,7 @@ struct ContentView: View {
         switch nav {
         case .allItems:                 return .searching
         case .type:                     return .itemTypes
-        case .tag, .collection,
+        case .tag, .collection, .archive,
              .savedSearch, .tagGraph:   return .organizing
         case .dupes:                    return .duplicates
         case .stats, .check:            return .statsAndCheck

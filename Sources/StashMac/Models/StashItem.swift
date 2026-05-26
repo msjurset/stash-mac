@@ -24,6 +24,7 @@ struct StashItem: Codable, Identifiable, Hashable {
     /// (`stash backfill-captured-at --all`). Distinct from
     /// createdAt, which records when the row landed in the stash.
     var capturedAt: Date?
+    var archived: Bool?
     var location: ItemLocation?
     var files: [ItemFile]?
     var tags: [StashTag]?

@@ -761,6 +761,7 @@ final class StashStore {
                 tags: allTags,
                 excludeTags: excludeTags,
                 collection: filterCollection,
+                archived: navigation == .archive,
                 limit: 10000
             )
         }
@@ -770,6 +771,7 @@ final class StashStore {
             tags: allTags,
             excludeTags: excludeTags,
             collection: filterCollection,
+            archived: navigation == .archive,
             limit: 10000
         )
     }
@@ -1021,6 +1023,26 @@ final class StashStore {
                 loadAll()
             } catch {
                 self.error = error.localizedDescription
+            }
+        }
+    }
+
+    func unarchiveItems(ids: [String]) {
+        guard !ids.isEmpty else { return }
+        Task {
+            do {
+                for id in ids {
+                    _ = try await cli.patchItem(id: id, archived: false)
+                }
+                await MainActor.run {
+                    // Force a refresh to pull the newly-unarchived
+                    // rows back into whichever non-archive view
+                    // the user was in, and clear them from the
+                    // active Archive view if that's where we are.
+                    refresh()
+                }
+            } catch {
+                await MainActor.run { self.error = error.localizedDescription }
             }
         }
     }
@@ -2262,7 +2284,7 @@ final class StashStore {
             if !isApplyingNavigationHistory {
                 touchCollection(name: c.name)
             }
-        case .tagGraph, .stats, .check, .dupes, .savedSearch, .rules, .ruleActivity, .inbox, .moments:
+        case .archive, .tagGraph, .stats, .check, .dupes, .savedSearch, .rules, .ruleActivity, .inbox, .moments:
             break
         }
         refresh()
