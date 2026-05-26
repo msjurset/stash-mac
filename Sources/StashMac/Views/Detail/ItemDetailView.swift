@@ -1,5 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import CoreLocation
 
 struct ItemDetailView: View {
     @Environment(StashStore.self) private var store
@@ -49,6 +50,20 @@ struct ItemDetailView: View {
                             .buttonStyle(.plain)
                             .keyboardShortcut("f", modifiers: [])
                             .help(isFavorite ? "Remove from favorites (F)" : "Mark as favorite (F)")
+                            
+                            // Web Search — inline with title so the user
+                            // can instantly jump out to a Google search for
+                            // the item. Uses the reverse-geocoded location
+                            // (if available) to improve results.
+                            Button {
+                                openGoogleSearch(for: item)
+                            } label: {
+                                Image(systemName: "magnifyingglass")
+                                    .font(.title3)
+                                    .foregroundStyle(Color.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .help("Search Google for this item")
 
                             // In-flight identify spinner mirrors the
                             // list-row indicator so the user has a
@@ -386,9 +401,6 @@ struct ItemDetailView: View {
                     }
                 }
 
-                // From the Web — asynchronous Google search for related images/links
-                FromTheWebSection(item: item)
-
                 // Provenance — capture / rule / tag timeline reconstructed
                 // from capture.log and tags.log. Sits right after Info
                 // because both sections are "metadata about the item"
@@ -655,6 +667,32 @@ struct ItemDetailView: View {
         isEditingTitle = false
     }
 
+    private func openGoogleSearch(for item: StashItem) {
+        Task {
+            var q = item.title
+            if let loc = item.location {
+                let clLoc = CoreLocation.CLLocation(latitude: loc.lat, longitude: loc.lon)
+                if let placemarks = try? await CoreLocation.CLGeocoder().reverseGeocodeLocation(clLoc),
+                   let place = placemarks.first {
+                    let parts = [place.administrativeArea, place.country].compactMap { $0 }
+                    if !parts.isEmpty {
+                        q += " " + parts.joined(separator: ", ")
+                    } else {
+                        q += " \(loc.lat), \(loc.lon)"
+                    }
+                } else {
+                    q += " \(loc.lat), \(loc.lon)"
+                }
+            }
+            await MainActor.run {
+                var comps = URLComponents(string: "https://www.google.com/search")
+                comps?.queryItems = [URLQueryItem(name: "q", value: q)]
+                if let searchURL = comps?.url {
+                    NSWorkspace.shared.open(searchURL)
+                }
+            }
+        }
+    }
 }
 
 func isArchiveMIME(_ mimeType: String) -> Bool {
