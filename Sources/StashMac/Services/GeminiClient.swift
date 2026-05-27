@@ -18,7 +18,7 @@ struct GeminiProvider: AIProvider {
     var keyURL: URL { URL(string: "https://aistudio.google.com/app/apikey")! }
     var defaultPrompt: String { AIPrompts.defaultIdentify }
 
-    var model: String = "gemini-2.5-flash"
+    var model: String = "gemini-1.5-flash"
     var urlSession: URLSession = .shared
 
     enum GeminiError: LocalizedError {

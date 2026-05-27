@@ -714,6 +714,10 @@ func isArchiveMIME(_ mimeType: String) -> Bool {
     mimeType.contains("gzip") || mimeType.contains("tar") || mimeType.contains("zip")
 }
 
+func isAudioMIME(_ mimeType: String) -> Bool {
+    mimeType.hasPrefix("audio/") || mimeType.contains("m4a")
+}
+
 /// One label-value pair rendered inside `InfoTable`. The value is
 /// retained as an `AnyView` so callers can hand in arbitrary content
 /// (styled badges, multi-line text, etc.) without genericizing the

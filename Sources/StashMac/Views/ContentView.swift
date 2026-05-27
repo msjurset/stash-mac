@@ -28,6 +28,11 @@ struct ContentView: View {
     /// before a separate `initialURL` @State write has propagated.
     @State private var fetchURLTrigger: FetchURLTrigger?
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @State private var preferredContentWidth: CGFloat = 600
+
+    private var shouldShowAddItemButton: Bool {
+        store.navigation != .rules && store.navigation != .ruleActivity
+    }
 
     var body: some View {
         @Bindable var store = store
@@ -37,56 +42,10 @@ struct ContentView: View {
                 showAddCollectionSheet: $showAddCollectionSheet
             )
         } content: {
-            switch store.navigation {
-            case .tagGraph:
-                TagGraphView()
-                    .frame(minWidth: 500, idealWidth: 600)
-            case .stats:
-                StatsView()
-            case .check:
-                CheckView()
-            case .dupes:
-                DupesView()
-            case .moments:
-                MomentsView()
-            case .rules:
-                RulesView()
-            case .ruleActivity:
-                RuleActivityView()
-            case .inbox:
-                InboxView()
-            default:
-                ItemListView(showEditSheet: $showEditSheet)
-            }
+            sidebarContent
+                .navigationSplitViewColumnWidth(ideal: preferredContentWidth)
         } detail: {
-            switch store.navigation {
-            case .tagGraph:
-                VSplitView {
-                    ItemListView(showEditSheet: $showEditSheet)
-                        .frame(maxWidth: .infinity, minHeight: 150)
-                    DetailRouter(showEditSheet: $showEditSheet)
-                        .frame(maxWidth: .infinity, minHeight: 200)
-                }
-                .frame(maxWidth: .infinity)
-            case .stats:
-                EmptyView()
-            case .rules:
-                RuleDetailView()
-            case .ruleActivity:
-                RuleActivityDetailView()
-            case .check:
-                DetailRouter(showEditSheet: $showEditSheet)
-            case .dupes:
-                DetailRouter(showEditSheet: $showEditSheet)
-            case .moments:
-                MomentDetailView()
-            case .savedSearch:
-                DetailRouter(showEditSheet: $showEditSheet)
-            case .inbox:
-                InboxDetailView()
-            default:
-                DetailRouter(showEditSheet: $showEditSheet)
-            }
+            detailContent
         }
         .toolbar {
             ToolbarItemGroup(placement: .navigation) {
@@ -110,11 +69,10 @@ struct ContentView: View {
             }
         }
         .onAppear {
-            store.loadAll()
-            store.startFeedPollTimer()
+            onAppear()
         }
         .onChange(of: store.navigation) { _, newValue in
-            store.handleNavigationChange(newValue ?? .allItems)
+            onNavigationChange(newValue)
         }
         .onDrop(of: [.fileURL, .emailMessage], isTargeted: nil) { providers in
             handleDrop(providers)
@@ -156,7 +114,7 @@ struct ContentView: View {
             // Hide on Rules — that view owns its own "+ New Rule" button.
             // Also hide on Rule Activity — that's a read-only feed; "Add
             // item" doesn't make sense there. ⌘N shortcut suppressed too.
-            if store.navigation != .rules && store.navigation != .ruleActivity {
+            if shouldShowAddItemButton {
                 ToolbarItem(placement: .primaryAction) {
                     Button {
                         showAddSheet = true
@@ -183,6 +141,10 @@ struct ContentView: View {
             store.loadAll()
         }
         .frame(minWidth: 900, minHeight: 500)
+        .background(WindowAccessor { window in
+            // Explicitly enable frame persistence for the main window.
+            window.setFrameAutosaveName("main")
+        })
         .alert(
             "Something went wrong",
             isPresented: Binding(
@@ -224,6 +186,87 @@ struct ContentView: View {
     private func openHelpForCurrentContext() {
         let topic = helpTopic(for: store.navigation)
         openWindow(id: "help", value: topic)
+    }
+
+    @ViewBuilder
+    private var detailContent: some View {
+        switch store.navigation {
+        case .tagGraph:
+            VSplitView {
+                ItemListView(showEditSheet: $showEditSheet)
+                    .frame(maxWidth: .infinity, minHeight: 150)
+                DetailRouter(showEditSheet: $showEditSheet)
+                    .frame(maxWidth: .infinity, minHeight: 200)
+            }
+            .frame(maxWidth: .infinity)
+        case .stats:
+            EmptyView()
+        case .rules:
+            RuleDetailView()
+        case .ruleActivity:
+            RuleActivityDetailView()
+        case .check:
+            DetailRouter(showEditSheet: $showEditSheet)
+        case .dupes:
+            DetailRouter(showEditSheet: $showEditSheet)
+        case .moments:
+            MomentDetailView()
+        case .savedSearch:
+            DetailRouter(showEditSheet: $showEditSheet)
+        case .inbox:
+            InboxDetailView()
+        default:
+            DetailRouter(showEditSheet: $showEditSheet)
+        }
+    }
+
+    private func updatePreferredWidth(for nav: NavigationItem) {
+        // Judgment call on best legibility per section.
+        // List-heavy views are best at ~600px (fits title + some metadata).
+        // Graph / Maintenance / Rules views need more horizontal room (~800px).
+        switch nav {
+        case .tagGraph, .rules, .ruleActivity, .stats, .check, .dupes, .moments:
+            preferredContentWidth = 800
+        case .allItems, .inbox, .archive, .type, .tag, .collection, .savedSearch:
+            preferredContentWidth = 600
+        }
+    }
+
+    private func onNavigationChange(_ newValue: NavigationItem?) {
+        let nav = newValue ?? .allItems
+        store.handleNavigationChange(nav)
+        updatePreferredWidth(for: nav)
+    }
+
+    private func onAppear() {
+        store.loadAll()
+        store.startFeedPollTimer()
+        updatePreferredWidth(for: store.navigation ?? .allItems)
+    }
+
+    @ViewBuilder
+    private var sidebarContent: some View {
+        switch store.navigation {
+        case .tagGraph:
+            TagGraphView()
+                .frame(minWidth: 500, idealWidth: 800)
+        case .stats:
+            StatsView()
+        case .check:
+            CheckView()
+        case .dupes:
+            DupesView()
+        case .moments:
+            MomentsView()
+        case .rules:
+            RulesView()
+        case .ruleActivity:
+            RuleActivityView()
+        case .inbox:
+            InboxView()
+        default:
+            ItemListView(showEditSheet: $showEditSheet)
+        }
     }
 
     private func helpTopic(for nav: NavigationItem?) -> HelpTopic {

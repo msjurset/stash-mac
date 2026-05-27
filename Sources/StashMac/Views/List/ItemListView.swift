@@ -847,6 +847,14 @@ struct ItemListView: View {
                     store.identifyImageItem(id: rightClickedID, with: aiPrefs)
                 }
             }
+            if aiPrefs.hasKey,
+               let item = store.items.first(where: { $0.id == rightClickedID }),
+               item.type == .file,
+               let mime = item.mimeType, isAudioMIME(mime) {
+                Button("Transcribe with \(aiPrefs.activeProvider.displayName)") {
+                    store.transcribeAudioItem(id: rightClickedID, with: aiPrefs)
+                }
+            }
             Divider()
             Button("Share…") {
                 shareItems(ids: [rightClickedID])

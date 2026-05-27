@@ -13,17 +13,22 @@ struct RelatedSection: View {
     @State private var loading = true
 
     var body: some View {
-        // Hidden entirely when there are no related items so the
-        // section header doesn't show "Related items" with a "none"
-        // message — that's noise on items that just don't have any
-        // neighbors yet.
-        if loading || !items.isEmpty {
-            DetailSection(title: "Related items") {
-                if loading {
+        Group {
+            if loading {
+                // Stabilized loader: fixed height prevents the
+                // section below (Info) from jittering or bouncing
+                // as much while the CLI is working.
+                HStack(spacing: 8) {
                     ProgressView()
                         .controlSize(.small)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                } else {
+                    Text("Loading related...")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                .frame(height: 60)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else if !items.isEmpty {
+                DetailSection(title: "Related items") {
                     VStack(alignment: .leading, spacing: 2) {
                         ForEach(items) { item in
                             row(item)
@@ -31,17 +36,20 @@ struct RelatedSection: View {
                     }
                 }
             }
-            .task(id: itemID) {
-                await reload()
-            }
-        } else {
-            // Empty branch — still re-run the task on id change so
-            // navigating across items keeps the section fresh.
-            Color.clear
-                .frame(height: 0)
-                .task(id: itemID) {
-                    await reload()
+        }
+        .task(id: itemID) {
+            // Safety timeout: if the Go CLI hangs on a database lock
+            // or complex scoring query, don't leave the UI spinning
+            // forever. 10s is plenty for SQLite.
+            await withThrowingTaskGroup(of: Void.self) { group in
+                group.addTask { await reload() }
+                group.addTask {
+                    try await Task.sleep(nanoseconds: 10 * 1_000_000_000)
+                    throw CancellationError()
                 }
+                _ = try? await group.next()
+                group.cancelAll()
+            }
         }
     }
 

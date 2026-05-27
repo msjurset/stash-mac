@@ -147,31 +147,21 @@ actor StashCLI {
         archived: Bool? = nil,
         extractedText: String? = nil
     ) async throws -> StashItem {
-        // The Mac app primarily talks to the local CLI, but unarchiving
-        // (Undo) requires a PATCH to the Go server (since the CLI 'edit'
-        // doesn't have an --unarchive flag). We assume the server
-        // is at localhost:8080.
-        let serverURL = URL(string: "http://localhost:8080/items/\(id)")!
-        var req = URLRequest(url: serverURL)
-        req.httpMethod = "PATCH"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue("Stash 12345", forHTTPHeaderField: "Authorization")
-        
-        var body: [String: Any] = [:]
-        if let title { body["title"] = title }
-        if let notes { body["notes"] = notes }
-        if let u = url { body["url"] = u }
-        if let tags { body["tags"] = tags }
-        if let archived { body["archived"] = archived }
-        if let et = extractedText { body["extracted_text"] = et }
-        
-        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        
-        let (data, response) = try await URLSession.shared.data(for: req)
-        guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
-            throw CLIError.failed("PATCH failed: \(String(data: data, encoding: .utf8) ?? "unknown error")")
+        var args = ["edit", "--json", id]
+        if let title { args += ["-t", title] }
+        if let notes { args += ["-n", notes] }
+        if let url { args += ["-u", url] }
+        if let tags {
+            args += ["--remove-tag", "*"]
+            for t in tags { args += ["--add-tag", t] }
         }
-        return try JSONDecoder().decode(StashItem.self, from: data)
+        if let collection { args += ["-c", collection] }
+        if let archived, archived == false {
+            args += ["--unarchive"]
+        }
+        if let extractedText { args += ["-e", extractedText] }
+        
+        return try await captureJSON(args: args)
     }
 
     func editItem(

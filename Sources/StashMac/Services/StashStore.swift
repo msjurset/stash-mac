@@ -850,7 +850,7 @@ final class StashStore {
                 if item.type == .image, item.extractedText?.isEmpty ?? true {
                     if let recognized = await TextRecognizer.recognize(fileURL: URL(fileURLWithPath: path)),
                        TextRecognizer.looksSubstantial(recognized) {
-                        editItem(
+                        try? await editItem(
                             id: item.id,
                             title: nil,
                             note: nil,
@@ -886,14 +886,51 @@ final class StashStore {
         }
     }
 
-    func editItem(id: String, title: String?, note: String?, extractedText: String? = nil, url: String? = nil, addTags: [String], removeTags: [String], collection: String?, location: ItemLocation? = nil, clearLocation: Bool = false) {
-        // Optimistic update for the Health Check view: the moment a
-        // URL edit lands, mark the row as "rechecking" with the new
-        // URL so the user gets immediate visual feedback. Without
-        // this, the user dismisses the edit sheet, lands back on
-        // Health Check, sees the *old* URL, and only after the HTTP
-        // recheck completes (1–5s later) does the row update or
-        // disappear — easy to miss and reads as a bug.
+    func editItem(
+        id: String,
+        title: String?,
+        note: String?,
+        extractedText: String? = nil,
+        url: String? = nil,
+        addTags: [String],
+        removeTags: [String],
+        collection: String?,
+        location: ItemLocation? = nil,
+        clearLocation: Bool = false
+    ) {
+        Task {
+            do {
+                try await editItem(
+                    id: id,
+                    title: title,
+                    note: note,
+                    extractedText: extractedText,
+                    url: url,
+                    addTags: addTags,
+                    removeTags: removeTags,
+                    collection: collection,
+                    location: location,
+                    clearLocation: clearLocation
+                )
+            } catch {
+                await MainActor.run { self.error = error.localizedDescription }
+            }
+        }
+    }
+
+    func editItem(
+        id: String,
+        title: String?,
+        note: String?,
+        extractedText: String? = nil,
+        url: String? = nil,
+        addTags: [String],
+        removeTags: [String],
+        collection: String?,
+        location: ItemLocation? = nil,
+        clearLocation: Bool = false
+    ) async throws {
+        // Optimistic update for the Health Check view
         if let url, let issues = checkResult?.brokenUrls,
            let idx = issues.firstIndex(where: { $0.id == id }) {
             var current = checkResult ?? CheckResult()
@@ -901,22 +938,29 @@ final class StashStore {
             checkResult = current
         }
 
-        Task {
-            do {
-                _ = try await cli.editItem(id: id, title: title, note: note, extractedText: extractedText, url: url, addTags: addTags, removeTags: removeTags, collection: collection, location: location, clearLocation: clearLocation)
-                loadAll()
-                // If the URL changed and an active health check has
-                // this item in its broken-URLs list, re-check just
-                // this one URL and prune the row if it now responds.
-                // Avoids the user editing in the general edit sheet
-                // and seeing the row stick around.
-                if url != nil, let bru = checkResult?.brokenUrls,
-                   bru.contains(where: { $0.id == id }) {
-                    await recheckBrokenURLAndPrune(id: id)
-                }
-            } catch {
-                self.error = error.localizedDescription
-            }
+        _ = try await cli.editItem(
+            id: id,
+            title: title,
+            note: note,
+            extractedText: extractedText,
+            url: url,
+            addTags: addTags,
+            removeTags: removeTags,
+            collection: collection,
+            location: location,
+            clearLocation: clearLocation
+        )
+        
+        await MainActor.run {
+            loadAll()
+        }
+        
+        // If the URL changed and an active health check has
+        // this item in its broken-URLs list, re-check just
+        // this one URL and prune the row if it now responds.
+        if url != nil, let bru = checkResult?.brokenUrls,
+           bru.contains(where: { $0.id == id }) {
+            await recheckBrokenURLAndPrune(id: id)
         }
     }
 
@@ -935,7 +979,9 @@ final class StashStore {
     /// schedules its own recheck), so this is just the convenience
     /// wrapper.
     func updateURL(id: String, url: String) {
-        editItem(id: id, title: nil, note: nil, url: url, addTags: [], removeTags: [], collection: nil)
+        Task {
+            try? await editItem(id: id, title: nil, note: nil, url: url, addTags: [], removeTags: [], collection: nil)
+        }
     }
 
     /// Re-fetch the URL for a single item via `stash check --urls
@@ -2645,6 +2691,145 @@ final class StashStore {
     }
 
     @MainActor
+    func transcribeAudioItem(id: String, with prefs: AIPrefsStore) {
+        guard let item = items.first(where: { $0.id == id })
+                ?? fetchedItem.flatMap({ $0.id == id ? $0 : nil })
+        else {
+            self.error = "Item not found."
+            return
+        }
+        
+        let provider = prefs.activeProvider
+        let key = prefs.apiKey
+        guard !key.isEmpty else {
+            self.error = "Set a \(provider.displayName) API key in Settings → AI first."
+            return
+        }
+        guard let storePath = item.storePath, !storePath.isEmpty,
+              let url = FilePathResolver.resolve(storePath: storePath)
+        else {
+            self.error = "Couldn't resolve the audio file on disk."
+            return
+        }
+        let mime = item.mimeType ?? "audio/mpeg"
+        let prompt = AIPrompts.defaultTranscribe
+
+        identifyingItemIDs.insert(id)
+        identifyRetry = nil
+        let shortened = shortID(id)
+        flashMessage = "Transcribing \(shortened) with \(provider.displayName)…"
+
+        Task { [weak self] in
+            defer { Task { @MainActor in self?.identifyingItemIDs.remove(id) } }
+
+            let backoffs: [UInt64] = [
+                3_000_000_000,
+                7_000_000_000,
+                15_000_000_000,
+                30_000_000_000,
+                60_000_000_000,
+            ]
+            var attempt = 0
+            var lastError: Error? = nil
+            var result: AIIdentifyResult? = nil
+            while attempt <= backoffs.count {
+                do {
+                    let resolvedKey = try await AIKeyResolver.resolve(key)
+                    let audioBytes = try Data(contentsOf: url)
+                    let audio = AIImage(data: audioBytes, mimeType: mime) // AIImage is just a wrapper for data+mime
+                    result = try await provider.identify(
+                        apiKey: resolvedKey,
+                        images: [audio],
+                        promptText: prompt
+                    )
+                    lastError = nil
+                    break
+                } catch {
+                    lastError = error
+                    if isTransientIdentifyError(error), attempt < backoffs.count {
+                        await MainActor.run {
+                            self?.flashMessage =
+                                "Transcribing \(shortened) with \(provider.displayName)… (\(provider.displayName) is busy, retrying)"
+                        }
+                        try? await Task.sleep(nanoseconds: backoffs[attempt])
+                        attempt += 1
+                        continue
+                    }
+                    break
+                }
+            }
+
+            if let result {
+                await self?.applyTranscribeResult(itemID: id, result: result)
+            } else if let lastError {
+                let msg = friendlyIdentifyErrorMessage(
+                    provider: provider.displayName,
+                    error: lastError
+                )
+                await MainActor.run {
+                    self?.identifyRetry = { [weak self] in
+                        self?.transcribeAudioItem(id: id, with: prefs)
+                    }
+                    self?.error = msg
+                    self?.flashMessage = nil
+                }
+            }
+        }
+    }
+
+    private func applyTranscribeResult(itemID: String, result: AIIdentifyResult) async {
+        guard let item = items.first(where: { $0.id == itemID })
+                ?? fetchedItem.flatMap({ $0.id == itemID ? $0 : nil })
+        else { return }
+
+        // If the title matches the default "Voice Stash" or "Audio Stash"
+        // patterns, replace it with the better label from Gemini.
+        // Matches: "Voice Stash - May 25, 2026...", "Audio Stash..."
+        let currentTitle = item.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let isDefaultTitle = currentTitle.hasPrefix("Voice Stash") || 
+                            currentTitle.hasPrefix("Audio Stash") ||
+                            currentTitle.isEmpty
+        
+        let newTitle: String? = {
+            guard isDefaultTitle else { return nil }
+            let t = result.title?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return (t?.isEmpty == false) ? t : nil
+        }()
+
+        let existingNotes = item.notes?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let combinedNotes: String
+        if existingNotes.isEmpty || existingNotes == "Recorded via Wear OS" {
+            combinedNotes = result.notes
+        } else {
+            combinedNotes = existingNotes + "\n\n" + result.notes
+        }
+
+        let newExtracted: String? = {
+            let t = result.transcript?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return (t?.isEmpty == false) ? t : nil
+        }()
+
+        do {
+            try await editItem(
+                id: itemID,
+                title: newTitle,
+                note: combinedNotes,
+                extractedText: newExtracted,
+                addTags: [],
+                removeTags: [],
+                collection: nil
+            )
+            await MainActor.run {
+                flashMessage = "Transcribed ✓"
+            }
+        } catch {
+            await MainActor.run {
+                flashMessage = nil
+                self.error = "Couldn't save transcription result: \(error.localizedDescription)"
+            }
+        }
+    }
+
     private func applyIdentifyResult(itemID: String, result: AIIdentifyResult) async {
         guard let item = items.first(where: { $0.id == itemID })
                 ?? fetchedItem.flatMap({ $0.id == itemID ? $0 : nil })

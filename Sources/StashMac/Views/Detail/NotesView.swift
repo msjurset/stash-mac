@@ -65,6 +65,40 @@ struct NotesView: View {
                 // AI Follow-up Chat
                 if aiPrefs.hasKey {
                     HStack(spacing: 8) {
+                        // Transcribe button for audio items with no transcript
+                        if let item = store.items.first(where: { $0.id == itemID })
+                            ?? store.fetchedItem.flatMap({ $0.id == itemID ? $0 : nil }),
+                           item.type == .file,
+                           let mime = item.mimeType, isAudioMIME(mime),
+                           item.extractedText?.isEmpty != false {
+                            
+                            Button {
+                                store.transcribeAudioItem(id: itemID, with: aiPrefs)
+                            } label: {
+                                HStack(spacing: 6) {
+                                    if store.identifyingItemIDs.contains(itemID) {
+                                        ProgressView()
+                                            .controlSize(.small)
+                                            .scaleEffect(0.6)
+                                            .frame(width: 15, height: 15)
+                                    } else {
+                                        Image(systemName: "waveform.and.mic")
+                                            .font(.system(size: 14, weight: .semibold))
+                                            .frame(width: 15, height: 15)
+                                    }
+                                    Text(store.identifyingItemIDs.contains(itemID) ? "Transcribing..." : "Transcribe with \(aiPrefs.activeProvider.displayName.replacingOccurrences(of: "Google ", with: ""))")
+                                        .font(.subheadline)
+                                        .fontWeight(.medium)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(Color.accentColor.opacity(0.1))
+                            .clipShape(Capsule())
+                            .disabled(store.identifyingItemIDs.contains(itemID))
+                        }
+
                         Button {
                             if !store.identifyingItemIDs.contains(itemID) {
                                 withAnimation(.spring(duration: 0.25)) {

@@ -594,29 +594,41 @@ struct EditItemSheet: View {
             }
         }
 
-        store.editItem(
-            id: item.id,
-            title: t,
-            note: n,
-            extractedText: e,
-            url: u,
-            addTags: tagsToAdd,
-            removeTags: tagsToRemove,
-            collection: c,
-            location: newLocation,
-            clearLocation: shouldClearLocation
-        )
-        // Cover changed during the dialog? Promote on save. The
-        // strip's layout was frozen on open, so activeStripIndex
-        // and stripEntries match the original carousel order;
-        // index 0 = original primary. Anything else is an
-        // attachment we want to lift to primary now.
-        if activeStripIndex != 0,
-           activeStripIndex < stripEntries.count,
-           let attachIdx = stripEntries[activeStripIndex].originalAttachmentIndex {
-            store.promoteFile(in: item.id, index: attachIdx)
+        Task {
+            do {
+                try await store.editItem(
+                    id: item.id,
+                    title: t,
+                    note: n,
+                    extractedText: e,
+                    url: u,
+                    addTags: tagsToAdd,
+                    removeTags: tagsToRemove,
+                    collection: c,
+                    location: newLocation,
+                    clearLocation: shouldClearLocation
+                )
+                
+                // Cover changed during the dialog? Promote on save. The
+                // strip's layout was frozen on open, so activeStripIndex
+                // and stripEntries match the original carousel order;
+                // index 0 = original primary. Anything else is an
+                // attachment we want to lift to primary now.
+                if activeStripIndex != 0,
+                   activeStripIndex < stripEntries.count,
+                   let attachIdx = stripEntries[activeStripIndex].originalAttachmentIndex {
+                    try await StashCLI.shared.promoteFile(itemID: item.id, index: attachIdx)
+                }
+                
+                await MainActor.run {
+                    dismiss()
+                }
+            } catch {
+                await MainActor.run {
+                    store.error = error.localizedDescription
+                }
+            }
         }
-        dismiss()
     }
 }
 

@@ -75,12 +75,15 @@ struct ItemRow: View {
                             .lineLimit(1)
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                    } else if let tags = item.tags, !tags.isEmpty {
-                        Text(tags.map { "#\($0.name)" }.joined(separator: " "))
-                            .kerning(0.5)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
                     }
+                }
+                
+                if let tags = item.tags, !tags.isEmpty {
+                    Text(tags.map { "#\($0.name)" }.joined(separator: " "))
+                        .kerning(0.5)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
             }
             .allowsHitTesting(false)

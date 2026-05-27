@@ -126,6 +126,18 @@ If you can't identify confidently, write TITLE: Unknown and explain your best gu
     static func multiImageHint(count: Int) -> String {
         "The following \(count) photos are of the same subject from different angles or states. Identify the subject using all photos together.\n\n"
     }
+
+    static let defaultTranscribe: String = """
+Transcribe this audio recording exactly.
+
+Respond with exactly these three lines, no preamble, no markdown:
+
+TITLE: <a descriptive title for the recording based on its content, maximum 60 characters>
+NOTES: <one or two sentences describing the tone, context, or key takeaway of the audio>
+TRANSCRIPT: <the verbatim transcript of every word spoken, preserving natural speech flow and line breaks where they're meaningful>
+
+If the audio is not spoken words (e.g. ambient noise, music, or silence), write TITLE: Audio Capture and describe what you hear in NOTES.
+"""
 }
 
 // MARK: - Identify error classification + friendly messaging
