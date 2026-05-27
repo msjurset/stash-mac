@@ -136,7 +136,7 @@ struct GeminiProvider: AIProvider {
             throw GeminiError.missingKey
         }
         let urlString =
-            "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent?key=\(apiKey)"
+            "https://generativelanguage.googleapis.com/v1/models/\(model):generateContent?key=\(apiKey)"
         guard let url = URL(string: urlString) else {
             throw GeminiError.decode("bad URL")
         }
