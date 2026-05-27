@@ -1405,7 +1405,11 @@ final class StashStore {
             //     in WebKit would just download or refuse.
             if case .failed(let msg) = error {
                 let lower = msg.lowercased()
-                if lower.contains("no thumbnail candidates") {
+                // Trigger WebKit fallback for parsing failures (no tags found) 
+                // OR for access denials (403). Real browsers bypass the 403.
+                if lower.contains("no thumbnail candidates") ||
+                   lower.contains("403") || 
+                   lower.contains("forbidden") {
                     if await tryWebKitFallback(itemID: itemID, from: from) {
                         return
                     }
