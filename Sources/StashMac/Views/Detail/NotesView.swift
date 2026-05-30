@@ -12,6 +12,7 @@ struct NotesView: View {
     @State private var editedText = ""
     @State private var isShowingAIChat = false
     @State private var aiQuestion = ""
+    @State private var mediaDuration: Double? = nil
 
     private var isTruncated: Bool { text.count > 500 }
 
@@ -65,15 +66,16 @@ struct NotesView: View {
                 // AI Follow-up Chat
                 if aiPrefs.hasKey {
                     HStack(spacing: 8) {
-                        // Transcribe button for audio items with no transcript
+                        // Transcribe button for audio or video items with no transcript
                         if let item = store.items.first(where: { $0.id == itemID })
                             ?? store.fetchedItem.flatMap({ $0.id == itemID ? $0 : nil }),
                            item.type == .file,
-                           let mime = item.mimeType, isAudioMIME(mime),
+                           let mime = item.mimeType, (isAudioMIME(mime) || mime.hasPrefix("video/")),
                            item.extractedText?.isEmpty != false {
                             
+                            let isVideo = item.mimeType?.hasPrefix("video/") == true
                             Button {
-                                store.transcribeAudioItem(id: itemID, with: aiPrefs)
+                                store.transcribeMediaItem(id: itemID, with: aiPrefs, fullVideo: aiPrefs.fullVideoTranscription)
                             } label: {
                                 HStack(spacing: 6) {
                                     if store.identifyingItemIDs.contains(itemID) {
@@ -82,11 +84,11 @@ struct NotesView: View {
                                             .scaleEffect(0.6)
                                             .frame(width: 15, height: 15)
                                     } else {
-                                        Image(systemName: "waveform.and.mic")
+                                        Image(systemName: isVideo ? "video.badge.waveform" : "sparkle")
                                             .font(.system(size: 14, weight: .semibold))
                                             .frame(width: 15, height: 15)
                                     }
-                                    Text(store.identifyingItemIDs.contains(itemID) ? "Transcribing..." : "Transcribe with \(aiPrefs.activeProvider.displayName.replacingOccurrences(of: "Google ", with: ""))")
+                                    Text(store.identifyingItemIDs.contains(itemID) ? (isVideo && aiPrefs.fullVideoTranscription ? "Analyzing..." : "Transcribing...") : (isVideo ? (aiPrefs.fullVideoTranscription ? "Analyze Video" : "Transcribe Video") : "Transcribe with \(aiPrefs.activeProvider.displayName.replacingOccurrences(of: "Google ", with: ""))"))
                                         .font(.subheadline)
                                         .fontWeight(.medium)
                                 }
@@ -94,9 +96,25 @@ struct NotesView: View {
                             .buttonStyle(.plain)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 6)
-                            .background(Color.accentColor.opacity(0.1))
+                            .background(Color.accentColor.opacity(0.12))
                             .clipShape(Capsule())
                             .disabled(store.identifyingItemIDs.contains(itemID))
+                            
+                            if isVideo {
+                                Toggle("Full Video", isOn: Bindable(aiPrefs).fullVideoTranscription)
+                                    .toggleStyle(.checkbox)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+
+                                if aiPrefs.fullVideoTranscription, let dur = mediaDuration, dur > 30 {
+                                    HStack(spacing: 3) {
+                                        Image(systemName: "info.circle")
+                                        Text("Est. cost: \(estimatedCost(dur))")
+                                    }
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                }
+                            }
                         }
 
                         Button {
@@ -158,6 +176,18 @@ struct NotesView: View {
                 }
             }
         }
+        .task(id: itemID) {
+            mediaDuration = await store.getMediaDuration(id: itemID)
+        }
+    }
+
+    private func estimatedCost(_ seconds: Double) -> String {
+        let minutes = seconds / 60
+        let cost = minutes * 0.0057
+        if cost < 0.01 {
+            return "< $0.01"
+        }
+        return String(format: "$%.2f", cost)
     }
 
     private func openEditor() {

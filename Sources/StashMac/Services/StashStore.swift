@@ -1,9 +1,16 @@
 import SwiftUI
+import Foundation
+import AVFoundation
 
 @Observable
 @MainActor
 final class StashStore {
-    var items: [StashItem] = []
+    var items: [StashItem] = [] {
+        didSet {
+            itemsByID = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0) })
+        }
+    }
+    private var itemsByID: [String: StashItem] = [:]
     var tags: [StashTag] = []
     var collections: [StashCollection] = []
     /// Sidebar's cap-at-3 Static Collections slice — populated
@@ -98,12 +105,27 @@ final class StashStore {
     /// Last scope `moments` was loaded with. Drives the
     /// "do I need to re-fetch on toggle flip" decision.
     var momentsScanAll: Bool = false
+
+    /// Gets the duration of a media file in seconds.
+    func getMediaDuration(id: String) async -> Double? {
+        guard let item = items.first(where: { $0.id == id })
+                ?? fetchedItem.flatMap({ $0.id == id ? $0 : nil }),
+              let storePath = item.storePath,
+              let url = FilePathResolver.resolve(storePath: storePath)
+        else { return nil }
+        
+        return await Task.detached {
+            let asset = AVURLAsset(url: url)
+            return (try? await asset.load(.duration))?.seconds
+        }.value
+    }
     /// True while the trip-suggest CLI call is in flight. Backs the
     /// header spinner in MomentSuggestionsView.
     var momentsLoading: Bool = false
     /// Last error from `stash trip-suggest`, surfaced inline in the
     /// view. Cleared on the next successful refresh.
     var momentsError: String?
+
     /// Per-cluster vision hints keyed by Moment signature. Populated
     /// asynchronously after a fresh `loadMoments` so the cluster
     /// cards render immediately and the hint badges fade in once
@@ -173,21 +195,27 @@ final class StashStore {
         case list, grid
     }
 
-    /// List-vs-grid layout for the main pane. Persisted to
-    /// UserDefaults so the choice survives relaunches. Pinterest-y
-    /// grid mode is the natural surface for browsing thumb-rich
-    /// collections (e.g. saved recipe images, leather-craft photos);
-    /// the default stays `.list` to match the existing UX.
-    var viewMode: ViewMode = {
-        if let raw = UserDefaults.standard.string(forKey: "stashViewMode"),
-           let mode = ViewMode(rawValue: raw) {
-            return mode
-        }
-        return .list
-    }() {
+    /// View mode for the middle pane.
+    var viewMode: ViewMode = .list {
         didSet {
-            UserDefaults.standard.set(viewMode.rawValue, forKey: "stashViewMode")
+            if let nav = navigation {
+                sectionViewModes[nav.persistenceKey] = viewMode
+                saveViewModeMemory()
+            }
         }
+    }
+
+    private var sectionViewModes: [String: ViewMode] = {
+        let saved = UserDefaults.standard.dictionary(forKey: "stashSectionViewModesV4") as? [String: String] ?? [:]
+        return saved.compactMapValues { ViewMode(rawValue: $0) }
+    }()
+
+    private var lastSaveTask: Task<Void, Never>?
+    private var lastSeenSaveTask: Task<Void, Never>?
+
+    private func saveViewModeMemory() {
+        let stringMap = sectionViewModes.mapValues { $0.rawValue }
+        UserDefaults.standard.set(stringMap, forKey: "stashSectionViewModesV4")
     }
 
     func toggleViewMode() {
@@ -534,7 +562,7 @@ final class StashStore {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(5))
                 guard let self, !Task.isCancelled else { break }
-                await self.checkDatabaseModification()
+                self.checkDatabaseModification()
             }
         }
     }
@@ -656,7 +684,7 @@ final class StashStore {
 
     var selectedItem: StashItem? {
         guard let id = selectedItemID else { return nil }
-        if let item = items.first(where: { $0.id == id }) { return item }
+        if let item = itemsByID[id] { return item }
         return fetchedItem?.id == id ? fetchedItem : nil
     }
 
@@ -1322,12 +1350,21 @@ final class StashStore {
     /// successive failures). Same logic as the fire-and-forget
     /// variant; throws instead of swallowing into self.error.
     func generateThumbnailAwaitable(for item: StashItem) async throws {
+        if let rel = item.thumbnailPath,
+           let url = FilePathResolver.resolveRelative(rel) {
+            ThumbnailCache.shared.invalidate(path: url.path)
+        }
         _ = try await ThumbnailService.shared.generate(for: item)
         loadAll()
     }
 
     /// Set the thumbnail from a user-chosen local file.
     func setThumbnail(itemID: String, fileURL: URL) {
+        if let item = itemsByID[itemID],
+           let rel = item.thumbnailPath,
+           let url = FilePathResolver.resolveRelative(rel) {
+            ThumbnailCache.shared.invalidate(path: url.path)
+        }
         Task {
             do {
                 _ = try await ThumbnailService.shared.setFromFile(fileURL, for: itemID)
@@ -1340,6 +1377,11 @@ final class StashStore {
 
     /// Set the thumbnail from a remote image URL.
     func setThumbnail(itemID: String, imageURL: URL) {
+        if let item = itemsByID[itemID],
+           let rel = item.thumbnailPath,
+           let url = FilePathResolver.resolveRelative(rel) {
+            ThumbnailCache.shared.invalidate(path: url.path)
+        }
         Task {
             do {
                 _ = try await ThumbnailService.shared.setFromImageURL(imageURL, for: itemID)
@@ -1383,6 +1425,12 @@ final class StashStore {
     /// fire-and-forget variant does, so callers don't have to
     /// reimplement that logic.
     func importThumbnailAwaitable(itemID: String, from: String? = nil) async throws {
+        if let item = itemsByID[itemID],
+           let rel = item.thumbnailPath,
+           let url = FilePathResolver.resolveRelative(rel) {
+            ThumbnailCache.shared.invalidate(path: url.path)
+        }
+
         do {
             _ = try await cli.thumbnailImport(id: itemID, from: from)
             loadAll()
@@ -1913,7 +1961,16 @@ final class StashStore {
             if seenItemIDs.count > 2000 {
                 seenItemIDs = Set(Array(seenItemIDs).suffix(1500))
             }
-            UserDefaults.standard.set(Array(seenItemIDs), forKey: "seenItemIDs")
+            
+            // Debounce the save to UserDefaults to avoid blocking the main thread
+            // on every arrow-key navigation or quick click.
+            lastSeenSaveTask?.cancel()
+            lastSeenSaveTask = Task {
+                try? await Task.sleep(for: .seconds(2))
+                guard !Task.isCancelled else { return }
+                let array = Array(seenItemIDs)
+                UserDefaults.standard.set(array, forKey: "seenItemIDs")
+            }
         }
     }
 
@@ -2318,6 +2375,12 @@ final class StashStore {
         defer { suppressNavigationChange = false }
         navigation = item
 
+        if let savedMode = sectionViewModes[item.persistenceKey] {
+            viewMode = savedMode
+        } else {
+            viewMode = .list
+        }
+
         switch item {
         case .tagGraph:
             // Keep current filter state — the graph view manages its own filtering
@@ -2432,16 +2495,30 @@ final class StashStore {
     func markQueueItemDone(_ item: StashItem) {
         let queueTags = ["read-later", "watch-later"]
         let toRemove = (item.tags ?? []).map(\.name).filter { queueTags.contains($0) }
-        guard !toRemove.isEmpty else {
-            self.loadInbox()
-            return
-        }
+        
         Task {
             do {
-                _ = try await cli.editItem(id: item.id, removeTags: toRemove)
+                // 1. Remove triage tags via editItem
+                if !toRemove.isEmpty {
+                    _ = try await cli.editItem(id: item.id, removeTags: toRemove)
+                }
+                
+                // 2. Archive the item via archiveItems (this moves it to processed)
+                _ = try await cli.archiveItems(ids: [item.id])
+                
+                // 3. Force a reload of ALL data to ensure the item drops out of the main list
+                self.loadAll()
                 self.loadInbox()
+                
+                // Also update local reference if it's still floating around
+                if let i = items.firstIndex(where: { $0.id == item.id }) {
+                    items[i].archived = true
+                }
+                
+                ToastCenter.shared.show("Processsed and archived", kind: .success)
             } catch {
-                self.error = error.localizedDescription
+                self.error = "Mark Done failed: \(error.localizedDescription)"
+                ToastCenter.shared.show("Archive failed", kind: .error)
             }
         }
     }
@@ -2636,23 +2713,23 @@ final class StashStore {
                     // network call — the actual secret never leaves
                     // 1Password's keychain.
                     let resolvedKey = try await AIKeyResolver.resolve(key)
-                    var images: [AIImage] = []
+                    var media: [AIMedia] = []
                     let primaryBytes = try Data(contentsOf: url)
-                    images.append(AIImage(data: primaryBytes, mimeType: mime))
+                    media.append(AIMedia(data: primaryBytes, mimeType: mime))
                     for (fileURL, fileMime) in attachedURLs {
                         let data = try Data(contentsOf: fileURL)
-                        images.append(AIImage(data: data, mimeType: fileMime))
+                        media.append(AIMedia(data: data, mimeType: fileMime))
                     }
                     // Only downscale when bundling multiple — a single
-                    // image at native quality gives the model the most
+                    // media item at native quality gives the model the most
                     // detail and has always fit fine in the request
                     // budget. Stored blobs are never modified by this.
-                    let sendImages = images.count > 1
-                        ? images.map { downscaleForIdentify($0) }
-                        : images
+                    let sendMedia = media.count > 1
+                        ? media.map { downscaleForIdentify($0) }
+                        : media
                     let result = try await provider.identify(
                         apiKey: resolvedKey,
-                        images: sendImages,
+                        media: sendMedia,
                         promptText: prompt
                     )
                     await self?.applyIdentifyResult(itemID: id, result: result)
@@ -2695,7 +2772,7 @@ final class StashStore {
     }
 
     @MainActor
-    func transcribeAudioItem(id: String, with prefs: AIPrefsStore) {
+    func transcribeMediaItem(id: String, with prefs: AIPrefsStore, fullVideo: Bool = false) {
         guard let item = items.first(where: { $0.id == id })
                 ?? fetchedItem.flatMap({ $0.id == id ? $0 : nil })
         else {
@@ -2712,19 +2789,32 @@ final class StashStore {
         guard let storePath = item.storePath, !storePath.isEmpty,
               let url = FilePathResolver.resolve(storePath: storePath)
         else {
-            self.error = "Couldn't resolve the audio file on disk."
+            self.error = "Couldn't resolve the media file on disk."
             return
         }
-        let mime = item.mimeType ?? "audio/mpeg"
-        let prompt = AIPrompts.defaultTranscribe
+        let mime = item.mimeType ?? (isAudioMIME(item.mimeType ?? "") ? "audio/mpeg" : "video/mp4")
+        let isVideo = item.mimeType?.hasPrefix("video/") == true
+        let prompt = (isVideo && fullVideo) ? AIPrompts.defaultVideoTranscribe : AIPrompts.defaultTranscribe
 
         identifyingItemIDs.insert(id)
         identifyRetry = nil
         let shortened = shortID(id)
-        flashMessage = "Transcribing \(shortened) with \(provider.displayName)…"
+        flashMessage = "\((isVideo && fullVideo) ? "Analyzing" : "Transcribing") \(shortened) with \(provider.displayName)…"
 
         Task { [weak self] in
             defer { Task { @MainActor in self?.identifyingItemIDs.remove(id) } }
+
+            // Cost safety: block transcription of extremely long videos (> 60m)
+            // unless Lite mode is used. 60m full video = ~$0.35.
+            if isVideo && fullVideo {
+                let dur = await self?.getMediaDuration(id: id) ?? 0
+                if dur > 3600 {
+                    await MainActor.run {
+                        self?.error = "Video is too long for full analysis (max 60m). Use 'Lite' (audio-only) mode instead."
+                    }
+                    return
+                }
+            }
 
             let backoffs: [UInt64] = [
                 3_000_000_000,
@@ -2739,11 +2829,21 @@ final class StashStore {
             while attempt <= backoffs.count {
                 do {
                     let resolvedKey = try await AIKeyResolver.resolve(key)
-                    let audioBytes = try Data(contentsOf: url)
-                    let audio = AIImage(data: audioBytes, mimeType: mime) // AIImage is just a wrapper for data+mime
+                    let mediaToSend: AIMedia
+                    
+                    if isVideo && !fullVideo {
+                        // Lite Mode: Extract audio locally
+                        let audioBytes = try await AudioExtractor.extractAudio(from: url)
+                        mediaToSend = AIMedia(data: audioBytes, mimeType: "audio/m4a")
+                    } else {
+                        // Full Video or native Audio
+                        let mediaBytes = try Data(contentsOf: url)
+                        mediaToSend = AIMedia(data: mediaBytes, mimeType: mime)
+                    }
+                    
                     result = try await provider.identify(
                         apiKey: resolvedKey,
-                        images: [audio],
+                        media: [mediaToSend],
                         promptText: prompt
                     )
                     lastError = nil
@@ -2753,7 +2853,7 @@ final class StashStore {
                     if isTransientIdentifyError(error), attempt < backoffs.count {
                         await MainActor.run {
                             self?.flashMessage =
-                                "Transcribing \(shortened) with \(provider.displayName)… (\(provider.displayName) is busy, retrying)"
+                                "\((isVideo && fullVideo) ? "Analyzing" : "Transcribing") \(shortened) with \(provider.displayName)… (\(provider.displayName) is busy, retrying)"
                         }
                         try? await Task.sleep(nanoseconds: backoffs[attempt])
                         attempt += 1
@@ -2772,7 +2872,7 @@ final class StashStore {
                 )
                 await MainActor.run {
                     self?.identifyRetry = { [weak self] in
-                        self?.transcribeAudioItem(id: id, with: prefs)
+                        self?.transcribeMediaItem(id: id, with: prefs, fullVideo: fullVideo)
                     }
                     self?.error = msg
                     self?.flashMessage = nil
@@ -2786,12 +2886,14 @@ final class StashStore {
                 ?? fetchedItem.flatMap({ $0.id == itemID ? $0 : nil })
         else { return }
 
-        // If the title matches the default "Voice Stash" or "Audio Stash"
-        // patterns, replace it with the better label from Gemini.
-        // Matches: "Voice Stash - May 25, 2026...", "Audio Stash..."
+        // If the title matches the default "Voice Stash", "Audio Stash",
+        // or "Video Stash" patterns, replace it with the better label
+        // from Gemini.
+        // Matches: "Voice Stash - May 25, 2026...", "Audio Stash...", "Video Stash..."
         let currentTitle = item.title.trimmingCharacters(in: .whitespacesAndNewlines)
         let isDefaultTitle = currentTitle.hasPrefix("Voice Stash") || 
                             currentTitle.hasPrefix("Audio Stash") ||
+                            currentTitle.hasPrefix("Video Stash") ||
                             currentTitle.isEmpty
         
         let newTitle: String? = {
@@ -2937,6 +3039,12 @@ final class StashStore {
 
     /// Promote an attached file to be the new primary/cover.
     func promoteFile(in itemID: String, index: Int) {
+        if let item = itemsByID[itemID],
+           let rel = item.thumbnailPath,
+           let url = FilePathResolver.resolveRelative(rel) {
+            ThumbnailCache.shared.invalidate(path: url.path)
+        }
+
         Task {
             do {
                 _ = try await cli.promoteFile(itemID: itemID, index: index)

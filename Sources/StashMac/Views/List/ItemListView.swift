@@ -108,7 +108,7 @@ struct ItemListView: View {
             Divider()
 
             // Tag suggestions
-            if !state.matches.isEmpty {
+            if state.isSearchFocused && !state.matches.isEmpty {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 0) {
@@ -139,7 +139,7 @@ struct ItemListView: View {
                         }
                         .padding(.vertical, 2)
                     }
-                    .frame(maxHeight: 240)
+                    .frame(maxHeight: min(CGFloat(state.matches.count) * 26 + 8, 240))
                     .background(.bar)
                     .onChange(of: state.activeIndex) { _, newIdx in
                         withAnimation(.easeOut(duration: 0.12)) {
@@ -322,8 +322,11 @@ struct ItemListView: View {
                 }
             }
             .buttonStyle(.plain)
+            .focusable(false)
             .help("Sort: \(store.sortMode.rawValue)")
+
             Button {
+
                 store.toggleViewMode()
             } label: {
                 Image(systemName: store.viewMode == .grid
@@ -333,6 +336,7 @@ struct ItemListView: View {
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
+            .focusable(false)
             .help(store.viewMode == .grid ? "Switch to list" : "Switch to grid")
         }
         .padding(.horizontal, 12)
@@ -800,8 +804,13 @@ struct ItemListView: View {
                 }
             }
             Divider()
-            Button("Archive All") {
-                store.archiveItems(ids: Array(selected))
+            let isArchivedSection = store.navigation == .archive
+            Button(isArchivedSection ? "Unarchive All" : "Archive All") {
+                if isArchivedSection {
+                    store.unarchiveItems(ids: Array(selected))
+                } else {
+                    store.archiveItems(ids: Array(selected))
+                }
             }
             Button("Delete All…", role: .destructive) {
                 store.deleteItems(ids: Array(selected))
@@ -850,9 +859,10 @@ struct ItemListView: View {
             if aiPrefs.hasKey,
                let item = store.items.first(where: { $0.id == rightClickedID }),
                item.type == .file,
-               let mime = item.mimeType, isAudioMIME(mime) {
-                Button("Transcribe with \(aiPrefs.activeProvider.displayName)") {
-                    store.transcribeAudioItem(id: rightClickedID, with: aiPrefs)
+               let mime = item.mimeType, (isAudioMIME(mime) || mime.hasPrefix("video/")) {
+                let isVideo = mime.hasPrefix("video/")
+                Button(isVideo ? (aiPrefs.fullVideoTranscription ? "Analyze Video (Full)" : "Transcribe Video (Audio Only)") : "Transcribe with \(aiPrefs.activeProvider.displayName)") {
+                    store.transcribeMediaItem(id: rightClickedID, with: aiPrefs, fullVideo: aiPrefs.fullVideoTranscription)
                 }
             }
             Divider()
@@ -863,8 +873,13 @@ struct ItemListView: View {
                 exportSelection(ids: [rightClickedID])
             }
             Divider()
-            Button("Archive") {
-                store.archiveItems(ids: [rightClickedID])
+            let isArchived = store.items.first(where: { $0.id == rightClickedID })?.archived == true || store.navigation == .archive
+            Button(isArchived ? "Unarchive" : "Archive") {
+                if isArchived {
+                    store.unarchiveItems(ids: [rightClickedID])
+                } else {
+                    store.archiveItems(ids: [rightClickedID])
+                }
             }
             Button("Delete", role: .destructive) {
                 store.deleteItem(id: rightClickedID)

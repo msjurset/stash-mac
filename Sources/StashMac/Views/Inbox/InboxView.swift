@@ -38,9 +38,9 @@ struct InboxView: View {
 
     enum Selection: Hashable {
         case none
-        case queue(Int)
-        case feed(Int)
-        case resurface(Int)
+        case queue(String)     // item ID
+        case feed(Int64)       // candidate ID
+        case resurface(String) // item ID
     }
 
     /// One option in the snooze picker. Durations chosen to cover the
@@ -118,15 +118,15 @@ struct InboxView: View {
     /// time; the other is cleared.
     private func syncDetail() {
         switch selection {
-        case .queue(let i) where i < store.queueItems.count:
+        case .queue(let id):
             store.inboxSelectedCandidate = nil
-            store.inboxSelectedResurfaceItem = store.queueItems[i]
-        case .feed(let i) where i < store.feedCandidates.count:
-            store.inboxSelectedCandidate = store.feedCandidates[i]
+            store.inboxSelectedResurfaceItem = store.queueItems.first(where: { $0.id == id })
+        case .feed(let id):
+            store.inboxSelectedCandidate = store.feedCandidates.first(where: { $0.id == id })
             store.inboxSelectedResurfaceItem = nil
-        case .resurface(let i) where i < store.resurfaceItems.count:
+        case .resurface(let id):
             store.inboxSelectedCandidate = nil
-            store.inboxSelectedResurfaceItem = store.resurfaceItems[i]
+            store.inboxSelectedResurfaceItem = store.resurfaceItems.first(where: { $0.id == id })
         default:
             store.inboxSelectedCandidate = nil
             store.inboxSelectedResurfaceItem = nil
@@ -150,6 +150,7 @@ struct InboxView: View {
                 Image(systemName: "plus")
             }
             .buttonStyle(.borderless)
+            .focusable(false)
             .help("Add a feed")
             Button {
                 showManageFeedsSheet = true
@@ -157,6 +158,7 @@ struct InboxView: View {
                 Image(systemName: "antenna.radiowaves.left.and.right")
             }
             .buttonStyle(.borderless)
+            .focusable(false)
             .help("Manage feeds")
             Button {
                 store.pollFeeds()
@@ -164,9 +166,10 @@ struct InboxView: View {
                 Image(systemName: "arrow.clockwise")
             }
             .buttonStyle(.borderless)
+            .focusable(false)
             .help("Poll feeds now")
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .sheet(isPresented: $showAddFeedSheet) {
             AddFeedSheet()
@@ -213,9 +216,9 @@ struct InboxView: View {
                     .help("Show all read/watch items in the list view")
                 )
             )
-            ForEach(Array(store.queueItems.enumerated()), id: \.element.id) { idx, item in
-                queueRow(item, idx: idx)
-                    .id(Selection.queue(idx))
+            ForEach(store.queueItems) { item in
+                queueRow(item)
+                    .id(Selection.queue(item.id))
             }
         }
     }
@@ -228,9 +231,9 @@ struct InboxView: View {
                 count: store.feedCandidates.count,
                 hint: "S stash · X dismiss · Z snooze (⇧Z picker) · Enter open · ⇧J/⇧K extend"
             )
-            ForEach(Array(store.feedCandidates.enumerated()), id: \.element.id) { idx, cand in
-                feedRow(cand, idx: idx)
-                    .id(Selection.feed(idx))
+            ForEach(store.feedCandidates) { cand in
+                feedRow(cand)
+                    .id(Selection.feed(cand.id))
             }
         }
     }
@@ -243,9 +246,9 @@ struct InboxView: View {
                 count: store.resurfaceItems.count,
                 hint: "X stop resurfacing · Z snooze (⇧Z picker) · Enter open · ⇧J/⇧K extend"
             )
-            ForEach(Array(store.resurfaceItems.enumerated()), id: \.element.id) { idx, item in
-                resurfaceRow(item, idx: idx)
-                    .id(Selection.resurface(idx))
+            ForEach(store.resurfaceItems) { item in
+                resurfaceRow(item)
+                    .id(Selection.resurface(item.id))
             }
         }
     }
@@ -282,8 +285,8 @@ struct InboxView: View {
     // MARK: - Row renderers
 
     @ViewBuilder
-    private func feedRow(_ c: FeedCandidate, idx: Int) -> some View {
-        let sel = Selection.feed(idx)
+    private func feedRow(_ c: FeedCandidate) -> some View {
+        let sel = Selection.feed(c.id)
         let cursor = (selection == sel)
         let extended = extendedSelection.contains(sel)
         let active = cursor || extended
@@ -318,7 +321,7 @@ struct InboxView: View {
         .contentShape(Rectangle())
         .pointingHandCursor()
         .onTapGesture {
-            selection = .feed(idx)
+            selection = .feed(c.id)
             extendedSelection = []
         }
         .overlay(alignment: .trailing) {
@@ -339,8 +342,8 @@ struct InboxView: View {
     }
 
     @ViewBuilder
-    private func queueRow(_ item: StashItem, idx: Int) -> some View {
-        let sel = Selection.queue(idx)
+    private func queueRow(_ item: StashItem) -> some View {
+        let sel = Selection.queue(item.id)
         let cursor = (selection == sel)
         let extended = extendedSelection.contains(sel)
         let active = cursor || extended
@@ -354,6 +357,16 @@ struct InboxView: View {
                     .font(.body)
                     .lineLimit(2)
                     .foregroundStyle(active ? .white : .primary)
+                
+                HStack(spacing: 6) {
+                    Text("added")
+                        .font(.caption)
+                        .foregroundStyle(active ? Color.white.opacity(0.85) : Color.secondary.opacity(0.7))
+                    Text(item.createdAt, style: .relative)
+                        .font(.caption)
+                        .foregroundStyle(active ? Color.white.opacity(0.85) : .secondary)
+                }
+
                 HStack(spacing: 6) {
                     if let queueTag {
                         Text("#\(queueTag)")
@@ -364,19 +377,14 @@ struct InboxView: View {
                                         in: Capsule())
                             .foregroundStyle(active ? .white : .accentColor)
                     }
-                    Text("added")
-                        .font(.caption)
-                        .foregroundStyle(active ? Color.white.opacity(0.85) : Color.secondary.opacity(0.7))
-                    Text(item.createdAt, style: .relative)
-                        .font(.caption)
-                        .foregroundStyle(active ? Color.white.opacity(0.85) : .secondary)
+                    
                     let otherTags = (item.tags ?? [])
                         .map(\.name)
                         .filter { $0 != "read-later" && $0 != "watch-later" }
                     if !otherTags.isEmpty {
                         Text(otherTags.map { "#\($0)" }.joined(separator: " "))
                             .font(.caption)
-                            .foregroundStyle(active ? Color.white.opacity(0.85) : .secondary)
+                            .foregroundStyle(active ? Color.white.opacity(0.85) : Color.secondary.opacity(0.5))
                             .lineLimit(1)
                     }
                 }
@@ -389,7 +397,7 @@ struct InboxView: View {
         .contentShape(Rectangle())
         .pointingHandCursor()
         .onTapGesture {
-            selection = .queue(idx)
+            selection = .queue(item.id)
             extendedSelection = []
         }
         .overlay(alignment: .trailing) {
@@ -424,8 +432,8 @@ struct InboxView: View {
     }
 
     @ViewBuilder
-    private func resurfaceRow(_ item: StashItem, idx: Int) -> some View {
-        let sel = Selection.resurface(idx)
+    private func resurfaceRow(_ item: StashItem) -> some View {
+        let sel = Selection.resurface(item.id)
         let cursor = (selection == sel)
         let extended = extendedSelection.contains(sel)
         let active = cursor || extended
@@ -445,12 +453,12 @@ struct InboxView: View {
                     Text(item.updatedAt, style: .date)
                         .font(.caption)
                         .foregroundStyle(active ? Color.white.opacity(0.85) : .secondary)
-                    if let tags = item.tags, !tags.isEmpty {
-                        Text(tags.map { "#\($0.name)" }.joined(separator: " "))
-                            .font(.caption)
-                            .foregroundStyle(active ? Color.white.opacity(0.85) : .secondary)
-                            .lineLimit(1)
-                    }
+                }
+                if let tags = item.tags, !tags.isEmpty {
+                    Text(tags.map { "#\($0.name)" }.joined(separator: " "))
+                        .font(.caption)
+                        .foregroundStyle(active ? Color.white.opacity(0.85) : Color.secondary.opacity(0.5))
+                        .lineLimit(1)
                 }
             }
             Spacer()
@@ -461,7 +469,7 @@ struct InboxView: View {
         .contentShape(Rectangle())
         .pointingHandCursor()
         .onTapGesture {
-            selection = .resurface(idx)
+            selection = .resurface(item.id)
             extendedSelection = []
         }
         .overlay(alignment: .trailing) {
@@ -520,12 +528,18 @@ struct InboxView: View {
         snoozePickerOpen = false
         applyToTargets { sel in
             switch sel {
-            case .queue(let i) where i < store.queueItems.count:
-                store.snoozeResurface(store.queueItems[i], duration: choice.goDuration)
-            case .feed(let i) where i < store.feedCandidates.count:
-                store.snoozeCandidate(store.feedCandidates[i], duration: choice.goDuration)
-            case .resurface(let i) where i < store.resurfaceItems.count:
-                store.snoozeResurface(store.resurfaceItems[i], duration: choice.goDuration)
+            case .queue(let id):
+                if let item = store.queueItems.first(where: { $0.id == id }) {
+                    store.snoozeResurface(item, duration: choice.goDuration)
+                }
+            case .feed(let id):
+                if let cand = store.feedCandidates.first(where: { $0.id == id }) {
+                    store.snoozeCandidate(cand, duration: choice.goDuration)
+                }
+            case .resurface(let id):
+                if let item = store.resurfaceItems.first(where: { $0.id == id }) {
+                    store.snoozeResurface(item, duration: choice.goDuration)
+                }
             default: break
             }
         }
@@ -577,10 +591,14 @@ struct InboxView: View {
             // stash; for resurface rows it's a no-op (already stashed).
             applyToTargets { sel in
                 switch sel {
-                case .queue(let i) where i < store.queueItems.count:
-                    store.markQueueItemDone(store.queueItems[i])
-                case .feed(let i) where i < store.feedCandidates.count:
-                    store.stashCandidate(store.feedCandidates[i])
+                case .queue(let id):
+                    if let item = store.queueItems.first(where: { $0.id == id }) {
+                        store.markQueueItemDone(item)
+                    }
+                case .feed(let id):
+                    if let cand = store.feedCandidates.first(where: { $0.id == id }) {
+                        store.stashCandidate(cand)
+                    }
                 default: break
                 }
             }
@@ -588,12 +606,18 @@ struct InboxView: View {
         case "x":
             applyToTargets { sel in
                 switch sel {
-                case .queue(let i) where i < store.queueItems.count:
-                    store.dismissResurface(store.queueItems[i])
-                case .feed(let i) where i < store.feedCandidates.count:
-                    store.dismissCandidate(store.feedCandidates[i])
-                case .resurface(let i) where i < store.resurfaceItems.count:
-                    store.dismissResurface(store.resurfaceItems[i])
+                case .queue(let id):
+                    if let item = store.queueItems.first(where: { $0.id == id }) {
+                        store.dismissResurface(item)
+                    }
+                case .feed(let id):
+                    if let cand = store.feedCandidates.first(where: { $0.id == id }) {
+                        store.dismissCandidate(cand)
+                    }
+                case .resurface(let id):
+                    if let item = store.resurfaceItems.first(where: { $0.id == id }) {
+                        store.dismissResurface(item)
+                    }
                 default: break
                 }
             }
@@ -606,12 +630,18 @@ struct InboxView: View {
             // Plain Z uses the section's default snooze duration.
             applyToTargets { sel in
                 switch sel {
-                case .queue(let i) where i < store.queueItems.count:
-                    store.snoozeResurface(store.queueItems[i], duration: "72h")
-                case .feed(let i) where i < store.feedCandidates.count:
-                    store.snoozeCandidate(store.feedCandidates[i], duration: "24h")
-                case .resurface(let i) where i < store.resurfaceItems.count:
-                    store.snoozeResurface(store.resurfaceItems[i], duration: "168h")
+                case .queue(let id):
+                    if let item = store.queueItems.first(where: { $0.id == id }) {
+                        store.snoozeResurface(item, duration: "72h")
+                    }
+                case .feed(let id):
+                    if let cand = store.feedCandidates.first(where: { $0.id == id }) {
+                        store.snoozeCandidate(cand, duration: "24h")
+                    }
+                case .resurface(let id):
+                    if let item = store.resurfaceItems.first(where: { $0.id == id }) {
+                        store.snoozeResurface(item, duration: "168h")
+                    }
                 default: break
                 }
             }
@@ -648,8 +678,13 @@ struct InboxView: View {
         let targets: [Selection]
         if extendedSelection.isEmpty {
             targets = [selection]
+            advanceSelection()
         } else {
             targets = orderedSelections().filter { extendedSelection.contains($0) }
+            if let last = targets.last {
+                selection = last
+                advanceSelection()
+            }
         }
         for t in targets { apply(t) }
         extendedSelection = []
@@ -681,32 +716,50 @@ struct InboxView: View {
         selection = order[max(next, 0)]
     }
 
+    private func advanceSelection() {
+        let order = orderedSelections()
+        guard let i = order.firstIndex(of: selection) else { return }
+        if i + 1 < order.count {
+            selection = order[i + 1]
+        } else if i > 0 {
+            selection = order[i - 1]
+        } else {
+            selection = .none
+        }
+    }
+
     /// Flatten all three sections into one ordered list so J/K walks
     /// across them naturally. Order matches the visual section order:
     /// queue → feed candidates → resurface picks.
     private func orderedSelections() -> [Selection] {
         var out: [Selection] = []
-        for i in store.queueItems.indices       { out.append(.queue(i)) }
-        for i in store.feedCandidates.indices   { out.append(.feed(i)) }
-        for i in store.resurfaceItems.indices   { out.append(.resurface(i)) }
+        for item in store.queueItems     { out.append(.queue(item.id)) }
+        for cand in store.feedCandidates { out.append(.feed(cand.id)) }
+        for item in store.resurfaceItems { out.append(.resurface(item.id)) }
         return out
     }
 
     private func initialSelection() -> Selection {
-        if !store.queueItems.isEmpty       { return .queue(0) }
-        if !store.feedCandidates.isEmpty   { return .feed(0) }
-        if !store.resurfaceItems.isEmpty   { return .resurface(0) }
+        if let item = store.queueItems.first       { return .queue(item.id) }
+        if let cand = store.feedCandidates.first   { return .feed(cand.id) }
+        if let item = store.resurfaceItems.first   { return .resurface(item.id) }
         return .none
     }
 
     private func openCurrent() {
         switch selection {
-        case .queue(let i) where i < store.queueItems.count:
-            store.openItem(id: store.queueItems[i].id)
-        case .feed(let i) where i < store.feedCandidates.count:
-            openURL(store.feedCandidates[i].url)
-        case .resurface(let i) where i < store.resurfaceItems.count:
-            store.openItem(id: store.resurfaceItems[i].id)
+        case .queue(let id):
+            if let item = store.queueItems.first(where: { $0.id == id }) {
+                store.openItem(id: item.id)
+            }
+        case .feed(let id):
+            if let cand = store.feedCandidates.first(where: { $0.id == id }) {
+                openURL(cand.url)
+            }
+        case .resurface(let id):
+            if let item = store.resurfaceItems.first(where: { $0.id == id }) {
+                store.openItem(id: item.id)
+            }
         default: break
         }
     }
@@ -805,10 +858,5 @@ private struct KeyMonitor: NSViewRepresentable {
         private func removeMonitor() {
             if let m = monitor { NSEvent.removeMonitor(m); monitor = nil }
         }
-        // No deinit cleanup: NSView is removed from the window before
-        // teardown (viewDidMoveToWindow with nil window) which calls
-        // removeMonitor synchronously. Trying to touch the @MainActor-
-        // bound `monitor` field from a nonisolated deinit is rejected
-        // by strict concurrency anyway.
     }
 }

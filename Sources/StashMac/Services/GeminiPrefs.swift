@@ -29,6 +29,10 @@ final class AIPrefsStore {
     var apiKey: String { apiKeys[activeID] ?? "" }
     var promptText: String { prompt(for: activeID) }
     var hasKey: Bool { !apiKey.isEmpty }
+    var fullVideoTranscription: Bool {
+        get { defaults.bool(forKey: "ai.fullVideoTranscription") }
+        set { defaults.set(newValue, forKey: "ai.fullVideoTranscription") }
+    }
 
     private let defaults = UserDefaults.standard
     private let activeKey = "ai.activeProvider"

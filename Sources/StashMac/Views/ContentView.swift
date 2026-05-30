@@ -2,33 +2,23 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// Identifiable payload for `.sheet(item:)` presentation of
-/// `FetchURLSheet`. Couples the open-flag and the seed URL into a
-/// single state value so SwiftUI can't evaluate the sheet content
-/// closure before the URL is set (which it did when we used two
-/// separate @State writes — `initialURL` arrived as nil and the
-/// user had to retype).
+/// `FetchURLSheet`.
 struct FetchURLTrigger: Identifiable {
     let id = UUID()
-    let url: String?
+    let initialURL: String?
 }
 
 struct ContentView: View {
     @Environment(StashStore.self) private var store
     @Environment(\.openWindow) private var openWindow
-    @State private var showAddSheet = false
+    @State private var showAddItemSheet = false
     @State private var showAddCollectionSheet = false
     @State private var showEditSheet = false
     @State private var showQuickSearch = false
     @State private var showImportBookmarksSheet = false
     @State private var showImportHistorySheet = false
-    /// Combined "is the fetch sheet open?" + "with what URL?" state.
-    /// Using `.sheet(item:)` instead of `.sheet(isPresented:)` so the
-    /// URL travels into the content closure inseparably from the
-    /// "open" flag — avoids a race where SwiftUI evaluates the sheet
-    /// before a separate `initialURL` @State write has propagated.
     @State private var fetchURLTrigger: FetchURLTrigger?
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
-    @State private var preferredContentWidth: CGFloat = 600
 
     private var shouldShowAddItemButton: Bool {
         store.navigation != .rules && store.navigation != .ruleActivity
@@ -41,32 +31,53 @@ struct ContentView: View {
                 selection: $store.navigation,
                 showAddCollectionSheet: $showAddCollectionSheet
             )
+            .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 300)
         } content: {
             sidebarContent
-                .navigationSplitViewColumnWidth(ideal: preferredContentWidth)
+                .navigationSplitViewColumnWidth(min: 400, ideal: 600, max: 1000)
         } detail: {
             detailContent
+                .toolbar {
+                    ToolbarItemGroup(placement: .navigation) {
+                        actionToolbarItems
+                    }
+                }
         }
         .toolbar {
             ToolbarItemGroup(placement: .navigation) {
-                Button {
-                    store.goBack()
-                } label: {
-                    Image(systemName: "chevron.left")
-                }
-                .disabled(!store.canGoBack)
-                .keyboardShortcut("[", modifiers: .command)
-                .help("Back")
-
-                Button {
-                    store.goForward()
-                } label: {
-                    Image(systemName: "chevron.right")
-                }
-                .disabled(!store.canGoForward)
-                .keyboardShortcut("]", modifiers: .command)
-                .help("Forward")
+                navigationToolbarItems
             }
+        }
+        .sheet(isPresented: $showAddCollectionSheet) {
+            AddCollectionSheet()
+        }
+        .sheet(isPresented: $showAddItemSheet) {
+            AddItemSheet()
+        }
+        .sheet(isPresented: $showEditSheet) {
+            if let id = store.selectedItemID,
+               let item = store.items.first(where: { $0.id == id }) {
+                EditItemSheet(item: item)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .stashOpenImportBookmarks)) { _ in
+            showImportBookmarksSheet = true
+        }
+        .sheet(isPresented: $showImportBookmarksSheet) {
+            ImportBookmarksSheet()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .stashOpenImportHistory)) { _ in
+            showImportHistorySheet = true
+        }
+        .sheet(isPresented: $showImportHistorySheet) {
+            ImportHistorySheet()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .stashOpenFetchURL)) { note in
+            let seedURL = note.userInfo?["url"] as? String
+            fetchURLTrigger = FetchURLTrigger(initialURL: seedURL)
+        }
+        .sheet(item: $fetchURLTrigger) { trigger in
+            FetchURLSheet(initialURL: trigger.initialURL)
         }
         .onAppear {
             onAppear()
@@ -74,198 +85,59 @@ struct ContentView: View {
         .onChange(of: store.navigation) { _, newValue in
             onNavigationChange(newValue)
         }
-        .onDrop(of: [.fileURL, .emailMessage], isTargeted: nil) { providers in
-            handleDrop(providers)
-            return true
+        .overlay(alignment: .top) {
+            ToastOverlay()
         }
-        .sheet(isPresented: $showAddSheet) {
-            AddItemSheet()
-        }
-        .sheet(isPresented: $showAddCollectionSheet) {
-            AddCollectionSheet()
-        }
-        .sheet(isPresented: $showEditSheet) {
-            if let item = store.selectedItem {
-                EditItemSheet(item: item)
-            }
-        }
-        .sheet(isPresented: $showQuickSearch) {
-            QuickSearchView()
-        }
-        .sheet(isPresented: $showImportBookmarksSheet) {
-            ImportBookmarksSheet()
-        }
-        .sheet(isPresented: $showImportHistorySheet) {
-            ImportHistorySheet()
-        }
-        .sheet(item: $fetchURLTrigger) { trigger in
-            FetchURLSheet(initialURL: trigger.url)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .stashOpenImportBookmarks)) { _ in
-            showImportBookmarksSheet = true
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .stashOpenImportHistory)) { _ in
-            showImportHistorySheet = true
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .stashOpenFetchURL)) { note in
-            fetchURLTrigger = FetchURLTrigger(url: note.userInfo?["url"] as? String)
-        }
-        .toolbar {
-            // Hide on Rules — that view owns its own "+ New Rule" button.
-            // Also hide on Rule Activity — that's a read-only feed; "Add
-            // item" doesn't make sense there. ⌘N shortcut suppressed too.
-            if shouldShowAddItemButton {
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        showAddSheet = true
-                    } label: {
-                        Label("Add Item", systemImage: "plus")
-                    }
-                    .keyboardShortcut("n")
-                    .help("Add new item (⌘N)")
-                }
-            }
-        }
-        .background(SearchKeyMonitor(
-            isEnabled: !showQuickSearch,
-            onSearch: { showQuickSearch = true },
-            onHelp: { openHelpForCurrentContext() }
-        ))
-        .keyboardShortcut("k", modifiers: .command) {
-            showQuickSearch = true
-        }
-        // ⌘R reloads from the CLI so external mutations (CLI edits,
-        // browser-extension stashes, file-system changes) reflect in
-        // the current view without forcing the user to re-navigate.
-        .keyboardShortcut("r", modifiers: .command) {
-            store.loadAll()
-        }
-        .frame(minWidth: 900, minHeight: 500)
-        .background(WindowAccessor { window in
-            // Explicitly enable frame persistence for the main window.
-            window.setFrameAutosaveName("main")
-        })
         .alert(
             "Something went wrong",
             isPresented: Binding(
                 get: { store.error != nil },
-                set: {
-                    if !$0 {
-                        store.error = nil
-                        store.identifyRetry = nil
-                    }
-                }
-            ),
-            presenting: store.error
-        ) { _ in
-            // Retry shown only for transient identify failures (the
-            // store sets identifyRetry from the right-click identify
-            // path after the retry budget exhausts). Tapping fires
-            // the same identify call again with a fresh budget. OK
-            // dismisses without retrying.
-            if let retry = store.identifyRetry {
-                Button("Retry") {
-                    let toRun = retry
-                    store.error = nil
-                    store.identifyRetry = nil
-                    toRun()
-                }
+                set: { if !$0 { store.error = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { store.error = nil }
+        } message: {
+            if let error = store.error {
+                Text(error)
             }
-            Button("OK", role: .cancel) {
-                store.error = nil
-                store.identifyRetry = nil
-            }
-        } message: { message in
-            Text(message)
-        }
-    }
-
-    /// Open the help window pre-selected to the topic that best
-    /// matches the current sidebar navigation. Falls back to
-    /// "Getting Started" when nothing maps cleanly.
-    private func openHelpForCurrentContext() {
-        let topic = helpTopic(for: store.navigation)
-        openWindow(id: "help", value: topic)
-    }
-
-    @ViewBuilder
-    private var detailContent: some View {
-        switch store.navigation {
-        case .tagGraph:
-            VSplitView {
-                ItemListView(showEditSheet: $showEditSheet)
-                    .frame(maxWidth: .infinity, minHeight: 150)
-                DetailRouter(showEditSheet: $showEditSheet)
-                    .frame(maxWidth: .infinity, minHeight: 200)
-            }
-            .frame(maxWidth: .infinity)
-        case .stats:
-            EmptyView()
-        case .rules:
-            RuleDetailView()
-        case .ruleActivity:
-            RuleActivityDetailView()
-        case .check:
-            DetailRouter(showEditSheet: $showEditSheet)
-        case .dupes:
-            DetailRouter(showEditSheet: $showEditSheet)
-        case .moments:
-            MomentDetailView()
-        case .savedSearch:
-            DetailRouter(showEditSheet: $showEditSheet)
-        case .inbox:
-            InboxDetailView()
-        default:
-            DetailRouter(showEditSheet: $showEditSheet)
-        }
-    }
-
-    private func updatePreferredWidth(for nav: NavigationItem) {
-        // Judgment call on best legibility per section.
-        // List-heavy views are best at ~600px (fits title + some metadata).
-        // Graph / Maintenance / Rules views need more horizontal room (~800px).
-        switch nav {
-        case .tagGraph, .rules, .ruleActivity, .stats, .check, .dupes, .moments:
-            preferredContentWidth = 800
-        case .allItems, .inbox, .archive, .type, .tag, .collection, .savedSearch:
-            preferredContentWidth = 600
         }
     }
 
     private func onNavigationChange(_ newValue: NavigationItem?) {
         let nav = newValue ?? .allItems
         store.handleNavigationChange(nav)
-        updatePreferredWidth(for: nav)
     }
 
     private func onAppear() {
         store.loadAll()
         store.startFeedPollTimer()
-        updatePreferredWidth(for: store.navigation ?? .allItems)
     }
 
     @ViewBuilder
     private var sidebarContent: some View {
-        switch store.navigation {
-        case .tagGraph:
-            TagGraphView()
-                .frame(minWidth: 500, idealWidth: 800)
-        case .stats:
-            StatsView()
-        case .check:
-            CheckView()
-        case .dupes:
-            DupesView()
-        case .moments:
-            MomentsView()
-        case .rules:
-            RulesView()
-        case .ruleActivity:
-            RuleActivityView()
-        case .inbox:
-            InboxView()
-        default:
-            ItemListView(showEditSheet: $showEditSheet)
+        @Bindable var store = store
+        Group {
+            switch store.navigation {
+            case .tagGraph:
+                TagGraphView()
+                    .frame(minWidth: 500, idealWidth: 800)
+            case .stats:
+                StatsView()
+            case .check:
+                CheckView()
+            case .dupes:
+                DupesView()
+            case .moments:
+                MomentsView()
+            case .rules:
+                RulesView()
+            case .ruleActivity:
+                RuleActivityView()
+            case .inbox:
+                InboxView()
+            default:
+                ItemListView(showEditSheet: $showEditSheet)
+            }
         }
     }
 
@@ -286,7 +158,6 @@ struct ContentView: View {
 
     private func handleDrop(_ providers: [NSItemProvider]) {
         for provider in providers {
-            // Try file URL first
             if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
                 provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
                     let url: URL?
@@ -303,158 +174,76 @@ struct ContentView: View {
                     }
                 }
             }
-            // Try email message (e.g., dragged from Apple Mail)
-            else if provider.hasItemConformingToTypeIdentifier(UTType.emailMessage.identifier) {
-                provider.loadDataRepresentation(forTypeIdentifier: UTType.emailMessage.identifier) { data, _ in
-                    guard let data, !data.isEmpty else { return }
-                    let tempPath = NSTemporaryDirectory() + "stash-drop-\(UUID().uuidString).eml"
-                    let tempURL = URL(fileURLWithPath: tempPath)
-                    do {
-                        try data.write(to: tempURL)
-                        Task { @MainActor in
-                            store.addFile(path: tempPath, title: nil, tags: [], note: nil, collection: nil)
-                            try? FileManager.default.removeItem(at: tempURL)
-                        }
-                    } catch {}
-                }
-            }
         }
     }
-}
 
-private extension View {
-    func keyboardShortcut(_ key: KeyEquivalent, modifiers: EventModifiers, action: @escaping () -> Void) -> some View {
-        background(
-            Button("") { action() }
-                .keyboardShortcut(key, modifiers: modifiers)
-                .hidden()
-        )
-    }
-}
-
-/// Monitors for "/" / Cmd+F (search) and "?" (help) when no text
-/// field has focus, dispatching to the matching action. Mid-text
-/// keystrokes pass through unchanged so the user can type literal
-/// slashes / question-marks inside fields.
-struct SearchKeyMonitor: NSViewRepresentable {
-    var isEnabled: Bool = true
-    let onSearch: () -> Void
-    let onHelp: () -> Void
-
-    func makeNSView(context: Context) -> NSView {
-        let view = KeyMonitorView()
-        view.isEnabled = isEnabled
-        view.onSearch = onSearch
-        view.onHelp = onHelp
-        return view
+    @ViewBuilder
+    private var detailContent: some View {
+        switch store.navigation {
+        case .tagGraph, .stats, .check, .dupes, .rules, .ruleActivity, .moments:
+            EmptyView()
+        case .inbox:
+            InboxDetailView()
+        default:
+            DetailRouter(showEditSheet: $showEditSheet)
+        }
     }
 
-    func updateNSView(_ nsView: NSView, context: Context) {
-        guard let view = nsView as? KeyMonitorView else { return }
-        view.isEnabled = isEnabled
-        view.onSearch = onSearch
-        view.onHelp = onHelp
+    @ViewBuilder
+    private var navigationToolbarItems: some View {
+        Button {
+            store.goBack()
+        } label: {
+            Image(systemName: "chevron.left")
+        }
+        .disabled(!store.canGoBack)
+        .keyboardShortcut("[", modifiers: .command)
+        .help("Back")
+
+        Button {
+            store.goForward()
+        } label: {
+            Image(systemName: "chevron.right")
+        }
+        .disabled(!store.canGoForward)
+        .keyboardShortcut("]", modifiers: .command)
+        .help("Forward")
     }
 
-    class KeyMonitorView: NSView {
-        var isEnabled: Bool = true
-        var onSearch: (() -> Void)?
-        var onHelp: (() -> Void)?
-        private var monitor: Any?
-
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            guard monitor == nil else { return }
-            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-                guard let self, self.isEnabled else { return event }
-
-                let chars = event.charactersIgnoringModifiers
-                let withModifiers = event.characters
-                let plainKey = event.modifierFlags.intersection(.deviceIndependentFlagsMask) == []
-                let onlyShift = event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .shift
-
-                // "?" (Shift-/) opens contextual help. Mirrors "/"'s
-                // empty-field carveout: fires when nothing has focus
-                // OR when the focused field is empty. Mid-text "?"
-                // keeps its literal meaning so users can include
-                // question marks in queries. The carveout matters in
-                // particular for the list-filter field, which is
-                // usually focused with empty text right after launch,
-                // and where a typed "?" otherwise reaches the CLI's
-                // FTS5 query and trips a syntax error.
-                if withModifiers == "?" || (chars == "/" && onlyShift) {
-                    if !Self.isTextFieldActive(for: event) || Self.isFocusedFieldEmpty(for: event) {
-                        if let onHelp = self.onHelp {
-                            DispatchQueue.main.async { onHelp() }
-                            return nil
-                        }
-                    }
-                }
-
-                // "/" without modifiers (and not in a non-empty text
-                // field). Check the event's own window so typing in
-                // sheets/popovers doesn't get hijacked when the main
-                // window has no focused field. We allow `/` to fire
-                // global search even when a text field has focus IF
-                // that field is empty — this catches the common
-                // first-load case where the list filter field has
-                // initial focus and the user types `/` expecting to
-                // open global search. Mid-text `/` keeps its literal
-                // meaning so users can include slashes in queries.
-                if chars == "/" && plainKey {
-                    if !Self.isTextFieldActive(for: event) || Self.isFocusedFieldEmpty(for: event) {
-                        if let onSearch = self.onSearch {
-                            DispatchQueue.main.async { onSearch() }
-                            return nil
-                        }
-                    }
-                }
-
-                // Cmd+F
-                if chars == "f" && event.modifierFlags.contains(.command) {
-                    if let onSearch = self.onSearch {
-                        DispatchQueue.main.async { onSearch() }
-                        return nil
-                    }
-                }
-
-                return event
+    @ViewBuilder
+    private var actionToolbarItems: some View {
+        if shouldShowAddItemButton {
+            Button {
+                showAddItemSheet = true
+            } label: {
+                Label("Add", systemImage: "plus")
             }
+            .help("Add URL, File, or Snippet (A)")
+            .keyboardShortcut("a", modifiers: [])
+            .focusable(false)
         }
 
-        override func removeFromSuperview() {
-            if let monitor {
-                NSEvent.removeMonitor(monitor)
+        Button {
+            Task {
+                NotificationCenter.default.post(name: .stashOpenFetchURL, object: nil)
             }
-            monitor = nil
-            super.removeFromSuperview()
+        } label: {
+            Label("Fetch from URL", systemImage: "link.badge.plus")
         }
+        .help("Fetch all images/videos from a URL")
+        .focusable(false)
 
-        private static func isTextFieldActive(for event: NSEvent) -> Bool {
-            let responder = event.window?.firstResponder ?? NSApp.keyWindow?.firstResponder
-            return responder is NSTextView || responder is NSTextField
+        Button {
+            store.loadAll()
+        } label: {
+            Label("Refresh", systemImage: "arrow.clockwise")
         }
+        .help("Refresh (R)")
+        .keyboardShortcut("r", modifiers: .command)
+        .focusable(false)
+    }
 
-        /// True when the focused text field (if any) currently has no
-        /// text. Used to let `/` open global search when the list
-        /// filter field has initial focus on app launch — the user
-        /// hasn't started typing a query, so `/` should mean "open
-        /// global search" rather than "literal slash."
-        private static func isFocusedFieldEmpty(for event: NSEvent) -> Bool {
-            let responder = event.window?.firstResponder ?? NSApp.keyWindow?.firstResponder
-            if let tv = responder as? NSTextView {
-                return tv.string.isEmpty
-            }
-            if let tf = responder as? NSTextField {
-                return tf.stringValue.isEmpty
-            }
-            // Field editor case — NSTextView whose delegate is the
-            // owning NSTextField. Check the field's value.
-            if let editor = responder as? NSText,
-               let field = editor.delegate as? NSTextField {
-                return field.stringValue.isEmpty
-            }
-            return false
-        }
+    private func openHelpForCurrentContext() {
+        openWindow(id: "help", value: helpTopic(for: store.navigation))
     }
 }

@@ -18,7 +18,8 @@ struct GeminiProvider: AIProvider {
     var keyURL: URL { URL(string: "https://aistudio.google.com/app/apikey")! }
     var defaultPrompt: String { AIPrompts.defaultIdentify }
 
-    var model: String = "gemini-1.5-flash"
+    var model: String = "gemini-2.5-flash"
+    var timeout: TimeInterval { 30.0 }
     var urlSession: URLSession = .shared
 
     enum GeminiError: LocalizedError {
@@ -51,27 +52,27 @@ struct GeminiProvider: AIProvider {
         _ = try await postGenerate(apiKey: apiKey, body: body)
     }
 
-    /// Send the image bytes + prompt, return parsed Title / Notes.
-    /// When `images` has more than one entry the prompt is prefixed
+    /// Send the media bytes + prompt, return parsed Title / Notes.
+    /// When `media` has more than one entry the prompt is prefixed
     /// with a multi-image hint so the model treats them as one
     /// subject. Single-image requests keep the original prompt.
     func identify(
         apiKey: String,
-        images: [AIImage],
+        media: [AIMedia],
         promptText: String
     ) async throws -> AIIdentifyResult {
-        guard !images.isEmpty else { throw GeminiError.emptyResponse }
+        guard !media.isEmpty else { throw GeminiError.emptyResponse }
         struct IdBody: Encodable { let contents: [Content] }
-        let effectivePrompt = images.count > 1
-            ? AIPrompts.multiImageHint(count: images.count) + promptText
+        let effectivePrompt = media.count > 1
+            ? AIPrompts.multiImageHint(count: media.count) + promptText
             : promptText
         var parts: [Part] = [Part(text: effectivePrompt, inlineData: nil)]
-        for img in images {
+        for m in media {
             parts.append(Part(
                 text: nil,
                 inlineData: InlineData(
-                    mimeType: img.mimeType,
-                    data: img.data.base64EncodedString()
+                    mimeType: m.mimeType,
+                    data: m.data.base64EncodedString()
                 )
             ))
         }
@@ -137,10 +138,11 @@ struct GeminiProvider: AIProvider {
         }
         let urlString =
             "https://generativelanguage.googleapis.com/v1/models/\(model):generateContent?key=\(apiKey)"
+
         guard let url = URL(string: urlString) else {
             throw GeminiError.decode("bad URL")
         }
-        var req = URLRequest(url: url)
+        var req = URLRequest(url: url, timeoutInterval: timeout)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let enc = JSONEncoder()

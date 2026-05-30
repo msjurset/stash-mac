@@ -25,19 +25,62 @@ struct ExtractedTextView: View {
     @State private var popoverVimController = VimModeController()
 
     private var isTruncated: Bool { text.count > 500 }
+    
+    /// Hard cap to prevent rendering massive blobs that could hang or crash the UI.
+    private let maxRenderLength = 100_000
 
     private var displayText: String {
-        (isTruncated && !isExpanded) ? String(text.prefix(500)) + "..." : text
+        if isExpanded {
+            return text.count > maxRenderLength 
+                ? String(text.prefix(maxRenderLength)) + "\n\n[... truncated for performance ...]"
+                : text
+        }
+        return isTruncated ? String(text.prefix(500)) + "..." : text
+    }
+
+    /// Heuristic to detect if the text is likely binary junk (e.g. an MP4 header).
+    private var isLikelyBinary: Bool {
+        let sample = text.prefix(200)
+        let nonPrintableCount = sample.filter {
+            guard let scalar = $0.unicodeScalars.first else { return false }
+            return !scalar.isASCII && !CharacterSet.alphanumerics.contains(scalar) && !CharacterSet.punctuationCharacters.contains(scalar) && !CharacterSet.whitespacesAndNewlines.contains(scalar)
+        }.count
+        return nonPrintableCount > 20
     }
 
     var body: some View {
         DetailSection(title: sectionTitle) {
             VStack(alignment: .leading, spacing: 8) {
+                if isLikelyBinary {
+                    Label("This section contains non-textual data.", systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.bottom, 4)
+                }
+
                 MarkdownText(displayText, isSelectable: true)
                     .padding(10)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(.quaternary)
                     .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .contextMenu {
+                        Button("Copy") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(text, forType: .string)
+                        }
+                        Divider()
+                        Button("Clear Extracted Text", role: .destructive) {
+                            store.editItem(
+                                id: itemID,
+                                title: nil,
+                                note: nil,
+                                extractedText: "",
+                                addTags: [],
+                                removeTags: [],
+                                collection: nil
+                            )
+                        }
+                    }
                     // NSEvent monitor handles both single- and double-click
                     // *before* AppKit, so selectable text doesn't swallow
                     // them for cursor-positioning or word-selection while
@@ -55,12 +98,20 @@ struct ExtractedTextView: View {
                     }
 
                 if isTruncated {
-                    Button(isExpanded ? "Show Less" : "Show More") {
-                        withAnimation { isExpanded.toggle() }
+                    HStack(spacing: 12) {
+                        Button(isExpanded ? "Show Less" : "Show More") {
+                            withAnimation { isExpanded.toggle() }
+                        }
+                        .font(.caption)
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.blue)
+                        
+                        if text.count > maxRenderLength && isExpanded {
+                            Text("(\(text.count) chars total)")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
                     }
-                    .font(.caption)
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.blue)
                 }
             }
         }

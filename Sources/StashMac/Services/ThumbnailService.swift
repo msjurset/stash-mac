@@ -148,6 +148,7 @@ final class ThumbnailService {
             // they load through CGImageSource, because the saved
             // thumbnail no longer carries an orientation tag.
             return ThumbnailCache.loadOriented(from: url)
+                ?? PlaceholderGenerator.generatePlaceholder(for: item)
 
         case .file:
             guard let storePath = item.storePath,
@@ -175,13 +176,25 @@ final class ThumbnailService {
 
             if let mime = item.mimeType {
                 if mime.hasPrefix("video/") {
-                    return await videoFrame(at: target)
+                    if let frame = await videoFrame(at: target) {
+                        return frame
+                    }
                 }
                 if mime.hasPrefix("audio/") {
-                    return await audioArtwork(at: target)
+                    if let artwork = await audioArtwork(at: target) {
+                        return artwork
+                    }
+                    if let waveform = await WaveformGenerator.generateWaveform(at: target) {
+                        return waveform
+                    }
                 }
             }
-            return await quickLookThumbnail(at: target)
+            
+            if let ql = await quickLookThumbnail(at: target) {
+                return ql
+            }
+            
+            return PlaceholderGenerator.generatePlaceholder(for: item)
 
         case .url, .snippet, .email:
             return nil

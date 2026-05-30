@@ -29,6 +29,7 @@ struct VimActivateButton: View {
                     .clipShape(Capsule())
             }
             .buttonStyle(.plain)
+            .focusable(false)
             .help("Activate vim mode (same as typing /vim)")
         }
     }
@@ -63,6 +64,7 @@ struct VimModeBadge: View {
                     .clipShape(Capsule())
                 }
                 .buttonStyle(.plain)
+                .focusable(false)
                 .help("Vim mode — click to exit, or type :q / :vim / :wq in normal mode.")
 
                 Button(action: { controller.showCheatsheet.toggle() }) {
@@ -71,6 +73,7 @@ struct VimModeBadge: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
+                .focusable(false)
                 .help("Vim cheatsheet")
                 .popover(isPresented: $controller.showCheatsheet, arrowEdge: .bottom) {
                     VimCheatsheetView()
@@ -110,6 +113,7 @@ struct VimStatusFooter: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
+                .focusable(false)
                 .help("Vim cheatsheet")
                 .popover(isPresented: $controller.showCheatsheet, arrowEdge: .bottom) {
                     VimCheatsheetView()
@@ -120,6 +124,7 @@ struct VimStatusFooter: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
+                .focusable(false)
                 .help("Exit vim mode")
             }
             .padding(.horizontal, 8)

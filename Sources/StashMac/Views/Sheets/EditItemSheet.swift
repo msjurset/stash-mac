@@ -477,22 +477,22 @@ struct EditItemSheet: View {
             while attempt <= backoffs.count {
                 do {
                     let resolved = try await AIKeyResolver.resolve(key)
-                    var images: [AIImage] = []
+                    var media: [AIMedia] = []
                     let primary = try Data(contentsOf: fileURL)
-                    images.append(AIImage(data: primary, mimeType: mime))
+                    media.append(AIMedia(data: primary, mimeType: mime))
                     for (u, m) in attachedURLs {
                         let data = try Data(contentsOf: u)
-                        images.append(AIImage(data: data, mimeType: m))
+                        media.append(AIMedia(data: data, mimeType: m))
                     }
-                    // Single-image identify: send the original at full
-                    // quality. Multi-image: downscale each so the
+                    // Single-media identify: send the original at full
+                    // quality. Multi-media: downscale each so the
                     // bundle fits comfortably in the request budget.
-                    let sendImages = images.count > 1
-                        ? images.map { downscaleForIdentify($0) }
-                        : images
+                    let sendMedia = media.count > 1
+                        ? media.map { downscaleForIdentify($0) }
+                        : media
                     result = try await provider.identify(
                         apiKey: resolved,
-                        images: sendImages,
+                        media: sendMedia,
                         promptText: prompt
                     )
                     lastError = nil
@@ -614,12 +614,12 @@ struct EditItemSheet: View {
                 // and stripEntries match the original carousel order;
                 // index 0 = original primary. Anything else is an
                 // attachment we want to lift to primary now.
-                if activeStripIndex != 0,
+                if activeStripIndex >= 0,
                    activeStripIndex < stripEntries.count,
                    let attachIdx = stripEntries[activeStripIndex].originalAttachmentIndex {
-                    try await StashCLI.shared.promoteFile(itemID: item.id, index: attachIdx)
+                    _ = try await StashCLI.shared.promoteFile(itemID: item.id, index: attachIdx)
                 }
-                
+
                 await MainActor.run {
                     dismiss()
                 }

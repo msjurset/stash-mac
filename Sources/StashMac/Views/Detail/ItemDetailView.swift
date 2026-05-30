@@ -400,7 +400,7 @@ struct ItemDetailView: View {
                     ArchiveContentsView(fileURL: fileURL, mimeType: mime)
                 }
 
-                // Extracted text (skip for archives — tree view is shown instead)
+                // Extracted text (skip for archives — tree view or nothing is shown instead)
                 if let text = item.extractedText, !text.isEmpty,
                    !(item.mimeType.map(isArchiveMIME) ?? false) {
                     VStack(alignment: .leading, spacing: 0) {
@@ -422,18 +422,18 @@ struct ItemDetailView: View {
                         if item.type == .email {
                             EmailContentView(text: text)
                         } else {
-                            // Audio file items (voice memos, podcast
+                            // Audio and Video file items (voice memos, podcast
                             // clips, etc.) get a "Transcript" heading
                             // since the text is ASR output, not OCR
                             // or page-content. Everything else stays
                             // generic "Extracted Text".
-                            let isAudio = item.type == .file &&
-                                (item.mimeType?.hasPrefix("audio/") ?? false)
+                            let isMedia = item.type == .file &&
+                                (item.mimeType?.hasPrefix("audio/") == true || item.mimeType?.hasPrefix("video/") == true)
                             ExtractedTextView(
                                 text: text,
                                 itemID: item.id,
-                                sectionTitle: isAudio ? "Transcript" : "Extracted Text",
-                                editorTitle: isAudio ? "Edit Transcript" : "Edit Extracted Text",
+                                sectionTitle: isMedia ? "Transcript" : "Extracted Text",
+                                editorTitle: isMedia ? "Edit Transcript" : "Edit Extracted Text",
                             )
                         }
                     }

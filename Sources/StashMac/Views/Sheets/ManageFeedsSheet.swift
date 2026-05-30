@@ -27,6 +27,7 @@ struct ManageFeedsSheet: View {
                     Image(systemName: "arrow.clockwise")
                 }
                 .buttonStyle(.borderless)
+                .focusable(false)
                 .help("Refresh list")
                 Button("Done") { dismiss() }
                     .keyboardShortcut(.cancelAction)

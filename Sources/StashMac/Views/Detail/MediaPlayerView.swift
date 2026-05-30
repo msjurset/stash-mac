@@ -268,15 +268,18 @@ struct DirectMediaPlayer: View {
         }
         .task(id: url) {
             status = .checking
-            let asset = AVURLAsset(url: url, options: assetOptions())
-            let playable = (try? await asset.load(.isPlayable)) ?? false
+            let currentUrl = url
+            let currentMime = mimeHint
+            let playable = await Task.detached {
+                var opts: [String: Any]? = nil
+                if let mime = currentMime {
+                    opts = ["AVURLAssetOutOfBandMIMETypeKey": mime]
+                }
+                let asset = AVURLAsset(url: currentUrl, options: opts)
+                return (try? await asset.load(.isPlayable)) ?? false
+            }.value
             status = playable ? .playable : .notPlayable
         }
-    }
-
-    private func assetOptions() -> [String: Any]? {
-        guard let mimeHint else { return nil }
-        return ["AVURLAssetOutOfBandMIMETypeKey": mimeHint]
     }
 }
 
@@ -301,25 +304,44 @@ private struct AVPlayerNSView: NSViewRepresentable {
         // padding on either side of the audio control bar.
         view.wantsLayer = true
         view.layer?.backgroundColor = NSColor.clear.cgColor
-        view.player = AVPlayer(playerItem: makeItem())
+        view.player = AVPlayer()
+        loadItem(into: view.player!, coordinator: context.coordinator)
         return view
     }
 
     func updateNSView(_ nsView: AVPlayerView, context: Context) {
-        if let current = nsView.player?.currentItem,
-           let asset = current.asset as? AVURLAsset,
-           asset.url == url {
-            return
+        if context.coordinator.url != url {
+            context.coordinator.url = url
+            loadItem(into: nsView.player!, coordinator: context.coordinator)
         }
-        nsView.player?.replaceCurrentItem(with: makeItem())
     }
 
-    private func makeItem() -> AVPlayerItem {
-        let opts: [String: Any]? = mimeHint.map {
-            ["AVURLAssetOutOfBandMIMETypeKey": $0]
+    func makeCoordinator() -> Coordinator { Coordinator(url: url) }
+    
+    final class Coordinator {
+        var url: URL
+        init(url: URL) { self.url = url }
+    }
+
+    private func loadItem(into player: AVPlayer, coordinator: Coordinator) {
+        let currentUrl = url
+        let currentMime = mimeHint
+        Task {
+            let item = await Task.detached {
+                let opts: [String: Any]? = currentMime.map {
+                    ["AVURLAssetOutOfBandMIMETypeKey": $0]
+                }
+                let asset = AVURLAsset(url: currentUrl, options: opts)
+                return AVPlayerItem(asset: asset)
+            }.value
+            
+            await MainActor.run {
+                // Ensure the user hasn't navigated away or changed the url
+                // before we replace the item.
+                guard coordinator.url == currentUrl else { return }
+                player.replaceCurrentItem(with: item)
+            }
         }
-        let asset = AVURLAsset(url: url, options: opts)
-        return AVPlayerItem(asset: asset)
     }
 }
 
@@ -401,15 +423,21 @@ private struct CustomAudioPlayer: View {
     // MARK: - Lifecycle
 
     private func loadAndObserve() async {
-        let opts: [String: Any]? = mimeHint.map {
-            ["AVURLAssetOutOfBandMIMETypeKey": $0]
-        }
-        let asset = AVURLAsset(url: url, options: opts)
-        let item = AVPlayerItem(asset: asset)
+        let currentUrl = url
+        let currentMime = mimeHint
+        
+        let (item, duration) = await Task.detached {
+            let opts: [String: Any]? = currentMime.map {
+                ["AVURLAssetOutOfBandMIMETypeKey": $0]
+            }
+            let asset = AVURLAsset(url: currentUrl, options: opts)
+            let playerItem = AVPlayerItem(asset: asset)
+            let dur = (try? await asset.load(.duration))?.seconds ?? 0.0
+            return (playerItem, dur)
+        }.value
+        
         player.replaceCurrentItem(with: item)
-        if let dur = try? await asset.load(.duration) {
-            durationSeconds = max(0, CMTimeGetSeconds(dur))
-        }
+        durationSeconds = max(0, duration)
 
         // 5Hz position tick — fine enough for a scrubber, light
         // enough to not thrash the UI.

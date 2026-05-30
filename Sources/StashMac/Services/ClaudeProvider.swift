@@ -13,6 +13,8 @@ struct ClaudeProvider: AIProvider {
     var keyURL: URL { URL(string: "https://console.anthropic.com/settings/keys")! }
     var defaultPrompt: String { AIPrompts.defaultIdentify }
 
+    var timeout: TimeInterval { 60.0 }
+
     /// Sonnet-class model — vision-capable, well-suited to the
     /// "identify subject" prompt. Cheaper than Opus, more capable
     /// than Haiku for the multi-sentence prose response.
@@ -58,29 +60,30 @@ struct ClaudeProvider: AIProvider {
         _ = try await postMessages(apiKey: apiKey, body: body)
     }
 
-    /// Send the image bytes + prompt, return parsed Title / Notes.
+    /// Send the media bytes + prompt, return parsed Title / Notes.
     /// Multi-image support mirrors the Gemini side: when more than
-    /// one image is sent, prefix the prompt with a hint so Claude
+    /// one media item is sent, prefix the prompt with a hint so Claude
     /// treats them as the same subject from different angles.
     func identify(
         apiKey: String,
-        images: [AIImage],
+        media: [AIMedia],
         promptText: String
     ) async throws -> AIIdentifyResult {
-        guard !images.isEmpty else { throw ClaudeError.emptyResponse }
-        let effectivePrompt = images.count > 1
-            ? AIPrompts.multiImageHint(count: images.count) + promptText
+        guard !media.isEmpty else { throw ClaudeError.emptyResponse }
+        let effectivePrompt = media.count > 1
+            ? AIPrompts.multiImageHint(count: media.count) + promptText
             : promptText
         // Anthropic recommends image-first then text — images get
         // primed before the instruction lands.
         var content: [ContentBlock] = []
-        for img in images {
+        for m in media {
             content.append(.image(
-                mediaType: img.mimeType,
-                data: img.data.base64EncodedString()
+                mediaType: m.mimeType,
+                data: m.data.base64EncodedString()
             ))
         }
         content.append(.text(effectivePrompt))
+
         let body = MessagesBody(
             model: model,
             max_tokens: maxTokens,
@@ -93,13 +96,13 @@ struct ClaudeProvider: AIProvider {
 
     // MARK: - Wire types
 
-    private struct MessagesBody: Encodable {
+    struct MessagesBody: Encodable {
         let model: String
         let max_tokens: Int
         let messages: [Message]
     }
 
-    private struct Message: Encodable {
+    struct Message: Encodable {
         let role: String
         let content: [ContentBlock]
     }
@@ -107,7 +110,7 @@ struct ClaudeProvider: AIProvider {
     /// Content block — Anthropic accepts a polymorphic array with
     /// `type: text` or `type: image`. Encoded manually so the JSON
     /// matches the wire format exactly.
-    private enum ContentBlock: Encodable {
+    enum ContentBlock: Encodable {
         case text(String)
         case image(mediaType: String, data: String)
 
@@ -134,7 +137,7 @@ struct ClaudeProvider: AIProvider {
         }
     }
 
-    private struct MessagesResponse: Decodable {
+    struct MessagesResponse: Decodable {
         let content: [ResponseBlock]?
         struct ResponseBlock: Decodable {
             let type: String
@@ -151,7 +154,7 @@ struct ClaudeProvider: AIProvider {
         guard let url = URL(string: "https://api.anthropic.com/v1/messages") else {
             throw ClaudeError.decode("bad URL")
         }
-        var req = URLRequest(url: url)
+        var req = URLRequest(url: url, timeoutInterval: timeout)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue(apiKey, forHTTPHeaderField: "x-api-key")

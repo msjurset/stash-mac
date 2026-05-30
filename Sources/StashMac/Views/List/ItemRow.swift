@@ -18,6 +18,13 @@ struct ItemRow: View {
 
     private var hasThumbnail: Bool { thumbnailURL() != nil }
 
+    private func thumbnailURL() -> URL? {
+        guard let rel = item.thumbnailPath,
+              let url = FilePathResolver.resolveRelative(rel),
+              FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return url
+    }
+
     var body: some View {
         HStack(spacing: 10) {
             leading
@@ -76,6 +83,9 @@ struct ItemRow: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
+                    Text(item.createdAt, style: .relative)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
                 }
                 
                 if let tags = item.tags, !tags.isEmpty {
@@ -89,11 +99,6 @@ struct ItemRow: View {
             .allowsHitTesting(false)
 
             Spacer()
-
-            Text(item.createdAt, style: .relative)
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-                .allowsHitTesting(false)
         }
         .padding(.vertical, 2)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -145,24 +150,21 @@ struct ItemRow: View {
                 ),
                 arrowEdge: .leading
             ) {
-                popoverContent
+                ItemRowPopover(item: item)
+                    .onTapGesture {
+                        shownThumbnailID = nil
+                    }
             }
     }
+}
 
-    /// Popover layout — sized modestly so it doesn't dominate the
-    /// list. Notes use `.callout` (12pt) for a quieter visual weight
-    /// vs. the title-sized list rows.
-    ///  - **No notes** → image-only, zero padding. Popover hugs the
-    ///    image with the OS's standard chrome.
-    ///  - **With notes** → 260pt-wide popover. Image fills the full
-    ///    width (top edge flush). Notes flow below with 10pt inset.
-    ///    Long notes scroll within a 240pt cap.
-    @ViewBuilder
-    private var popoverContent: some View {
+/// Extracted to ensure image decoding and markdown parsing only happen
+/// when the popover is actually being rendered.
+private struct ItemRowPopover: View {
+    let item: StashItem
+    
+    var body: some View {
         if let url = thumbnailURL(),
-           // ThumbnailCache.loadOriented honors EXIF rotation. Bare
-           // NSImage(contentsOf:) left portrait-shot images sideways
-           // in this hover popover.
            let image = ThumbnailCache.loadOriented(from: url) {
             let trimmedNotes = item.notes?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let hasNotes = !trimmedNotes.isEmpty
@@ -191,10 +193,6 @@ struct ItemRow: View {
                         .aspectRatio(contentMode: .fit)
                         .frame(maxWidth: 360, maxHeight: 360)
                 }
-            }
-            .contentShape(Rectangle())
-            .onTapGesture {
-                shownThumbnailID = nil
             }
         }
     }

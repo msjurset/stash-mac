@@ -45,6 +45,11 @@ protocol AIProvider: Sendable {
     /// first launch and offered as a Reset target.
     var defaultPrompt: String { get }
 
+    /// Network timeout for per-request calls (identify / testKey).
+    /// Used to prevent runaway hangs when the backend or network
+    /// stalls.
+    var timeout: TimeInterval { get }
+
     /// Cheap key-validity probe — implementations should send the
     /// smallest possible request that exercises authentication.
     func testKey(_ apiKey: String) async throws
@@ -56,15 +61,15 @@ protocol AIProvider: Sendable {
     /// embedding all of them in the request body.
     func identify(
         apiKey: String,
-        images: [AIImage],
+        media: [AIMedia],
         promptText: String
     ) async throws -> AIIdentifyResult
 }
 
-/// Single image payload — used by the multi-image identify API.
+/// Single media payload — used by the multi-item identify API.
 /// Plain Data + MIME so both the JPEG-EXIF auto-pull path and the
-/// HEIC/PNG passthrough work without conversion.
-struct AIImage: Sendable {
+/// HEIC/PNG/MP4 passthrough work without conversion.
+struct AIMedia: Sendable {
     var data: Data
     var mimeType: String
 }
@@ -137,6 +142,18 @@ NOTES: <one or two sentences describing the tone, context, or key takeaway of th
 TRANSCRIPT: <the verbatim transcript of every word spoken, preserving natural speech flow and line breaks where they're meaningful>
 
 If the audio is not spoken words (e.g. ambient noise, music, or silence), write TITLE: Audio Capture and describe what you hear in NOTES.
+"""
+
+    static let defaultVideoTranscribe: String = """
+Identify the subject and transcribe any speech in this video.
+
+Respond with exactly these three lines, no preamble, no markdown:
+
+TITLE: <a descriptive title for the video based on its content, maximum 60 characters>
+NOTES: <natural prose, three to six sentences describing the visual subject and context of the video>
+TRANSCRIPT: <the verbatim transcript of every word spoken in the video, preserving natural speech flow and line breaks where they're meaningful. If no words are spoken, write NONE.>
+
+If the video is silent and has no clear subject, write TITLE: Video Capture and describe what you see in NOTES.
 """
 }
 
@@ -230,10 +247,10 @@ import UniformTypeIdentifiers
 /// source (corrupt file, unsupported format) — the worst case is
 /// sending the full bytes.
 func downscaleForIdentify(
-    _ source: AIImage,
+    _ source: AIMedia,
     maxPixelSize: Int = 1024,
     jpegQuality: CGFloat = 0.85
-) -> AIImage {
+) -> AIMedia {
     guard let cgSource = CGImageSourceCreateWithData(source.data as CFData, nil) else {
         return source
     }
@@ -253,7 +270,7 @@ func downscaleForIdentify(
     ]
     CGImageDestinationAddImage(dest, cgImage, destOpts as CFDictionary)
     guard CGImageDestinationFinalize(dest) else { return source }
-    return AIImage(data: outData as Data, mimeType: "image/jpeg")
+    return AIMedia(data: outData as Data, mimeType: "image/jpeg")
 }
 
 // MARK: - Shared response parsing

@@ -107,7 +107,7 @@ struct MultiFilePreview: View {
                             lineWidth: isActive ? 2 : 1)
             )
 
-            if let caption = slot.caption, !caption.isEmpty {
+            if let caption = slot.caption, !caption.isEmpty, caption != item.title {
                 Text(caption)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
