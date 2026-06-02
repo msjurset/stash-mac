@@ -69,6 +69,20 @@ struct MomentsView: View {
                 }
             )
         }
+        .toolbar {
+            ToolbarItem {
+                Button {
+                    Task { await store.loadMoments(scanAll: scanAll, forceReload: true) }
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
+                .help("Scan for moments")
+                .disabled(loading)
+            }
+            ToolbarItem {
+                ContextualHelpButton(topic: .moments, isToolbarItem: true)
+            }
+        }
     }
 
     private var header: some View {

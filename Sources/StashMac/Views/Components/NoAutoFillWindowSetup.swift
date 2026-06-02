@@ -1,5 +1,8 @@
 import AppKit
 import SwiftUI
+import OSLog
+
+private let log = Logger(subsystem: "com.msjurseth.stash", category: "phantom-diagnostics")
 
 /// Once-and-for-all suppression of the empty rounded-rectangle popup
 /// that appears the first time any field-editor or menu surface
@@ -28,14 +31,9 @@ import SwiftUI
 private let sharedNoAutoFillFieldEditor: NSTextView = {
     let editor = NSTextView()
     editor.isFieldEditor = true
-    configureNoAutoFill(editor)
+    editor.disableAutoFeatures()
     return editor
 }()
-
-@MainActor
-private func configureNoAutoFill(_ editor: NSTextView) {
-    NoAutoFillTextField.disableAutoFeatures(on: editor)
-}
 
 /// Forwarding NSObject that wraps an existing NSWindowDelegate and
 /// adds `windowWillReturnFieldEditor`. All other delegate calls are
@@ -69,11 +67,11 @@ final class FieldEditorInterceptor: NSObject, NSWindowDelegate {
     func windowWillReturnFieldEditor(_ sender: NSWindow, to client: Any?) -> Any? {
         let frame = sender.frame
         let level = sender.level
-        print("[PHANTOM] FieldEditorInterceptor.windowWillReturnFieldEditor for window: \"\(sender.title)\" class: \(type(of: sender)) level: \(level.rawValue) frame: \(frame)")
+        log.debug("[PHANTOM] FieldEditorInterceptor.windowWillReturnFieldEditor for window: \"\(sender.title)\" class: \(type(of: sender)) level: \(level.rawValue) frame: \(frame.origin.x),\(frame.origin.y) \(frame.width)x\(frame.height)")
         // Re-apply flags every time AppKit asks for the editor — some of
         // these are reset between editor uses, and Sequoia in particular
         // re-enables `inlinePredictionType` on reuse.
-        configureNoAutoFill(sharedNoAutoFillFieldEditor)
+        sharedNoAutoFillFieldEditor.disableAutoFeatures()
         return sharedNoAutoFillFieldEditor
     }
 }
@@ -93,8 +91,10 @@ func installFieldEditorInterceptor(on window: NSWindow) {
     let currentDelegate = window.delegate as? NSObject
     if let existing = installedInterceptors[key],
        window.delegate === existing {
+        log.debug("[PHANTOM] installFieldEditorInterceptor: already installed on \"\(window.title)\"")
         return
     }
+    log.debug("[PHANTOM] installFieldEditorInterceptor: installing on \"\(window.title)\" (class: \(type(of: window)), level: \(window.level.rawValue), delegate: \(type(of: currentDelegate)))")
     let interceptor = FieldEditorInterceptor(wrapping: currentDelegate)
     installedInterceptors[key] = interceptor
     window.delegate = interceptor
@@ -117,6 +117,7 @@ func installFieldEditorInterceptorsForAllWindows() -> [NSObjectProtocol] {
     ) { notification in
         guard let window = notification.object as? NSWindow else { return }
         MainActor.assumeIsolated {
+            log.debug("[PHANTOM] didBecomeKeyNotification for \"\(window.title)\"")
             installFieldEditorInterceptor(on: window)
         }
     }
@@ -127,6 +128,7 @@ func installFieldEditorInterceptorsForAllWindows() -> [NSObjectProtocol] {
         queue: .main
     ) { notification in
         guard let window = notification.object as? NSWindow else { return }
+        // didUpdate is very frequent, only log if we're actually installing/checking
         MainActor.assumeIsolated {
             installFieldEditorInterceptor(on: window)
         }
@@ -142,6 +144,7 @@ func installFieldEditorInterceptorsForAllWindows() -> [NSObjectProtocol] {
     _ = NSEvent.addLocalMonitorForEvents(
         matching: [.leftMouseDown, .keyDown]
     ) { event in
+        log.debug("[PHANTOM] NSEvent monitor triggered (\(event.type.rawValue))")
         MainActor.assumeIsolated {
             for window in NSApp.windows {
                 installFieldEditorInterceptor(on: window)

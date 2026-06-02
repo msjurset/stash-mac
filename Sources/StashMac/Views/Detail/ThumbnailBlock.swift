@@ -71,16 +71,24 @@ struct ThumbnailTile: View {
 
     @ViewBuilder
     private var base: some View {
-        if let thumb = loadedThumb {
-            Image(nsImage: thumb)
-                .resizable()
-                .aspectRatio(contentMode: .fill)
-                .frame(width: 128, height: 128)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-        } else {
-            TypeStyledPlaceholder(item: item)
-                .frame(width: 128, height: 128)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+        ZStack {
+            if let thumb = loadedThumb {
+                Image(nsImage: thumb)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 128, height: 128)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+            } else {
+                TypeStyledPlaceholder(item: item)
+                    .frame(width: 128, height: 128)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+            }
+            
+            if store.generatingThumbnailIDs.contains(item.id) {
+                Color.black.opacity(0.4)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                ProgressView()
+            }
         }
     }
 

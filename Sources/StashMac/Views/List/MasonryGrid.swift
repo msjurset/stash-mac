@@ -75,7 +75,7 @@ struct MasonryGrid: View {
                 let buckets = distribute(displayItems, columns: columnCount)
                 HStack(alignment: .top, spacing: 14) {
                     ForEach(0..<columnCount, id: \.self) { idx in
-                        VStack(alignment: .leading, spacing: 14) {
+                        LazyVStack(alignment: .leading, spacing: 14) {
                             ForEach(buckets[idx]) { entry in
                                 tile(for: entry)
                             }

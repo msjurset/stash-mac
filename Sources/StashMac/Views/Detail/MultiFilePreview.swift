@@ -1,6 +1,9 @@
 import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
+import OSLog
+
+private let logger = Logger(subsystem: "com.msjurseth.stash", category: "preview")
 
 /// Carousel/filmstrip preview for items that carry multiple attached
 /// photos beyond the primary `store_path` (e.g. mushroom top/side/
@@ -18,6 +21,8 @@ struct MultiFilePreview: View {
     /// files in `item.files` order. Resets to 0 when the underlying
     /// item changes so a fresh selection always opens on the cover.
     @State private var selected: Int = 0
+    @State private var editingCaptionIndex: Int?
+    @State private var draftCaption: String = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -106,20 +111,49 @@ struct MultiFilePreview: View {
                     .stroke(isActive ? Color.accentColor : Color.secondary.opacity(0.3),
                             lineWidth: isActive ? 2 : 1)
             )
+            .overlay(alignment: .topTrailing) {
+                if slot.isPrimary {
+                    Image(systemName: "star.fill")
+                        .font(.system(size: 7))
+                        .foregroundStyle(.white)
+                        .padding(3)
+                        .background(.black.opacity(0.6))
+                        .clipShape(Circle())
+                        .padding(2)
+                        .help("Primary Cover")
+                }
+            }
+            .onTapGesture { selected = index }
 
-            if let caption = slot.caption, !caption.isEmpty, caption != item.title {
-                Text(caption)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+            if editingCaptionIndex == index {
+                InlineEditField(
+                    text: $draftCaption,
+                    placeholder: "caption…",
+                    font: .preferredFont(forTextStyle: .caption2),
+                    onCommit: {
+                        store.editFileCaption(in: item.id, index: slot.attachmentIndex ?? 0, caption: draftCaption)
+                        editingCaptionIndex = nil
+                    },
+                    onCancel: {
+                        editingCaptionIndex = nil
+                    }
+                )
+                .frame(width: 80, height: 24)
+            } else {
+                let textValue = (slot.caption?.isEmpty == false) ? slot.caption! : "add caption"
+                Text(textValue)
+                    .font(.system(size: 10))
+                    .foregroundStyle(slot.caption?.isEmpty == false ? .secondary : .quaternary)
                     .lineLimit(1)
-                    .frame(width: 64)
-            } else if slot.isPrimary {
-                Text("cover")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    .truncationMode(.tail)
+                    .frame(width: 64, height: 18)
+                    .help("Double-click to edit caption")
+                    .onTapGesture(count: 2) {
+                        draftCaption = slot.caption ?? ""
+                        editingCaptionIndex = index
+                    }
             }
         }
-        .onTapGesture { selected = index }
         .contextMenu { slotMenu(slot: slot, index: index) }
     }
 
@@ -177,7 +211,7 @@ struct MultiFilePreview: View {
                 isPrimary: true,
                 attachmentIndex: nil,
                 url: FilePathResolver.resolve(storePath: sp),
-                caption: nil
+                caption: item.caption
             ))
         }
         if let files = item.files {

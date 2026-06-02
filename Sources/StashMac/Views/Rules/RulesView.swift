@@ -52,8 +52,7 @@ struct RulesView: View {
                 } label: {
                     Label("Suggest", systemImage: "sparkles")
                 }
-                .help(suggestHelpText)
-                .disabled(!RuleSuggestionService.shared.isAvailable)
+                .help("Analyze recently captured items and suggest new rules")
             }
             ToolbarItem {
                 Button {
@@ -63,6 +62,9 @@ struct RulesView: View {
                 }
                 .help("Reload rules from ~/.stash/rules.yaml")
                 .disabled(store.rulesLoading)
+            }
+            ToolbarItem {
+                ContextualHelpButton(topic: .rules, isToolbarItem: true)
             }
         }
         .sheet(isPresented: $suggestSheetPresented) {

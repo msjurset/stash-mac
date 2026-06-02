@@ -8,6 +8,7 @@ import AppKit
 final class TagSuggestionState {
     var matches: [StashTag] = []
     var activeIndex = 0
+    var suggestionTask: Task<Void, Never>?
     /// Returns `true` if the event was consumed.
     var onKey: ((SuggestKey) -> Bool)?
     /// True while the items-list search FilterField is the first
@@ -95,6 +96,7 @@ struct ItemListView: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
             .background(.bar)
+            .helpAnchor(.searchBar)
 
             // Type filter chips. Replaces the per-type sidebar entries
             // we had before — discoverable in the items pane itself.
@@ -104,6 +106,7 @@ struct ItemListView: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
                 .background(.bar)
+                .helpAnchor(.filterBar)
 
             Divider()
 
@@ -166,13 +169,21 @@ struct ItemListView: View {
             // The list/grid toggle still works as an escape hatch.
             if isCollectionNavigation && store.viewMode == .grid {
                 masonryView
+                    .helpAnchor(.navigationList)
             } else if store.viewMode == .grid {
                 gridView
+                    .helpAnchor(.navigationList)
             } else {
                 listView
+                    .helpAnchor(.navigationList)
             }
         }
         .onKeyPress(.space) {
+            // Ignore spacebar for QuickLook if a text field is focused (typing).
+            if let firstResponder = NSApp.keyWindow?.firstResponder,
+               (firstResponder is NSTextView || firstResponder is NSTextField) {
+                return .ignored
+            }
             let targets = quickLookTargets()
             if targets.isEmpty { return .ignored }
             QuickLookPreviewer.shared.show(items: targets)
@@ -243,11 +254,6 @@ struct ItemListView: View {
         .overlay {
             if store.isLoading && store.items.isEmpty {
                 ProgressView()
-            }
-        }
-        .toolbar {
-            ToolbarItem {
-                ContextualHelpButton(topic: .searching)
             }
         }
         .onAppear { store.installItemDragMonitor() }
@@ -326,7 +332,6 @@ struct ItemListView: View {
             .help("Sort: \(store.sortMode.rawValue)")
 
             Button {
-
                 store.toggleViewMode()
             } label: {
                 Image(systemName: store.viewMode == .grid
@@ -338,6 +343,9 @@ struct ItemListView: View {
             .buttonStyle(.plain)
             .focusable(false)
             .help(store.viewMode == .grid ? "Switch to list" : "Switch to grid")
+            
+            ContextualHelpButton(topic: .searching)
+                .font(.caption2)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
@@ -521,7 +529,7 @@ struct ItemListView: View {
             // and refreshing. We don't change `store.navigation` because
             // the user is still in `.allItems`; the chip just narrows it.
             store.filterType = value
-            store.refresh()
+            store.debouncedRefresh()
         } label: {
             HStack(spacing: 4) {
                 Image(systemName: icon)
@@ -555,35 +563,55 @@ struct ItemListView: View {
     /// The tag token currently being edited (the last `tag:...` at the end of
     /// the query) does NOT count as "used" — it should still suggest itself.
     private func recomputeSuggestions() {
+        state.suggestionTask?.cancel()
+
         let query = store.searchQuery
-        guard let match = query.range(of: #"(?:^|\s)[!^-]?tag:[^\s]*$"#, options: .regularExpression) else {
+        // Cheap synchronous check: if not potentially in a tag context, clear immediately
+        if !query.contains("tag:") {
             state.matches = []
             state.activeIndex = 0
             return
         }
-        let token = query[match].trimmingCharacters(in: .whitespaces)
-        guard let colonIdx = token.firstIndex(of: ":") else {
-            state.matches = []
-            state.activeIndex = 0
-            return
-        }
-        let partial = String(token[token.index(after: colonIdx)...]).lowercased()
 
-        // Already-committed tag tokens, excluding the one being edited at cursor.
-        var existing = Set(
-            query.matches(of: /[!^-]?tag:(\S+)/).map { String($0.output.1).lowercased() }
-        )
-        if !partial.isEmpty {
-            existing.remove(partial)
-        }
+        state.suggestionTask = Task {
+            // Short debounce
+            try? await Task.sleep(for: .milliseconds(50))
+            guard !Task.isCancelled else { return }
 
-        state.matches = store.tags
-            .filter { tag in
-                let lower = tag.name.lowercased()
-                let matches = partial.isEmpty || lower.contains(partial)
-                return matches && !existing.contains(lower)
+            guard let match = query.range(of: #"(?:^|\s)[!^-]?tag:[^\s]*$"#, options: .regularExpression) else {
+                await MainActor.run {
+                    state.matches = []
+                    state.activeIndex = 0
+                }
+                return
             }
-        state.activeIndex = 0
+            let token = query[match].trimmingCharacters(in: .whitespaces)
+            guard let colonIdx = token.firstIndex(of: ":") else {
+                await MainActor.run {
+                    state.matches = []
+                    state.activeIndex = 0
+                }
+                return
+            }
+            let partial = String(token[token.index(after: colonIdx)...]).lowercased()
+
+            // Already-committed tag tokens
+            let existing = Set(
+                query.matches(of: /[!^-]?tag:(\S+)/).map { String($0.output.1).lowercased() }
+            )
+            
+            let matches = store.tags
+                .filter { tag in
+                    let lower = tag.name.lowercased()
+                    let matches = partial.isEmpty || lower.contains(partial)
+                    return matches && !existing.contains(lower)
+                }
+            
+            await MainActor.run {
+                state.matches = matches
+                state.activeIndex = 0
+            }
+        }
     }
 
     /// Tab-opens-dropdown per the rule.
@@ -943,8 +971,17 @@ struct ItemListView: View {
             }
         case .image, .file:
             Divider()
-            Button(item.thumbnailPath == nil ? "Generate Thumbnail" : "Regenerate Thumbnail") {
-                store.generateThumbnail(for: item)
+            if store.generatingThumbnailIDs.contains(item.id) {
+                Text("Generating...")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 10)
+            } else {
+                Button(item.thumbnailPath == nil ? "Generate Thumbnail" : "Regenerate Thumbnail") {
+                    Task {
+                        try? await store.generateThumbnailAwaitable(for: item)
+                    }
+                }
             }
         case .snippet, .email:
             EmptyView()

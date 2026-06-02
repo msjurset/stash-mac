@@ -79,8 +79,16 @@ struct AddFeedSheet: View {
                 }
                 LabeledContent("Poll every") {
                     HStack {
-                        TextField("", value: $intervalMinutes, format: .number)
-                            .frame(width: 80)
+                        FilterField(
+                            placeholder: "360",
+                            text: Binding(
+                                get: { String(intervalMinutes) },
+                                set: { intervalMinutes = Int($0) ?? 360 }
+                            ),
+                            isBordered: true,
+                            backgroundColor: .textBackgroundColor
+                        )
+                        .frame(width: 80, height: 22)
                         Text("minutes").foregroundStyle(.secondary)
                     }
                 }

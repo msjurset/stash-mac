@@ -91,6 +91,7 @@ struct StashMacApp: App {
     @State private var clipboardMonitor = ClipboardMonitor()
     @State private var selectionGrabber = SelectionGrabber()
     @State private var aiPrefs = AIPrefsStore()
+    @State private var helpModel = HelpOverlayModel()
     @Environment(\.openWindow) private var openWindow
 
     /// Read from the same `@AppStorage` key the Appearance settings
@@ -101,21 +102,41 @@ struct StashMacApp: App {
 
     var body: some Scene {
         WindowGroup(id: "main") {
-            ContentView()
-                .environment(store)
-                .environment(aiPrefs)
-                .preferredColorScheme(appTheme.colorScheme)
-                .overlay(alignment: .top) { ToastOverlay() }
+            ZStack {
+                // 1. Root host for the coordinate space - must fill the whole window
+                Color.clear
+                    .ignoresSafeArea()
+                    .coordinateSpace(name: "window")
+                
+                // 2. The main app content - respects safe areas (toolbar, etc.)
+                ContentView()
+                    .environment(store)
+                    .environment(aiPrefs)
+                    .environment(helpModel)
+                    .preferredColorScheme(appTheme.colorScheme)
+                    .disabled(helpModel.isActive)
+                
+                // 3. The Help Overlay - covers everything including the toolbar
+                if helpModel.isActive {
+                    HelpOverlayView()
+                        .environment(helpModel)
+                        .ignoresSafeArea()
+                        .zIndex(100)
+                }
+            }
+            .overlay(alignment: .top) { ToastOverlay() }
         }
         .defaultSize(width: 1100, height: 700)
         .commands {
             CommandGroup(replacing: .help) {
+                Button("Interactive Help") {
+                    helpModel.isActive.toggle()
+                }
+                .keyboardShortcut("/", modifiers: [.command, .shift])
+
                 Button("Stash Help") {
                     openWindow(id: "help")
                 }
-                // No default shortcut — ⌘? is reserved for homebar in this
-                // user's setup. Rebind via System Settings → Keyboard →
-                // App Shortcuts if you want a hotkey for this menu item.
             }
             // File ▸ Import Archive… — pairs with the right-click
             // export surfaces on selections / tags / collections.
@@ -155,6 +176,7 @@ struct StashMacApp: App {
         // menu-item path passes nil and lands on Getting Started.
         WindowGroup("Stash Help", id: "help", for: HelpTopic.self) { $topic in
             HelpView(initialTopic: topic ?? .gettingStarted)
+                .environment(helpModel)
                 .preferredColorScheme(appTheme.colorScheme)
         }
         .defaultSize(width: 800, height: 550)
@@ -165,6 +187,7 @@ struct StashMacApp: App {
             SettingsView()
                 .environment(store)
                 .environment(aiPrefs)
+                .environment(helpModel)
                 .preferredColorScheme(appTheme.colorScheme)
         }
 

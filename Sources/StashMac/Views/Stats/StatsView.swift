@@ -29,6 +29,9 @@ struct StatsView: View {
                 }
                 .help("Refresh stats")
             }
+            ToolbarItem {
+                ContextualHelpButton(topic: .statsAndCheck, isToolbarItem: true)
+            }
         }
     }
 

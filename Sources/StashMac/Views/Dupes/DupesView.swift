@@ -86,6 +86,9 @@ struct DupesView: View {
                 .help("Scan for duplicates")
                 .disabled(store.isDupeRunning)
             }
+            ToolbarItem {
+                ContextualHelpButton(topic: .duplicates, isToolbarItem: true)
+            }
         }
         .alert("Delete Item", isPresented: .init(
             get: { confirmDeleteID != nil },

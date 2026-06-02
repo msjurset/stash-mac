@@ -59,7 +59,8 @@ actor StashCLI {
         collection: String? = nil,
         archived: Bool = false,
         limit: Int = 50,
-        regex: String? = nil
+        regex: String? = nil,
+        semantic: Bool = false
     ) async throws -> [StashItem] {
         // The query goes after `--` so cobra stops walking subcommands —
         // otherwise queries like "delete", "save", "list", or "run"
@@ -78,6 +79,9 @@ actor StashCLI {
         }
         if archived {
             args += ["--archived"]
+        }
+        if semantic {
+            args += ["--semantic"]
         }
         if let regex, !regex.isEmpty {
             args += ["--regex", regex]
@@ -321,6 +325,12 @@ actor StashCLI {
     }
 
     // MARK: - Multi-file items (attach / detach / reorder / merge)
+
+    /// Edit the caption of an attached file (index > 0) or the primary file (index = 0).
+    func editFileCaption(itemID: String, index: Int, caption: String) async throws -> StashItem {
+        _ = try await captureOutput(args: ["edit-file", itemID, "\(index)", "--caption", caption])
+        return try await captureJSON(args: ["show", itemID, "--json"])
+    }
 
     /// Attach a local file as an additional photo on an existing
     /// item. Drives `stash attach`. Returns the refreshed item with

@@ -1,6 +1,9 @@
 import SwiftUI
 
 struct HelpView: View {
+    @Environment(HelpOverlayModel.self) private var helpModel
+    @Environment(\.dismiss) private var dismiss
+    
     /// Initial topic to land on when the window opens. Defaults to
     /// Getting Started so the menu-item path (no context) lands on
     /// a sensible introduction; the contextual `?` keyboard shortcut
@@ -90,86 +93,67 @@ struct HelpDetailView: View {
                 .font(.body)
                 .lineSpacing(4)
 
+        case .bullet(let items):
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(items, id: \.self) { text in
+                    HStack(alignment: .top, spacing: 8) {
+                        Text("•")
+                            .foregroundColor(.secondary)
+                        Text(text)
+                    }
+                }
+            }
+            .font(.body)
+
+        case .numbered(let items):
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(Array(items.enumerated()), id: \.offset) { idx, text in
+                    HStack(alignment: .top, spacing: 8) {
+                        Text("\(idx + 1).")
+                            .foregroundColor(.secondary)
+                            .frame(width: 20, alignment: .trailing)
+                        Text(text)
+                    }
+                }
+            }
+            .font(.body)
+
         case .code(let text):
             Text(text)
                 .font(.system(.body, design: .monospaced))
                 .padding(12)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(.quaternary)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .background(Color.primary.opacity(0.05))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
 
         case .table(let headers, let rows):
-            Grid(alignment: .leading, horizontalSpacing: 20, verticalSpacing: 6) {
-                GridRow {
-                    ForEach(headers, id: \.self) { header in
-                        Text(header)
+            VStack(alignment: .leading, spacing: 0) {
+                // Header
+                HStack(spacing: 0) {
+                    ForEach(headers, id: \.self) { h in
+                        Text(h)
                             .font(.headline)
+                            .padding(8)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
-                Divider()
-                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                    GridRow {
-                        ForEach(Array(row.enumerated()), id: \.offset) { colIdx, cell in
-                            if colIdx == 0 {
-                                Text(cell)
-                                    .font(.system(.body, design: .monospaced))
-                            } else {
-                                Text(cell)
-                                    .font(.body)
-                            }
+                .background(Color.primary.opacity(0.1))
+
+                // Rows
+                ForEach(Array(rows.enumerated()), id: \.offset) { idx, row in
+                    HStack(spacing: 0) {
+                        ForEach(Array(row.enumerated()), id: \.offset) { _, cell in
+                            Text(cell)
+                                .padding(8)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
+                    .background(idx % 2 == 0 ? Color.clear : Color.primary.opacity(0.03))
+                    Divider()
                 }
             }
-            .padding(12)
-            .background(.quaternary.opacity(0.5))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-
-        case .bullet(let items):
-            VStack(alignment: .leading, spacing: 4) {
-                ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-                    HStack(alignment: .top, spacing: 8) {
-                        Text("•")
-                            .foregroundStyle(.secondary)
-                        Text(item)
-                            .font(.body)
-                    }
-                }
-            }
-            .padding(.leading, 4)
-
-        case .numbered(let items):
-            VStack(alignment: .leading, spacing: 4) {
-                ForEach(Array(items.enumerated()), id: \.offset) { idx, item in
-                    HStack(alignment: .top, spacing: 8) {
-                        Text("\(idx + 1).")
-                            .foregroundStyle(.secondary)
-                            .frame(width: 20, alignment: .trailing)
-                        Text(item)
-                            .font(.body)
-                    }
-                }
-            }
-            .padding(.leading, 4)
-        }
-    }
-}
-
-/// Contextual help button with proper macOS styling.
-struct ContextualHelpButton: View {
-    let topic: HelpTopic
-    @State private var showPopover = false
-
-    var body: some View {
-        Button(action: { showPopover.toggle() }) {
-            Image(systemName: "questionmark.circle")
-        }
-        .help("Help: \(topic.rawValue)")
-        .popover(isPresented: $showPopover, arrowEdge: .bottom) {
-            ScrollView {
-                HelpDetailView(topic: topic)
-            }
-            .frame(width: 500, height: 420)
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.primary.opacity(0.1), lineWidth: 1))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
         }
     }
 }

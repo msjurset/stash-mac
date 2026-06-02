@@ -8,6 +8,8 @@ struct SidebarView: View {
     @State private var renamingTag: StashTag?
     @State private var newTagName = ""
     @State private var tagFilter = ""
+    @State private var filteredTags: [StashTag] = []
+    @State private var filterTask: Task<Void, Never>?
     @State private var showCloud = false
     /// Drives the smart-collection sheet. `.create` opens an empty
     /// sheet; `.edit(savedSearch)` pre-populates from the existing
@@ -52,9 +54,28 @@ struct SidebarView: View {
         store.queueItems.count + store.feedCandidates.count + store.resurfaceItems.count
     }
 
-    private var filteredTags: [StashTag] {
-        if tagFilter.isEmpty { return store.tags }
-        return store.tags.filter { $0.name.localizedCaseInsensitiveContains(tagFilter) }
+    private func updateFilteredTags() {
+        filterTask?.cancel()
+        
+        let query = tagFilter
+        let allTags = store.tags
+        
+        if query.isEmpty {
+            filteredTags = allTags
+            return
+        }
+
+        filterTask = Task {
+            // Short debounce for typing
+            try? await Task.sleep(for: .milliseconds(50))
+            guard !Task.isCancelled else { return }
+
+            let filtered = allTags.filter { $0.name.localizedCaseInsensitiveContains(query) }
+            
+            await MainActor.run {
+                filteredTags = filtered
+            }
+        }
     }
 
     var body: some View {
@@ -63,7 +84,7 @@ struct SidebarView: View {
                 // Library — just All Items now. Per-type filtering moved
                 // into a chip bar at the top of ItemListView so the
                 // sidebar isn't 12 rows of clutter.
-                Section("Library") {
+                Section {
                     HStack {
                         Label("Inbox", systemImage: "tray.and.arrow.down")
                         Spacer()
@@ -79,8 +100,16 @@ struct SidebarView: View {
                     .tag(NavigationItem.inbox)
                     Label("All Items", systemImage: "tray.full")
                         .tag(NavigationItem.allItems)
+                    Label("Starred", systemImage: "star")
+                        .tag(NavigationItem.starred)
                     Label("Archive", systemImage: "archivebox")
                         .tag(NavigationItem.archive)
+                } header: {
+                    HStack {
+                        Text("Library")
+                        Spacer()
+                        ContextualHelpButton(topic: .gettingStarted)
+                    }
                 }
                 .opacity(ineligibleSectionOpacity)
 
@@ -128,6 +157,7 @@ struct SidebarView: View {
                 }
             }
             .listStyle(.sidebar)
+            .helpAnchor(.sidebar)
             .navigationTitle("Stash")
             .safeAreaInset(edge: .bottom) {
                 // Gear → Settings (⌘,). Plain bottom-of-sidebar
@@ -160,6 +190,9 @@ struct SidebarView: View {
                     }
                 }
             }
+            .onChange(of: tagFilter) { _, _ in updateFilteredTags() }
+            .onChange(of: store.tags) { _, _ in updateFilteredTags() }
+            .onAppear { updateFilteredTags() }
         }
         .sheet(isPresented: .init(
             get: { renamingTag != nil },

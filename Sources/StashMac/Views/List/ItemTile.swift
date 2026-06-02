@@ -41,6 +41,18 @@ struct ItemTile: View {
             .aspectRatio(1, contentMode: .fit)
             .overlay(thumbnailLayer)
             .overlay(typeBadge, alignment: .topLeading)
+            .overlay(
+                Group {
+                    if let files = item.files, !files.isEmpty {
+                        Image(systemName: "square.on.square.fill")
+                            .font(.body)
+                            .foregroundStyle(.white.opacity(0.8))
+                            .shadow(color: .black.opacity(0.6), radius: 2, x: 0, y: 1)
+                            .padding(8)
+                    }
+                },
+                alignment: .bottomTrailing
+            )
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .overlay(
                 RoundedRectangle(cornerRadius: 8)
@@ -53,10 +65,18 @@ struct ItemTile: View {
 
     @ViewBuilder
     private var thumbnailLayer: some View {
-        AsyncThumbnailImage(
-            relativePath: item.thumbnailPath,
-            fallback: { TypeStyledPlaceholder(item: item) }
-        )
+        ZStack {
+            AsyncThumbnailImage(
+                relativePath: item.thumbnailPath,
+                fallback: { TypeStyledPlaceholder(item: item) }
+            )
+            
+            if store.generatingThumbnailIDs.contains(item.id) {
+                Color.black.opacity(0.4)
+                ProgressView()
+                    .controlSize(.small)
+            }
+        }
     }
 
     private var typeBadge: some View {

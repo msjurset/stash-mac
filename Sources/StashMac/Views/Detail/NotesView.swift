@@ -12,6 +12,7 @@ struct NotesView: View {
     @State private var editedText = ""
     @State private var isShowingAIChat = false
     @State private var aiQuestion = ""
+    @FocusState private var isAIChatFocused: Bool
     @State private var mediaDuration: Double? = nil
 
     private var isTruncated: Bool { text.count > 500 }
@@ -123,6 +124,7 @@ struct NotesView: View {
                                     isShowingAIChat.toggle()
                                     if isShowingAIChat {
                                         store.markSeen(itemID)
+                                        isAIChatFocused = true
                                     }
                                 }
                             }
@@ -152,7 +154,8 @@ struct NotesView: View {
                         .disabled(store.identifyingItemIDs.contains(itemID))
 
                         if isShowingAIChat {
-                            TextField("Ask a follow-up...", text: $aiQuestion)
+                            FilterField(placeholder: "Ask a follow-up...", text: $aiQuestion)
+                                .focused($isAIChatFocused)
                                 .textFieldStyle(.plain)
                                 .font(.system(size: 13))
                                 .onSubmit {

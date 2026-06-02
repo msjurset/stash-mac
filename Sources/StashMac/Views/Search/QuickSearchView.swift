@@ -7,6 +7,7 @@ struct QuickSearchView: View {
     @State private var query = ""
     @State private var results: [StashItem] = []
     @State private var searchTask: Task<Void, Never>?
+    @State private var suggestionTask: Task<Void, Never>?
     @State private var tagMatches: [StashTag] = []
     @State private var tagActiveIndex = 0
     /// Parallel state for `collection:` chip completion. Only one of
@@ -46,6 +47,7 @@ struct QuickSearchView: View {
     @State private var history: [SearchHistoryEntry] = []
     @State private var commandMatches: [GlobalCommand] = []
     @State private var commandActiveIndex = 0
+    @State private var searchError: String?
 
     private let commandRegistry = GlobalCommandRegistry.shared
 
@@ -67,10 +69,12 @@ struct QuickSearchView: View {
             HStack {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
-                TagAwareSearchField(
-                    query: $query,
-                    tagMatches: $tagMatches,
-                    onKey: { handleKey($0) }
+                FilterField(
+                    placeholder: "Search stash... (tag:, collection: to filter)",
+                    text: $query,
+                    autoFocus: true,
+                    onKey: { handleKey($0) },
+                    onBeginEditing: { recomputeSuggestions() }
                 )
                 regexToggle
                 Button("Done") { dismiss() }
@@ -84,6 +88,18 @@ struct QuickSearchView: View {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundStyle(.orange)
                     Text(regexError)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 14)
+                .padding(.bottom, 6)
+            }
+            if let searchError {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .foregroundStyle(.red)
+                    Text(searchError)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -698,77 +714,89 @@ struct QuickSearchView: View {
     // MARK: - Tag suggestions
 
     private func recomputeSuggestions() {
-        // Chip completion is meaningless in regex mode — `tag:` /
-        // `collection:` may be literal substrings of the user's
-        // pattern.
-        if regexMode {
+        suggestionTask?.cancel()
+        
+        // Cheap synchronous check: if not potentially in a chip context, clear immediately
+        // This avoids main-thread lag for normal typing.
+        if regexMode || (!query.contains(":") && !query.hasPrefix("/")) {
             clearChipDropdown()
             return
         }
 
-        // Global commands start with /
-        if query.hasPrefix("/") && !query.contains(" ") {
-            commandMatches = commandRegistry.match(prefix: query)
-            commandActiveIndex = 0
-            tagMatches = []
-            collectionMatches = []
-            return
-        } else {
-            commandMatches = []
-        }
+        suggestionTask = Task {
+            // Short debounce to let fast typing through
+            try? await Task.sleep(for: .milliseconds(50))
+            guard !Task.isCancelled else { return }
 
-        // `collection:` takes precedence over `tag:` only because
-        // the regexes are checked separately; in practice the
-        // cursor can match at most one trailing chip token.
-        if let match = query.range(
-            of: #"(?:^|\s)collection:(\S*)$"#,
-            options: .regularExpression
-        ) {
-            let token = query[match]
-            guard let colonIdx = token.firstIndex(of: ":") else {
-                clearChipDropdown()
+            // Global commands start with /
+            if query.hasPrefix("/") && !query.contains(" ") {
+                let matches = commandRegistry.match(prefix: query)
+                await MainActor.run {
+                    commandMatches = matches
+                    commandActiveIndex = 0
+                    tagMatches = []
+                    collectionMatches = []
+                }
                 return
             }
-            let partial = String(token[token.index(after: colonIdx)...]).lowercased()
-            // Collections are single-target (the search filter
-            // takes one --collection arg), so an already-committed
-            // collection:NAME elsewhere in the query just means
-            // "the user wants to change which one"; don't filter
-            // the suggestion list against existing tokens.
-            collectionMatches = store.collections
-                .filter { partial.isEmpty || $0.name.lowercased().contains(partial) }
-                .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-            collectionActiveIndex = 0
-            tagMatches = []
-            tagActiveIndex = 0
-            return
-        }
-        guard let match = query.range(of: #"(?:^|\s)tag:(\S*)$"#, options: .regularExpression) else {
-            clearChipDropdown()
-            return
-        }
-        let token = query[match]
-        guard let colonIdx = token.firstIndex(of: ":") else {
-            clearChipDropdown()
-            return
-        }
-        let partial = String(token[token.index(after: colonIdx)...]).lowercased()
 
-        var existing = Set(
-            query.matches(of: /tag:(\S+)/).map { String($0.output.1).lowercased() }
-        )
-        if !partial.isEmpty {
-            existing.remove(partial)
-        }
-
-        tagMatches = store.tags
-            .filter { tag in
-                let lower = tag.name.lowercased()
-                return (partial.isEmpty || lower.contains(partial)) && !existing.contains(lower)
+            // `collection:` check
+            if let match = query.range(
+                of: #"(?:^|\s)collection:(\S*)$"#,
+                options: .regularExpression
+            ) {
+                let token = query[match]
+                guard let colonIdx = token.firstIndex(of: ":") else {
+                    await MainActor.run { clearChipDropdown() }
+                    return
+                }
+                let partial = String(token[token.index(after: colonIdx)...]).lowercased()
+                let matches = store.collections
+                    .filter { partial.isEmpty || $0.name.lowercased().contains(partial) }
+                    .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+                
+                await MainActor.run {
+                    collectionMatches = matches
+                    collectionActiveIndex = 0
+                    tagMatches = []
+                    tagActiveIndex = 0
+                    commandMatches = []
+                }
+                return
             }
-        tagActiveIndex = 0
-        collectionMatches = []
-        collectionActiveIndex = 0
+
+            // `tag:` check
+            if let match = query.range(of: #"(?:^|\s)tag:(\S*)$"#, options: .regularExpression) {
+                let token = query[match]
+                guard let colonIdx = token.firstIndex(of: ":") else {
+                    await MainActor.run { clearChipDropdown() }
+                    return
+                }
+                let partial = String(token[token.index(after: colonIdx)...]).lowercased()
+
+                let existing = Set(
+                    query.matches(of: /tag:(\S+)/).map { String($0.output.1).lowercased() }
+                )
+                
+                let matches = store.tags
+                    .filter { tag in
+                        let lower = tag.name.lowercased()
+                        let isMatch = partial.isEmpty || lower.contains(partial)
+                        return isMatch && !existing.contains(lower)
+                    }
+                
+                await MainActor.run {
+                    tagMatches = matches
+                    tagActiveIndex = 0
+                    collectionMatches = []
+                    collectionActiveIndex = 0
+                    commandMatches = []
+                }
+                return
+            }
+
+            await MainActor.run { clearChipDropdown() }
+        }
     }
 
     private func clearChipDropdown() {
@@ -949,6 +977,9 @@ struct QuickSearchView: View {
             regexError = nil
         }
 
+        let isSemantic = !regexMode && textQuery.hasPrefix("~")
+        let finalQuery = isSemantic ? String(textQuery.dropFirst()).trimmingCharacters(in: .whitespaces) : textQuery
+
         searchTask = Task {
             try? await Task.sleep(for: .milliseconds(200))
             guard !Task.isCancelled else { return }
@@ -960,7 +991,7 @@ struct QuickSearchView: View {
                         limit: 50,
                         regex: textQuery
                     )
-                } else if textQuery.isEmpty && (!tagTokens.isEmpty || collectionToken != nil) {
+                } else if finalQuery.isEmpty && (!tagTokens.isEmpty || collectionToken != nil) {
                     found = try await StashCLI.shared.listItems(
                         tags: tagTokens,
                         collection: collectionToken,
@@ -968,16 +999,23 @@ struct QuickSearchView: View {
                     )
                 } else {
                     found = try await StashCLI.shared.searchItems(
-                        query: textQuery,
+                        query: finalQuery,
                         tags: tagTokens,
                         collection: collectionToken,
-                        limit: 20
+                        limit: 20,
+                        semantic: isSemantic
                     )
                 }
                 if !Task.isCancelled {
                     results = found
+                    searchError = nil
                 }
-            } catch {}
+            } catch {
+                if !Task.isCancelled {
+                    searchError = error.localizedDescription
+                    results = []
+                }
+            }
         }
     }
 }
@@ -1085,3 +1123,87 @@ struct TagAwareSearchField: NSViewRepresentable {
         }
     }
 }
+
+// MARK: - Search Key Monitor
+
+struct SearchKeyMonitor: NSViewRepresentable {
+    let onSearch: () -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let view = SearchKeyMonitorView()
+        view.onSearch = onSearch
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        (nsView as? SearchKeyMonitorView)?.onSearch = onSearch
+    }
+
+    class SearchKeyMonitorView: NSView {
+        var onSearch: (() -> Void)?
+        private var monitor: Any?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard monitor == nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self else { return event }
+
+                // "/" without modifiers. Fire global search when:
+                //   - no text field is focused, OR
+                //   - a text field is focused but empty (catches the
+                //     first-load case where the list-filter field has
+                //     initial focus and "/" should still mean "open
+                //     search," not insert a literal slash into nothing)
+                // ...AND we're not inside a sheet. The sheet guard is
+                // important: an empty notes/title field inside a Log
+                // Maintenance / Item Editor sheet must keep "/" literal
+                // so the user can type a slash as the first character,
+                // and so dismissing the sheet doesn't reveal a search
+                // panel that opened behind it.
+                if event.charactersIgnoringModifiers == "/" &&
+                   event.modifierFlags.intersection(.deviceIndependentFlagsMask) == [] {
+                    if !Self.isInSheet(for: event) &&
+                       (!Self.isTextFieldActive(for: event) || Self.isFocusedFieldEmpty(for: event)) {
+                        DispatchQueue.main.async { self.onSearch?() }
+                        return nil
+                    }
+                }
+
+                return event
+            }
+        }
+
+        private static func isTextFieldActive(for event: NSEvent) -> Bool {
+            let responder = event.window?.firstResponder ?? NSApp.keyWindow?.firstResponder
+            return responder is NSTextView || responder is NSTextField
+        }
+
+        private static func isFocusedFieldEmpty(for event: NSEvent) -> Bool {
+            let responder = event.window?.firstResponder ?? NSApp.keyWindow?.firstResponder
+            if let tv = responder as? NSTextView {
+                return tv.string.isEmpty
+            }
+            if let tf = responder as? NSTextField {
+                return tf.stringValue.isEmpty
+            }
+            if let editor = responder as? NSText,
+               let field = editor.delegate as? NSTextField {
+                return field.stringValue.isEmpty
+            }
+            return false
+        }
+
+        private static func isInSheet(for event: NSEvent) -> Bool {
+            let window = event.window ?? NSApp.keyWindow
+            return window?.sheetParent != nil
+        }
+
+        override func removeFromSuperview() {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+            monitor = nil
+            super.removeFromSuperview()
+        }
+    }
+}
+

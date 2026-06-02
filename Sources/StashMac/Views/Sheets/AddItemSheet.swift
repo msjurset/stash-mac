@@ -111,7 +111,6 @@ struct AddItemSheet: View {
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
                 Spacer()
-                ContextualHelpButton(topic: .addingItems)
                 Button("Add") { submit() }
                     .keyboardShortcut(.defaultAction)
                     .disabled(!canSubmit)

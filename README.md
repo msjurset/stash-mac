@@ -22,7 +22,7 @@ Native macOS app for storing, organizing, and retrieving links, files, snippets,
 - **Collections** — Create, browse, and delete collections for grouping related items
 - **Type Filtering** — Filter the item list by type, tag, or collection from the sidebar or during search
 - **Open Items** — Open any stashed item with the system default application
-- **Keyboard Shortcuts** — ⌘N add, ⌘K search, ⌘R reload from CLI (picks up external changes), ⌘⇧U Fetch Files via URL, ⌘⇧I Import Archive, ⌘? help
+- **Keyboard Shortcuts** — ⌘N add, ⌘K search, ⌘R reload from CLI (picks up external changes), ⌘⇧U Fetch Files via URL, ⌘⇧I Import Archive, ⌘? toggle X-Ray mode
 - **Tag Graph** — Force-directed graph of tag co-occurrence with cursor-anchored pinch-zoom (zoom toward where the pointer is, even after panning)
 - **Capture Rules** — Sidebar "Rules" entry plus `stash rules` CLI for declarative tagging, retitling, note-stamping, notifying, linking, or skipping items as they're stashed. Match by domain, MIME, sender, content regex (with named captures); compose action chains; templates with `{{.Title}}` `{{.Sender}}` `{{.Captures.X}}` etc. Rules live at `~/.stash/rules.yaml`
 - **Vim Mode & Slash Commands** — Opt-in Vim keybindings for every multi-line text field (Notes, Extracted Text, AI Prompt). Type `/vim` in any editor to toggle. Support for slash commands like `/uc` (uppercase), `/trim`, `/sort`, `/unique`, `/date`, and AI-powered `/fix` (spelling), `/sum` (summary), and `/tags` (suggest tags).
@@ -33,7 +33,7 @@ Native macOS app for storing, organizing, and retrieving links, files, snippets,
 - **Favorite Tag** — Designate a specific tag (usually `fav` or `favorite`) as the "Favorite" tag in `Models/FavoriteTag.swift`; items carrying it show a yellow star indicator in list views.
 - **Thumbnails** — Per-item thumbnail tile in the detail view and a 28pt preview in list rows. Auto-generated for files via QuickLook (PDF, video frame, audio album art, code/Office/iWork previews) on capture. URL items use the CLI's HTML scraper with a WKWebView render fallback for JS-heavy sites like Amazon. Manual override: drop an image file onto the tile, or paste a remote image URL / local path via the "Set from…" menu. Stored at `~/.stash/files/thumbnails/<id>.jpg`
 - **Location** — Image items auto-fill a structured location field from JPEG EXIF GPS tags on capture, or via the Android Location API on mobile. The detail pane shows a Location row with the coordinates, source badge (exif / capture / manual), and an Open in Maps link. Edit lat/lon in the Edit dialog, or run `stash backfill-locations --all` to retroactively populate every existing image
-- **Help System** — Menu bar Help (⌘?) with topics for every major feature + contextual ? button on detail, list, and add views
+- **Help System** — Interactive X-Ray Mode (⌘?) spotlights key UI elements with floating pointers for instant onboarding. Full help content with topics for every major feature is available under the Help menu (Stash Help).
 
 ## Requirements
 

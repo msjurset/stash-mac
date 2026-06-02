@@ -44,7 +44,7 @@ icon:
 	@test -f AppIcon.icns || swift scripts/generate-icon.swift
 
 deploy: bundle
-	pkill -9 -f "$(APP_NAME)" 2>/dev/null || true
+	pkill -9 -x "$(APP_NAME)" 2>/dev/null || true
 	@sleep 1
 	command rm -rf $(INSTALL_DIR)/$(BUNDLE)
 	ditto $(BUNDLE) $(INSTALL_DIR)/$(BUNDLE)
@@ -85,7 +85,7 @@ phantom-check:
 		echo "$(BUNDLE) is not installed. Run 'make deploy' first." >&2; \
 		exit 2; \
 	fi
-	@pkill -9 -f "$(APP_NAME)" 2>/dev/null || true
+	@pkill -9 -x "$(APP_NAME)" 2>/dev/null || true
 	@sleep 1
 	@echo "Running phantom-popup check for $(CHECK_SECONDS)s — click around the app to exercise trigger surfaces…"
 	@STASH_PHANTOM_CHECK=1 STASH_PHANTOM_CHECK_SECONDS=$(CHECK_SECONDS) \

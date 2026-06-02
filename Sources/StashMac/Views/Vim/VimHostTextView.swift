@@ -45,6 +45,8 @@ final class VimHostTextView: NSTextView {
     /// falls through to default behavior.
     var submitHandler: (() -> Void)?
 
+    private var cursorAtStart = true
+
     enum SlashKeyEvent {
         case arrowLeft, arrowRight, enter, escape, tab, space
     }
@@ -84,9 +86,15 @@ final class VimHostTextView: NSTextView {
     private func blockCursorRect() -> NSRect? {
         guard let layoutManager, let textContainer else { return nil }
         let ns = string as NSString
-        let cursor = selectedRange.location
+        let range = selectedRange
+        
+        // In visual mode, the "cursor" is at the end of the selection that moved.
+        // In normal mode, location is the cursor.
+        let nsLength = ns.length
+        let head = (cursorAtStart || range.length == 0) ? range.location : range.location + range.length - 1
+        let cursor = max(0, min(head, nsLength))
 
-        if cursor >= ns.length {
+        if cursor >= nsLength {
             let lineHeight = font?.boundingRectForFont.height ?? 16
             if ns.length == 0 {
                 let origin = textContainerOrigin
@@ -103,9 +111,9 @@ final class VimHostTextView: NSTextView {
             )
         }
 
-        let range = NSRange(location: cursor, length: 1)
+        let glyphSearchRange = NSRange(location: cursor, length: 1)
         let chAtCursor = ns.character(at: cursor)
-        let glyphRange = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+        let glyphRange = layoutManager.glyphRange(forCharacterRange: glyphSearchRange, actualCharacterRange: nil)
         var r = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
         r.origin.x += textContainerOrigin.x
         r.origin.y += textContainerOrigin.y
@@ -132,14 +140,28 @@ final class VimHostTextView: NSTextView {
     /// insertText, which vim bypasses), and repaint the block
     /// cursor cell after vim moves the caret.
     override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool) {
+        let oldRange = selectedRange
         super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
 
-        guard let vim = vimEngineProvider?() else { return }
+        guard let vim = vimEngineProvider?(), let primary = ranges.first?.rangeValue else { return }
 
-        if !stillSelecting, let primary = ranges.first?.rangeValue {
-            // Zero-length range — we want the caret visible, not the
-            // far end of a multi-screen visual selection.
-            scrollRangeToVisible(NSRange(location: primary.location, length: 0))
+        // Determine which end of the selection is the "head" (the part that moved).
+        if primary.location != oldRange.location {
+            cursorAtStart = true
+        } else if primary.length != oldRange.length {
+            cursorAtStart = false
+        }
+        
+        // Always scroll the cursor (head) into view when vim is active.
+        if !stillSelecting {
+            let nsLength = (string as NSString).length
+            let head = (cursorAtStart || primary.length == 0) ? primary.location : primary.location + primary.length - 1
+            let clampedHead = max(0, min(head, nsLength))
+            
+            // Async to ensure it fires after AppKit's internal selection handling
+            DispatchQueue.main.async { [weak self] in
+                self?.scrollRangeToVisible(NSRange(location: clampedHead, length: 0))
+            }
         }
 
         if vim.submode != .insert {
@@ -182,6 +204,14 @@ final class VimHostTextView: NSTextView {
             let newLoc = cursor + (s as NSString).length
             setSelectedRange(NSRange(location: newLoc, length: 0))
         }
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let ok = super.becomeFirstResponder()
+        if ok {
+            disableAutoFeatures()
+        }
+        return ok
     }
 
     // MARK: - Cmd-shortcut passthrough

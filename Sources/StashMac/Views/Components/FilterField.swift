@@ -1,11 +1,49 @@
 import SwiftUI
 import AppKit
+import OSLog
+
+private let log = Logger(subsystem: "com.msjurseth.stash", category: "phantom-diagnostics")
 
 /// Keys the suggestion / auto-complete infrastructure cares about.
 /// Shared across `FilterField`, `SearchFieldKeyMonitor`, and
 /// `TagAwareSearchField` so every input type maps the same way.
 enum SuggestKey {
     case tab, shiftTab, arrowDown, arrowUp, ctrlJ, ctrlK, enter, escape
+}
+
+extension NSTextView {
+    /// Disables AppKit's autofill/autocomplete popup and every other
+    /// "helpful" automatic text feature. All eight legacy auto-* flags
+    /// must be disabled, plus the macOS 14 inline-prediction trait and
+    /// the macOS 15 Writing Tools traits.
+    func disableAutoFeatures() {
+        let className = NSStringFromClass(type(of: self))
+        let windowTitle = window?.title ?? "<no-window>"
+        log.debug("[PHANTOM] disableAutoFeatures for \(className) in \"\(windowTitle)\"")
+
+        self.isAutomaticTextCompletionEnabled = false
+        self.isAutomaticSpellingCorrectionEnabled = false
+        self.isAutomaticTextReplacementEnabled = false
+        self.isContinuousSpellCheckingEnabled = false
+        self.isAutomaticQuoteSubstitutionEnabled = false
+        self.isAutomaticDashSubstitutionEnabled = false
+        self.isAutomaticDataDetectionEnabled = false
+        self.isAutomaticLinkDetectionEnabled = false
+
+        // macOS 14 added an inline-prediction surface that renders as the
+        // empty rounded ghost popup beneath the field on focus. None of
+        // the legacy auto-* flags affect it.
+        if #available(macOS 14.0, *) {
+            self.inlinePredictionType = .no
+        }
+        // macOS 15 routes predictive text through Apple Intelligence
+        // Writing Tools — the popup reappears here unless we explicitly
+        // opt out at the per-editor level.
+        if #available(macOS 15.0, *) {
+            self.writingToolsBehavior = .none
+            self.allowedWritingToolsResultOptions = []
+        }
+    }
 }
 
 /// Drop-in replacement for SwiftUI's `TextField` on macOS that suppresses
@@ -169,7 +207,7 @@ final class NoAutoFillTextField: NSTextField {
     override func becomeFirstResponder() -> Bool {
         let ok = super.becomeFirstResponder()
         if ok {
-            Self.disableAutoFeatures(on: currentEditor() as? NSTextView)
+            (currentEditor() as? NSTextView)?.disableAutoFeatures()
             onFocusReceived?()
         }
         return ok
@@ -177,38 +215,13 @@ final class NoAutoFillTextField: NSTextField {
 
     override func textDidBeginEditing(_ notification: Notification) {
         super.textDidBeginEditing(notification)
-        Self.disableAutoFeatures(on: notification.object as? NSTextView)
+        (notification.object as? NSTextView)?.disableAutoFeatures()
     }
 
     override func textShouldBeginEditing(_ textObject: NSText) -> Bool {
         let ok = super.textShouldBeginEditing(textObject)
-        Self.disableAutoFeatures(on: textObject as? NSTextView)
+        (textObject as? NSTextView)?.disableAutoFeatures()
         return ok
-    }
-
-    static func disableAutoFeatures(on textView: NSTextView?) {
-        guard let tv = textView else { return }
-        tv.isAutomaticTextCompletionEnabled = false
-        tv.isAutomaticSpellingCorrectionEnabled = false
-        tv.isAutomaticTextReplacementEnabled = false
-        tv.isContinuousSpellCheckingEnabled = false
-        tv.isAutomaticQuoteSubstitutionEnabled = false
-        tv.isAutomaticDashSubstitutionEnabled = false
-        tv.isAutomaticDataDetectionEnabled = false
-        tv.isAutomaticLinkDetectionEnabled = false
-        // macOS 14 added an inline-prediction surface that renders as the
-        // empty rounded ghost popup beneath the field on focus. None of
-        // the legacy auto-* flags affect it.
-        if #available(macOS 14.0, *) {
-            tv.inlinePredictionType = .no
-        }
-        // macOS 15 routes predictive text through Apple Intelligence
-        // Writing Tools — the popup reappears here unless we explicitly
-        // opt out at the per-editor level.
-        if #available(macOS 15.0, *) {
-            tv.writingToolsBehavior = .none
-            tv.allowedWritingToolsResultOptions = []
-        }
     }
 }
 
@@ -222,15 +235,11 @@ final class NoAutoFillTextField: NSTextField {
 /// the popup on first focus per session.
 final class NoAutoFillTextFieldCell: NSTextFieldCell {
     override func setUpFieldEditorAttributes(_ textObj: NSText) -> NSText {
-        if let window = textObj.window {
-            print("[PHANTOM] NoAutoFillTextFieldCell.setUpFieldEditorAttributes window: \"\(window.title)\" frame: \(window.frame)")
-        } else {
-            print("[PHANTOM] NoAutoFillTextFieldCell.setUpFieldEditorAttributes window: nil")
-        }
+        let windowTitle = textObj.window?.title ?? "<no-window>"
+        log.debug("[PHANTOM] NoAutoFillTextFieldCell.setUpFieldEditorAttributes for window: \"\(windowTitle)\"")
+        
         let configured = super.setUpFieldEditorAttributes(textObj)
-        if let editor = configured as? NSTextView {
-            NoAutoFillTextField.disableAutoFeatures(on: editor)
-        }
+        (configured as? NSTextView)?.disableAutoFeatures()
         return configured
     }
 }

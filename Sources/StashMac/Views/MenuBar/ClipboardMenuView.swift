@@ -65,9 +65,24 @@ struct ClipboardMenuView: View {
 
         Divider()
 
+        Button("Restart") {
+            restart()
+        }
+
         Button("Quit") {
             NSApp.terminate(nil)
         }
+    }
+
+    private func restart() {
+        let path = Bundle.main.bundlePath
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let script = "while kill -0 \(pid) 2>/dev/null; do sleep 0.1; done; open \"\(path)\""
+        let task = Process()
+        task.launchPath = "/bin/sh"
+        task.arguments = ["-c", script]
+        task.launch()
+        NSApp.terminate(nil)
     }
 
     private func truncateURL(_ url: String) -> String {

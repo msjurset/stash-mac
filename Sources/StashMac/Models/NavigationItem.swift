@@ -2,6 +2,7 @@ import Foundation
 
 enum NavigationItem: Hashable {
     case allItems
+    case starred
     case inbox
     case archive
     case type(ItemType)
@@ -26,6 +27,7 @@ extension NavigationItem {
     var persistenceKey: String {
         switch self {
         case .allItems:               return "allItems"
+        case .starred:                return "starred"
         case .inbox:                  return "inbox"
         case .archive:                return "archive"
         case .tagGraph:               return "tagGraph"
@@ -54,6 +56,7 @@ extension NavigationItem {
                      savedSearches: [SavedSearch]) -> NavigationItem? {
         switch key {
         case "allItems":      return .allItems
+        case "starred":       return .starred
         case "inbox":         return .inbox
         case "archive":       return .archive
         case "tagGraph":      return .tagGraph

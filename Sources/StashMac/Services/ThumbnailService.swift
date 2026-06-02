@@ -174,19 +174,20 @@ final class ThumbnailService {
             defer { cleanupStaged(staged, original: url) }
             let target = staged ?? url
 
-            if let mime = item.mimeType {
-                if mime.hasPrefix("video/") {
-                    if let frame = await videoFrame(at: target) {
-                        return frame
-                    }
+            let isVideo = item.mimeType?.hasPrefix("video/") == true || ["mp4", "mov", "avi", "mkv", "webm"].contains(target.pathExtension.lowercased())
+            let isAudio = item.mimeType?.hasPrefix("audio/") == true || ["m4a", "mp3", "wav", "aac", "ogg", "flac"].contains(target.pathExtension.lowercased())
+
+            if isVideo {
+                if let frame = await videoFrame(at: target) {
+                    return frame
                 }
-                if mime.hasPrefix("audio/") {
-                    if let artwork = await audioArtwork(at: target) {
-                        return artwork
-                    }
-                    if let waveform = await WaveformGenerator.generateWaveform(at: target) {
-                        return waveform
-                    }
+            }
+            if isAudio {
+                if let artwork = await audioArtwork(at: target) {
+                    return artwork
+                }
+                if let waveform = await WaveformGenerator.generateWaveform(at: target) {
+                    return waveform
                 }
             }
             
@@ -194,7 +195,7 @@ final class ThumbnailService {
                 return ql
             }
             
-            return PlaceholderGenerator.generatePlaceholder(for: item)
+            return nil
 
         case .url, .snippet, .email:
             return nil

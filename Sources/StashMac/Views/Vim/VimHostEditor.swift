@@ -85,10 +85,7 @@ struct VimHostEditor: NSViewRepresentable {
         tv.textColor = .textColor
         tv.isRichText = false
         tv.allowsUndo = true
-        tv.isAutomaticQuoteSubstitutionEnabled = false
-        tv.isAutomaticDashSubstitutionEnabled = false
-        tv.isAutomaticTextReplacementEnabled = false
-        tv.isAutomaticSpellingCorrectionEnabled = false
+        tv.disableAutoFeatures()
         tv.textContainerInset = textContainerInset
         tv.drawsBackground = drawsBackground
         if drawsBackground { tv.backgroundColor = backgroundColor }

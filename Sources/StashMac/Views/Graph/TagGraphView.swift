@@ -77,6 +77,11 @@ struct TagGraphView: View {
             }
         }
         .navigationTitle("Tag Graph")
+        .toolbar {
+            ToolbarItem {
+                ContextualHelpButton(topic: .organizing, isToolbarItem: true)
+            }
+        }
     }
 
     private var totalOffset: CGSize {

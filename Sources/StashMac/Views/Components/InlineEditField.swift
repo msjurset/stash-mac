@@ -24,6 +24,7 @@ import AppKit
 struct InlineEditField: View {
     @Binding var text: String
     var placeholder: String = ""
+    var font: NSFont = .preferredFont(forTextStyle: .body)
     /// Whether the field should grab first responder when it appears.
     /// Default is `true` so the click-off-saves contract works even
     /// when the parent flipped into edit mode via a button rather
@@ -49,6 +50,7 @@ struct InlineEditField: View {
             FilterField(
                 placeholder: placeholder,
                 text: $text,
+                font: font,
                 autoFocus: autoFocus,
                 onSubmit: onCommit,
                 onKey: { key in

@@ -89,6 +89,11 @@ struct InboxView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(KeyMonitor(onKey: handleKey))
+        .toolbar {
+            ToolbarItem {
+                ContextualHelpButton(topic: .gettingStarted, isToolbarItem: true)
+            }
+        }
         .onAppear {
             store.loadInbox()
             if selection == .none {

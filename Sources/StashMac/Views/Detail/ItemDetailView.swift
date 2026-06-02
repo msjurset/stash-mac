@@ -83,6 +83,7 @@ struct ItemDetailView: View {
                         }
                     }
                     Spacer()
+                    ContextualHelpButton(topic: .itemTypes)
                 }
 
                 Divider()
@@ -94,11 +95,9 @@ struct ItemDetailView: View {
                 // itself.
                 MediaSection(item: item)
 
-                // Image preview — full-resolution decoded off-thread
-                // (see ImagePreviewSection) so navigating to a large
-                // image item doesn't stall the runloop on
-                // NSImage(contentsOf:) inside the body.
-                if item.type == .image {
+                // Media preview (Image, Multi-file, or Blob fallback).
+                // Shown for .image types OR any item with attached files.
+                if item.type == .image || (item.files?.isEmpty == false) {
                     DetailSection(title: "Preview") {
                         let primaryURL = item.storePath
                             .flatMap { FilePathResolver.resolve(storePath: $0) }
@@ -465,10 +464,10 @@ struct ItemDetailView: View {
 
             }
             .padding()
+            .helpAnchor(.itemDetail)
         }
         .toolbar {
             ToolbarItemGroup {
-                ContextualHelpButton(topic: .itemDetail)
                 Button { showLinkSheet = true } label: {
                     Label("Link...", systemImage: "link")
                 }
@@ -527,7 +526,14 @@ struct ItemDetailView: View {
             // so use the first non-self id from the bundle.
             let ids = items
                 .flatMap { $0.split(separator: ",").map(String.init) }
-                .filter { !$0.isEmpty && $0 != item.id }
+                .filter { id in
+                    // Item IDs are typically short hashes or UUIDs.
+                    // Definitely no spaces, newlines, or tabs.
+                    !id.isEmpty && 
+                    id != item.id && 
+                    !id.contains(where: { $0.isWhitespace }) &&
+                    id.count <= 40
+                }
             guard let droppedID = ids.first else { return false }
             store.linkItems(from: item.id, to: droppedID)
             return true
@@ -647,6 +653,7 @@ struct ItemDetailView: View {
     }
 
     private func commitTitleEdit() {
+        print("Commit title edit called: '\(titleDraft)'")
         let trimmed = titleDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         // Empty title is meaningless — silently drop the edit and
         // bail back to read mode rather than letting the user save

@@ -592,7 +592,7 @@ enum HelpTopic: String, CaseIterable, Identifiable, Codable, Hashable {
                     ["⌘[",  "Back — return to the previous navigation state (e.g. the Moment you drilled into an item from)"],
                     ["⌘]",  "Forward — redo a Back step"],
                     ["/",   "Open the global search panel (when no field has focus, or list filter is empty)"],
-                    ["?",   "Open contextual help for the current sidebar section"],
+                    ["⌘?",  "Toggle Interactive Help (X-Ray mode)"],
                 ]),
                 .heading("Global Search Panel"),
                 .paragraph("Active while the search panel is open."),

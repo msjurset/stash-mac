@@ -79,6 +79,9 @@ struct CheckView: View {
                 .help("Run health check")
                 .disabled(store.isCheckRunning)
             }
+            ToolbarItem {
+                ContextualHelpButton(topic: .statsAndCheck, isToolbarItem: true)
+            }
         }
         .sheet(item: $urlEdit) { target in EditURLSheet(target: target) }
         .focused($isListFocused)
@@ -501,6 +504,12 @@ private struct HealthCheckKeyMonitor: NSViewRepresentable {
                 
                 // Intercept keys if our window is active OR if QL is active over our app.
                 guard isOurWindow || isQLKey else { return event }
+
+                // Don't intercept if a text field has focus (unless it's the QL panel itself)
+                if !isQLKey, let responder = keyWindow?.firstResponder,
+                   (responder is NSTextView || responder is NSTextField) {
+                    return event
+                }
 
                 let keyCode = event.keyCode
                 let char = event.charactersIgnoringModifiers?.lowercased() ?? ""

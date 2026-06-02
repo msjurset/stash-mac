@@ -1,5 +1,8 @@
 import AppKit
 import WebKit
+import OSLog
+
+private let log = Logger(subsystem: "com.msjurseth.stash", category: "webkit")
 
 /// Errors raised by the WKWebView render path. Bubble up through
 /// `ThumbnailService.importViaWebKit` and the store's fallback chain
@@ -34,9 +37,10 @@ final class WebThumbnailRenderer {
     func render(
         url: URL,
         viewport: CGSize = CGSize(width: 1024, height: 768),
-        settleDelay: Duration = .seconds(4),
-        timeout: Duration = .seconds(25)
+        settleDelay: Duration = .seconds(5),
+        timeout: Duration = .seconds(30)
     ) async throws -> NSImage {
+        log.debug("[WEBKIT] Starting render for \(url.absoluteString)")
         // Each render gets a fresh session — easier than reusing one
         // WKWebView across calls (avoids stale state, cancellation
         // races, and lets the WebView dealloc once we're done).
@@ -101,27 +105,34 @@ private final class RenderSession: NSObject, WKNavigationDelegate {
         // Hard cap so a hanging request can't keep the renderer alive
         // forever. Cancelled the moment we resume the continuation.
         timeoutTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: self?.timeout ?? .seconds(20))
+            try? await Task.sleep(for: self?.timeout ?? .seconds(30))
+            if let url = self?.url {
+                Logger(subsystem: "com.msjurseth.stash", category: "webkit").error("[WEBKIT] Timeout rendering \(url.absoluteString)")
+            }
             self?.finish(.failure(WebThumbnailError.timeout))
         }
 
+        log.debug("[WEBKIT] Loading URL...")
         webView.load(URLRequest(url: url))
     }
 
     nonisolated func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         Task { @MainActor [weak self] in
+            Logger(subsystem: "com.msjurseth.stash", category: "webkit").debug("[WEBKIT] didFinish navigation")
             await self?.scheduleSnapshot()
         }
     }
 
     nonisolated func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         Task { @MainActor [weak self] in
+            Logger(subsystem: "com.msjurseth.stash", category: "webkit").error("[WEBKIT] didFail: \(error.localizedDescription)")
             self?.finish(.failure(error))
         }
     }
 
     nonisolated func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         Task { @MainActor [weak self] in
+            Logger(subsystem: "com.msjurseth.stash", category: "webkit").error("[WEBKIT] didFailProvisionalNavigation: \(error.localizedDescription)")
             self?.finish(.failure(error))
         }
     }
@@ -131,20 +142,25 @@ private final class RenderSession: NSObject, WKNavigationDelegate {
         // some redirect chains).
         guard !didFinish else { return }
         didFinish = true
+        log.debug("[WEBKIT] Waiting \(self.settleDelay.components.seconds)s for JS to settle...")
         try? await Task.sleep(for: settleDelay)
         snapshot()
     }
 
     private func snapshot() {
         guard let webView else { return }
+        log.debug("[WEBKIT] Taking snapshot...")
         let config = WKSnapshotConfiguration()
         config.snapshotWidth = NSNumber(value: Double(viewport.width))
         webView.takeSnapshot(with: config) { [weak self] image, error in
             Task { @MainActor in
                 if let image {
+                    Logger(subsystem: "com.msjurseth.stash", category: "webkit").debug("[WEBKIT] Snapshot success")
                     self?.finish(.success(image))
                 } else {
-                    self?.finish(.failure(error ?? WebThumbnailError.snapshotFailed))
+                    let err = error ?? WebThumbnailError.snapshotFailed
+                    Logger(subsystem: "com.msjurseth.stash", category: "webkit").error("[WEBKIT] Snapshot failed: \(err.localizedDescription)")
+                    self?.finish(.failure(err))
                 }
             }
         }
