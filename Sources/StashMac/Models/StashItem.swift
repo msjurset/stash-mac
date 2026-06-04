@@ -93,6 +93,13 @@ struct StashItem: Codable, Identifiable, Hashable {
         }
         return String(format: "%.1f %@", value, units[unitIndex])
     }
+
+    /// True if this item represents a multi-source audio capture 
+    /// (containing a master track plus one or more raw tracks).
+    var isMultiSourceAudio: Bool {
+        guard type == .file, let mime = mimeType, isAudioMIME(mime) else { return false }
+        return (files?.count ?? 0) > 0
+    }
 }
 
 /// Geolocation attached to an item. Populated automatically from

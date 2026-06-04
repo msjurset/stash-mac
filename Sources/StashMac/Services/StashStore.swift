@@ -193,6 +193,7 @@ final class StashStore {
     }
 
     var sortMode: SortMode = .newestFirst
+    var regexMode = false
 
     enum ViewMode: String, CaseIterable {
         case list, grid
@@ -794,9 +795,11 @@ final class StashStore {
             currentFilterTags.insert("fav")
         }
 
+        let currentRegexMode = regexMode
+
         return try await Task.detached(priority: .userInitiated) { [weak self] in
             guard let self else { return [] }
-            
+
             var allTags = Array(currentFilterTags)
             var excludeTags: [String] = []
             var textQuery = currentQuery
@@ -816,12 +819,32 @@ final class StashStore {
                     .trimmingCharacters(in: .whitespaces)
             }
 
-            let isSemantic = textQuery.hasPrefix("~")
+            let isSemantic = !currentRegexMode && textQuery.hasPrefix("~")
             if isSemantic {
                 textQuery = String(textQuery.dropFirst()).trimmingCharacters(in: .whitespaces)
             }
 
+            // For regex mode, strip exactly one pair of wrapping slashes
+            if currentRegexMode {
+                if textQuery.hasPrefix("/") && textQuery.hasSuffix("/") && textQuery.count >= 2 {
+                    textQuery = String(textQuery.dropFirst().dropLast())
+                }
+
+                return try await self.cli.searchItems(
+                    query: "",
+                    type: currentFilterType,
+                    tags: allTags,
+                    excludeTags: excludeTags,
+                    collection: currentFilterCollection,
+                    archived: currentArchived,
+                    limit: 10000,
+                    regex: textQuery,
+                    semantic: isSemantic
+                )
+            }
+
             if textQuery.isEmpty {
+
                 return try await self.cli.listItems(
                     type: currentFilterType,
                     tags: allTags,
@@ -839,9 +862,11 @@ final class StashStore {
                 collection: currentFilterCollection,
                 archived: currentArchived,
                 limit: 10000,
+                regex: nil,
                 semantic: isSemantic
             )
         }.value
+
     }
 
     private func applySortMode() {
@@ -2040,6 +2065,21 @@ final class StashStore {
         Task {
             do {
                 _ = try await cli.editItem(id: id, addTags: tags)
+                loadAll()
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
+    }
+
+    func addCollectionsToItem(id: String, collections: [String]) {
+        Task {
+            do {
+                // CLI edit -c is additive but only supports one at a time.
+                // Call sequentially to ensure all are added.
+                for col in collections {
+                    _ = try await cli.editItem(id: id, collection: col)
+                }
                 loadAll()
             } catch {
                 self.error = error.localizedDescription

@@ -488,7 +488,7 @@ private struct CustomAudioPlayer: View {
 
     private func skip(_ deltaSeconds: Double) {
         let target = (scrubbingTo ?? currentSeconds) + deltaSeconds
-        seek(to: target.clamped(to: 0...max(durationSeconds, 0.1)))
+        seek(to: target.clampedToRange(to: 0...max(durationSeconds, 0.1)))
     }
 
     private func seek(to seconds: Double) {
@@ -506,7 +506,7 @@ private struct CustomAudioPlayer: View {
 }
 
 private extension Double {
-    func clamped(to range: ClosedRange<Double>) -> Double {
+    func clampedToRange(to range: ClosedRange<Double>) -> Double {
         Swift.min(Swift.max(self, range.lowerBound), range.upperBound)
     }
 }

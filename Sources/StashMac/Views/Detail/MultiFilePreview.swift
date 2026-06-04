@@ -6,67 +6,93 @@ import OSLog
 private let logger = Logger(subsystem: "com.msjurseth.stash", category: "preview")
 
 /// Carousel/filmstrip preview for items that carry multiple attached
-/// photos beyond the primary `store_path` (e.g. mushroom top/side/
-/// bottom). Single-file items continue to use ImagePreviewSection
-/// directly — this view only renders when `item.files` is populated.
+/// photos or audio tracks beyond the primary `store_path`.
 ///
-/// Drag a file from Finder onto either the main preview or the
-/// filmstrip to attach it as another slide. Right-click a strip
-/// thumbnail for Set as Primary / Detach actions.
+/// For dual-source audio stashes, this allows selecting and playing
+/// the raw phone/watch tracks independently of the master mix.
 struct MultiFilePreview: View {
     let item: StashItem
     @Environment(StashStore.self) private var store
 
-    /// Selected slot in the carousel. 0 = primary; 1...N = attached
-    /// files in `item.files` order. Resets to 0 when the underlying
-    /// item changes so a fresh selection always opens on the cover.
-    @State private var selected: Int = 0
-    @State private var editingCaptionIndex: Int?
+    /// Selected slot in the carousel. 
+    @State private var selectedID: String? = nil
+    @State private var editingCaptionID: String? = nil
     @State private var draftCaption: String = ""
+    @State private var xrayActive: Bool = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            mainPreview
-            filmstrip
+        Group {
+            if xrayActive {
+                XRayAudioView(item: item, onDismiss: { xrayActive = false })
+                    .transition(.asymmetric(
+                        insertion: .opacity.combined(with: .scale(scale: 0.95)),
+                        removal: .opacity
+                    ))
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    mainPreview
+                    filmstrip
+                }
+            }
         }
-        .onChange(of: item.id) { _, _ in selected = 0 }
+        .onChange(of: item.id, initial: true) { _, _ in 
+            selectedID = allSlots.first?.id
+            xrayActive = false
+        }
         .onDrop(of: [.fileURL], isTargeted: nil, perform: handleDrop)
     }
 
     @ViewBuilder
     private var mainPreview: some View {
-        if let url = activeFileURL {
-            ImagePreviewSection(fileURL: url, allURLs: allSlots.compactMap { $0.url })
+        if let slot = activeSlot, let url = slot.url {
+            if isAudioSlot(slot) {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text(slot.caption ?? (slot.isPrimary ? "Master Mix" : url.lastPathComponent))
+                            .font(.headline)
+                            .foregroundStyle(.primary)
+                        
+                        Spacer()
+                        
+                        if item.isMultiSourceAudio {
+                            Button(action: { withAnimation { xrayActive = true } }) {
+                                Label("X-Ray", systemImage: "waveform.path")
+                                    .font(.caption)
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(Color.accentColor)
+                            .help("Open multi-track analyzer")
+                        }
+                    }
+                    
+                    DirectMediaPlayer(
+                        url: url,
+                        isVideo: false,
+                        mimeHint: slot.mimeType
+                    )
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                }
+                .padding()
+                .background(.quaternary.opacity(0.3))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            } else {
+                ImagePreviewSection(fileURL: url, allURLs: allSlots.compactMap { $0.url })
+            }
         } else if !anySlotResolves, let fallback = thumbnailFallbackURL {
-            // Every slot's blob has gone missing on disk (dedup
-            // delete, manual cleanup, broken backup restore). Show
-            // the cached canonical thumbnail so the user can still
-            // identify what the item is, and surface the heal
-            // banner so they have a one-click path to refetching.
             VStack(alignment: .leading, spacing: 6) {
                 ImagePreviewSection(fileURL: fallback)
                 MissingBlobBanner(itemID: item.id)
             }
         } else {
-            // Selected slot's blob is missing but other slots still
-            // resolve — let the user click another filmstrip tile
-            // rather than overlaying a heal banner that doesn't
-            // apply to the whole item.
-            placeholder("Image not available")
+            placeholder("Preview not available")
         }
     }
 
-    /// True when at least one slot (primary or attached) resolves to
-    /// an on-disk file. Used to decide between the per-slot
-    /// "Image not available" placeholder and the item-wide
-    /// thumbnail-plus-banner fallback.
     private var anySlotResolves: Bool {
         allSlots.contains { $0.url != nil }
     }
 
-    /// URL of the cached canonical thumbnail (the file stash itself
-    /// generated and the list/grid views reuse), or nil if the
-    /// thumbnail is missing too.
     private var thumbnailFallbackURL: URL? {
         guard let rel = item.thumbnailPath, !rel.isEmpty,
               let url = FilePathResolver.resolveRelative(rel),
@@ -76,89 +102,97 @@ struct MultiFilePreview: View {
         return url
     }
 
-    /// Horizontally-scrolling row of thumbnails — primary first,
-    /// then attached files in carousel order. Tap to switch the
-    /// main view; right-click for primary/detach actions.
     private var filmstrip: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            LazyHStack(alignment: .top, spacing: 6) {
-                ForEach(allSlots.indices, id: \.self) { idx in
-                    slotThumbnail(slot: allSlots[idx], index: idx)
+            LazyHStack(alignment: .top, spacing: 10) {
+                let slots = allSlots
+                ForEach(slots) { slot in
+                    slotThumbnail(slot: slot)
                 }
             }
-            .padding(.vertical, 2)
+            .padding(.vertical, 4)
         }
     }
 
-    /// Single thumbnail tile — outlined when selected, opacity-faded
-    /// when its blob is missing, with a caption strip underneath.
     @ViewBuilder
-    private func slotThumbnail(slot: Slot, index: Int) -> some View {
-        let isActive = (index == selected)
-        VStack(spacing: 2) {
+    private func slotThumbnail(slot: Slot) -> some View {
+        let isActive = (slot.id == selectedID)
+        VStack(spacing: 4) {
             Group {
                 if let url = slot.url {
-                    AsyncThumbnail(fileURL: url)
+                    if isAudioSlot(slot) {
+                        ZStack {
+                            Rectangle().fill(.secondary.opacity(0.15))
+                            Image(systemName: "waveform")
+                                .font(.title)
+                                .foregroundStyle(.secondary)
+                        }
+                    } else {
+                        AsyncThumbnail(fileURL: url)
+                    }
                 } else {
                     placeholder("?")
-                        .frame(width: 64, height: 64)
                 }
             }
-            .frame(width: 64, height: 64)
-            .clipShape(RoundedRectangle(cornerRadius: 4))
+            .frame(width: 80, height: 80)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
             .overlay(
-                RoundedRectangle(cornerRadius: 4)
+                RoundedRectangle(cornerRadius: 6)
                     .stroke(isActive ? Color.accentColor : Color.secondary.opacity(0.3),
-                            lineWidth: isActive ? 2 : 1)
+                            lineWidth: isActive ? 3 : 1)
             )
             .overlay(alignment: .topTrailing) {
                 if slot.isPrimary {
                     Image(systemName: "star.fill")
-                        .font(.system(size: 7))
+                        .font(.system(size: 8))
                         .foregroundStyle(.white)
-                        .padding(3)
+                        .padding(4)
                         .background(.black.opacity(0.6))
                         .clipShape(Circle())
-                        .padding(2)
-                        .help("Primary Cover")
+                        .padding(4)
+                        .help("Master Mix")
                 }
             }
-            .onTapGesture { selected = index }
+            .onTapGesture { selectedID = slot.id }
 
-            if editingCaptionIndex == index {
+            if editingCaptionID == slot.id {
                 InlineEditField(
                     text: $draftCaption,
                     placeholder: "caption…",
                     font: .preferredFont(forTextStyle: .caption2),
                     onCommit: {
-                        store.editFileCaption(in: item.id, index: slot.attachmentIndex ?? 0, caption: draftCaption)
-                        editingCaptionIndex = nil
+                        if slot.isPrimary {
+                            store.editFileCaption(in: item.id, index: 0, caption: draftCaption)
+                        } else if let attachmentIndex = slot.attachmentIndex {
+                            store.editFileCaption(in: item.id, index: attachmentIndex, caption: draftCaption)
+                        }
+                        editingCaptionID = nil
                     },
                     onCancel: {
-                        editingCaptionIndex = nil
+                        editingCaptionID = nil
                     }
                 )
                 .frame(width: 80, height: 24)
             } else {
-                let textValue = (slot.caption?.isEmpty == false) ? slot.caption! : "add caption"
+                let textValue = (slot.caption?.isEmpty == false) ? slot.caption! : (slot.isPrimary ? "Master" : "add caption")
                 Text(textValue)
                     .font(.system(size: 10))
                     .foregroundStyle(slot.caption?.isEmpty == false ? .secondary : .quaternary)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .frame(width: 64, height: 18)
+                    .frame(width: 80, height: 18)
                     .help("Double-click to edit caption")
                     .onTapGesture(count: 2) {
                         draftCaption = slot.caption ?? ""
-                        editingCaptionIndex = index
+                        editingCaptionID = slot.id
                     }
             }
         }
-        .contextMenu { slotMenu(slot: slot, index: index) }
+        .contextMenu { slotMenu(slot: slot) }
     }
 
     @ViewBuilder
-    private func slotMenu(slot: Slot, index: Int) -> some View {
+    private func slotMenu(slot: Slot) -> some View {
         if slot.isPrimary {
             Text("Primary file")
                 .foregroundStyle(.secondary)
@@ -173,11 +207,6 @@ struct MultiFilePreview: View {
         }
     }
 
-    // MARK: - Drag & drop
-
-    /// Walks the dropped providers, resolves any fileURL payloads,
-    /// and calls `attachFile` for each. Multiple files attach as
-    /// separate carousel slides in dropped order.
     private func handleDrop(providers: [NSItemProvider]) -> Bool {
         var attached = 0
         for p in providers where p.canLoadObject(ofClass: URL.self) {
@@ -195,46 +224,59 @@ struct MultiFilePreview: View {
 
     // MARK: - Helpers
 
-    private var activeFileURL: URL? {
-        let slots = allSlots
-        guard selected < slots.count else { return nil }
-        return slots[selected].url
+    private func isAudioSlot(_ slot: Slot) -> Bool {
+        if let mime = slot.mimeType, isAudioMIME(mime) { return true }
+        if let url = slot.url, url.pathExtension.lowercased() == "m4a" { return true }
+        // Fallback for blobs: if the item itself is an audio type or the filename/caption
+        // implies audio, treat it as such.
+        if item.type == .file && (item.mimeType?.hasPrefix("audio/") == true) { return true }
+        if let caption = slot.caption?.lowercased(),
+           (caption.contains("raw") || caption.contains("track") || caption.contains("phone") || caption.contains("watch")) {
+            return true
+        }
+        return false
     }
 
-    /// Combined list — primary (slot 0) followed by every attached
-    /// file in carousel order. Keeping them in one array makes
-    /// indexing into the filmstrip straightforward.
+    private var activeSlot: Slot? {
+        let slots = allSlots
+        return slots.first { $0.id == selectedID }
+    }
+
     private var allSlots: [Slot] {
         var slots: [Slot] = []
         if let sp = item.storePath, !sp.isEmpty {
             slots.append(Slot(
+                id: "primary",
                 isPrimary: true,
                 attachmentIndex: nil,
                 url: FilePathResolver.resolve(storePath: sp),
-                caption: item.caption
+                caption: item.caption,
+                mimeType: item.mimeType
             ))
         }
         if let files = item.files {
-            for (i, f) in files.enumerated() {
+            let sortedFiles = files.sorted { $0.position < $1.position }
+            for f in sortedFiles {
                 slots.append(Slot(
+                    id: "\(f.id)",
                     isPrimary: false,
-                    attachmentIndex: i + 1,
+                    attachmentIndex: f.position,
                     url: FilePathResolver.resolve(storePath: f.storePath),
-                    caption: f.caption
+                    caption: f.caption,
+                    mimeType: f.mimeType
                 ))
             }
         }
         return slots
     }
 
-    /// Per-tile model used by the filmstrip — flattens primary +
-    /// attached files into one indexable array. `attachmentIndex`
-    /// is nil for the primary slot.
-    private struct Slot {
+    private struct Slot: Identifiable {
+        let id: String
         let isPrimary: Bool
         let attachmentIndex: Int?
         let url: URL?
         let caption: String?
+        let mimeType: String?
     }
 
     private func placeholder(_ text: String) -> some View {
@@ -247,9 +289,6 @@ struct MultiFilePreview: View {
     }
 }
 
-/// Tiny async-loaded NSImage thumbnail for the filmstrip. Loads
-/// off the main thread so building a strip of 10+ slides doesn't
-/// stall the view hierarchy.
 private struct AsyncThumbnail: View {
     let fileURL: URL
     @State private var image: NSImage?
@@ -265,11 +304,6 @@ private struct AsyncThumbnail: View {
             }
         }
         .task(id: fileURL) {
-            // Disk read + decode pushed off main so the carousel
-            // scrolls smoothly when there are many slides.
-            // ThumbnailCache.loadOriented honors EXIF rotation —
-            // bare NSImage(contentsOf:) leaves portrait-shot photos
-            // sideways in the filmstrip.
             let img = await Task.detached(priority: .userInitiated) {
                 ThumbnailCache.loadOriented(from: fileURL)
             }.value

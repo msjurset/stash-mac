@@ -13,7 +13,7 @@ enum WaveformGenerator {
             return nil
         }
         
-        let samples = await extractSamples(from: asset, track: track, count: 128)
+        let samples = await extractSamples(from: asset, track: track, count: 128, fullDuration: false)
         guard !samples.isEmpty else { return nil }
         
         let view = WaveformThumbnailView(samples: samples)
@@ -22,16 +22,32 @@ enum WaveformGenerator {
         return renderer.nsImage
     }
     
-    private static func extractSamples(from asset: AVAsset, track: AVAssetTrack, count: Int) async -> [Float] {
-        guard let reader = try? AVAssetReader(asset: asset) else { return [] }
+    static func extractSamples(
+        from asset: AVAsset, 
+        track: AVAssetTrack, 
+        count: Int, 
+        fullDuration: Bool = false,
+        timeRange: CMTimeRange? = nil
+    ) async -> [Float] {
+        print("[WAVE] Starting extraction (\(count) points, full=\(fullDuration), range=\(timeRange != nil))")
+        guard let reader = try? AVAssetReader(asset: asset) else { 
+            print("[WAVE] Error: Failed to create AVAssetReader")
+            return [] 
+        }
         
-        // Limit sampling to the first 30 seconds to keep it fast even for hours-long audio
-        let maxDuration = CMTime(seconds: 30, preferredTimescale: 600)
         let assetDuration = (try? await asset.load(.duration)) ?? .indefinite
-        reader.timeRange = CMTimeRange(
-            start: .zero,
-            duration: assetDuration.seconds > 30 ? maxDuration : assetDuration
-        )
+        
+        if let targetedRange = timeRange {
+            reader.timeRange = targetedRange
+        } else if !fullDuration {
+            let maxDuration = CMTime(seconds: 30, preferredTimescale: 600)
+            reader.timeRange = CMTimeRange(
+                start: .zero,
+                duration: assetDuration.seconds > 30 ? maxDuration : assetDuration
+            )
+        }
+        
+        let effectiveDuration = timeRange?.duration.seconds ?? (fullDuration ? assetDuration.seconds : min(30, assetDuration.seconds))
 
         let outputSettings: [String: Any] = [
             AVFormatIDKey: kAudioFormatLinearPCM,
@@ -44,62 +60,67 @@ enum WaveformGenerator {
         let output = AVAssetReaderTrackOutput(track: track, outputSettings: outputSettings)
         reader.add(output)
         
-        guard reader.startReading() else { return [] }
+        guard reader.startReading() else { 
+            print("[WAVE] Error: reader.startReading() returned false")
+            return [] 
+        }
         
-        var samples: [Float] = []
+        let estimatedTotalSamples = Int(max(1.0, effectiveDuration) * 44100)
+        let samplesPerPoint = max(1, estimatedTotalSamples / count)
+        
+        var points: [Float] = []
+        points.reserveCapacity(count)
+        
+        var currentChunkMax: Int16 = 0
+        var samplesInCurrentChunk = 0
         
         while reader.status == .reading {
-            guard let buffer = output.copyNextSampleBuffer(),
-                  let blockBuffer = CMSampleBufferGetDataBuffer(buffer) else {
-                break
-            }
-            
-            let length = CMBlockBufferGetDataLength(blockBuffer)
-            var data = Data(count: length)
-            _ = data.withUnsafeMutableBytes { (pointer: UnsafeMutableRawBufferPointer) in
-                CMBlockBufferCopyDataBytes(blockBuffer, atOffset: 0, dataLength: length, destination: pointer.baseAddress!)
-            }
-            
-            data.withUnsafeBytes { (pointer: UnsafeRawBufferPointer) in
-                let int16Pointer = pointer.bindMemory(to: Int16.self)
-                for i in 0..<int16Pointer.count {
-                    // Normalize to 0...1
-                    let sample = Float(abs(int16Pointer[i])) / Float(Int16.max)
-                    samples.append(sample)
+            autoreleasepool {
+                guard let buffer = output.copyNextSampleBuffer(),
+                      let blockBuffer = CMSampleBufferGetDataBuffer(buffer) else {
+                    return
+                }
+                
+                let length = CMBlockBufferGetDataLength(blockBuffer)
+                let sampleCount = length / 2
+                
+                var localBuffer = [Int16](repeating: 0, count: sampleCount)
+                localBuffer.withUnsafeMutableBufferPointer { ptr in
+                    CMBlockBufferCopyDataBytes(blockBuffer, atOffset: 0, dataLength: length, destination: ptr.baseAddress!)
+                    
+                    for i in 0..<sampleCount {
+                        let sample = abs(ptr[i])
+                        if sample > currentChunkMax { currentChunkMax = sample }
+                        samplesInCurrentChunk += 1
+                        
+                        if samplesInCurrentChunk >= samplesPerPoint {
+                            points.append(Float(currentChunkMax) / Float(Int16.max))
+                            currentChunkMax = 0
+                            samplesInCurrentChunk = 0
+                            if points.count >= count { break }
+                        }
+                    }
                 }
             }
+            if points.count >= count { break }
         }
         
         if reader.status == .failed {
+            print("[WAVE] Error: Reader failed with status \(reader.status)")
             reader.cancelReading()
             return []
         }
         
-        guard !samples.isEmpty else { return [] }
+        if points.isEmpty { return [] }
         
-        // Downsample to the requested count using peak (max) instead of average,
-        // which makes the waveform look much better for sparse or quiet audio.
-        let chunkSize = samples.count / count
-        var downsampled: [Float] = []
-        if chunkSize > 1 {
-            for i in 0..<count {
-                let start = i * chunkSize
-                let end = min(start + chunkSize, samples.count)
-                let chunk = samples[start..<end]
-                let peak = chunk.max() ?? 0.0
-                downsampled.append(peak)
-            }
-        } else {
-            downsampled = samples
+        // Normalize
+        let globalPeak = points.max() ?? 1.0
+        if globalPeak > 0 && globalPeak < 1.0 {
+            points = points.map { $0 / globalPeak }
         }
         
-        // Normalize so the loudest peak is 1.0 (makes quiet recordings visible)
-        let globalPeak = downsampled.max() ?? 1.0
-        if globalPeak > 0 {
-            downsampled = downsampled.map { $0 / globalPeak }
-        }
-        
-        return downsampled
+        print("[WAVE] Extraction complete. Got \(points.count) points.")
+        return points
     }
 }
 
