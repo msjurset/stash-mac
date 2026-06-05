@@ -75,9 +75,14 @@ enum WaveformGenerator {
         var samplesInCurrentChunk = 0
         
         while reader.status == .reading {
+            var shouldBreak = false
             autoreleasepool {
-                guard let buffer = output.copyNextSampleBuffer(),
-                      let blockBuffer = CMSampleBufferGetDataBuffer(buffer) else {
+                guard let buffer = output.copyNextSampleBuffer() else {
+                    shouldBreak = true
+                    return
+                }
+                guard let blockBuffer = CMSampleBufferGetDataBuffer(buffer) else {
+                    shouldBreak = true
                     return
                 }
                 
@@ -101,8 +106,9 @@ enum WaveformGenerator {
                         }
                     }
                 }
+                if points.count >= count { shouldBreak = true }
             }
-            if points.count >= count { break }
+            if shouldBreak { break }
         }
         
         if reader.status == .failed {

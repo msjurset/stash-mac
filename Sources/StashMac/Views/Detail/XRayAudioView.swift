@@ -7,6 +7,8 @@ struct XRayAudioView: View {
     let item: StashItem
     let onDismiss: () -> Void
 
+    @Environment(StashStore.self) private var store
+
     @State private var tracks: [XRayTrack] = []
     @State private var cursorPosition: CGFloat = 0 
     @State private var isHovering = false
@@ -22,7 +24,8 @@ struct XRayAudioView: View {
     @State private var currentTimeRange: CMTimeRange? = nil
     
     // Playback State
-    @State private var player: AVPlayer?
+    @State private var masterPlayer: AVQueuePlayer?
+    @State private var sourcePlayers: [UUID: AVPlayer] = [:]
     @State private var isPlaying = false
     @State private var playbackTime: Double = 0 
     @State private var playbackSpeed: Double = 1.0
@@ -64,6 +67,21 @@ struct XRayAudioView: View {
                         .multilineTextAlignment(.center)
                         .padding(.horizontal)
                     
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Diagnostic Log:")
+                            .font(.caption)
+                            .bold()
+                        ForEach(diagnosticLog.suffix(10)) { entry in
+                            Text(entry.display)
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding()
+                    .background(Color.black.opacity(0.2))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .frame(maxWidth: 400)
+
                     Button("Retry") {
                         errorMessage = nil
                         loadTracks()
@@ -113,7 +131,7 @@ struct XRayAudioView: View {
                                 Divider().background(Color.white.opacity(0.1))
                                 
                                 // 2. Individual Tracks
-                                ForEach(tracks) { track in
+                                ForEach($tracks) { $track in
                                     WaveformTrackView(
                                         track: track,
                                         cursorPosition: cursorPosition,
@@ -150,10 +168,22 @@ struct XRayAudioView: View {
                             
                             // Vertical Cursor Line (Hover)
                             if isHovering && dragStart == nil {
-                                Rectangle()
-                                    .fill(Color.accentColor.opacity(0.5))
-                                    .frame(width: 1)
-                                    .offset(x: cursorPosition)
+                                ZStack(alignment: .top) {
+                                    Rectangle()
+                                        .fill(Color.accentColor.opacity(0.5))
+                                        .frame(width: 1)
+                                    
+                                    let time = cursorTimeToSeconds()
+                                    Text(formatTime(time))
+                                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                                        .padding(.horizontal, 4)
+                                        .padding(.vertical, 2)
+                                        .background(Color.accentColor)
+                                        .foregroundStyle(.white)
+                                        .clipShape(RoundedRectangle(cornerRadius: 3))
+                                        .offset(y: -20)
+                                }
+                                .offset(x: cursorPosition)
                             }
                         }
                         .contentShape(Rectangle())
@@ -232,7 +262,7 @@ struct XRayAudioView: View {
                     ForEach([0.5, 0.75, 1.0, 1.25, 1.5, 2.0], id: \.self) { speed in
                         Button("\(speed, specifier: "%.2f")x") {
                             playbackSpeed = speed
-                            if isPlaying { player?.rate = Float(speed) }
+                            updatePlaybackSpeed(speed)
                         }
                     }
                 } label: {
@@ -302,48 +332,85 @@ struct XRayAudioView: View {
 
     private func togglePlayback() {
         if isPlaying {
-            player?.pause()
-            isPlaying = false
+            pausePlayback()
         } else {
             startPlayback()
         }
     }
     
     private func startPlayback() {
-        if player == nil { setupPlayer() }
-        guard let player = player else { return }
+        if masterPlayer == nil { setupPlayers() }
+        guard let master = masterPlayer else { return }
         
         let startTime = currentTimeRange?.start ?? .zero
         let endTime = currentTimeRange?.end ?? .indefinite
         
-        let current = player.currentTime()
+        let current = master.currentTime()
         if current >= endTime || current < startTime {
-            player.seek(to: startTime, toleranceBefore: .zero, toleranceAfter: .zero)
+            seekAll(to: startTime)
         }
         
-        player.rate = Float(playbackSpeed)
-        player.play()
+        master.rate = Float(playbackSpeed)
+        sourcePlayers.values.forEach { $0.rate = Float(playbackSpeed) }
+        
+        master.play()
+        sourcePlayers.values.forEach { $0.play() }
         isPlaying = true
     }
     
+    private func pausePlayback() {
+        masterPlayer?.pause()
+        sourcePlayers.values.forEach { $0.pause() }
+        isPlaying = false
+    }
+
+    private func updatePlaybackSpeed(_ speed: Double) {
+        masterPlayer?.rate = Float(speed)
+        sourcePlayers.values.forEach { $0.rate = Float(speed) }
+    }
+
+    private func seekAll(to time: CMTime) {
+        masterPlayer?.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
+        sourcePlayers.values.forEach { $0.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero) }
+    }
+    
     private func stopPlayback() {
-        player?.pause()
+        pausePlayback()
         if let observer = timeObserver {
-            player?.removeTimeObserver(observer)
+            masterPlayer?.removeTimeObserver(observer)
             timeObserver = nil
         }
-        player = nil
+        masterPlayer = nil
+        sourcePlayers = [:]
         isPlaying = false
     }
     
-    private func setupPlayer() {
-        guard let masterURL = tracks.first(where: { $0.role == .master })?.url else { return }
-        let asset = AVURLAsset(url: masterURL)
-        let item = AVPlayerItem(asset: asset)
-        let newPlayer = AVPlayer(playerItem: item)
+    private func setupPlayers() {
+        // If master is missing, use the first available source track as lead
+        let leadTrack = tracks.first(where: { $0.role == .master }) ?? tracks.first
+        guard let lead = leadTrack, let leadURL = lead.url else { 
+            log("No valid tracks available for playback setup.")
+            return 
+        }
         
-        timeObserver = newPlayer.addPeriodicTimeObserver(forInterval: CMTime(value: 1, timescale: 60), queue: .main) { [weak newPlayer] time in
-            guard let player = newPlayer else { return }
+        log("Setting up multi-track playback (Lead: \(lead.label))...")
+        
+        let leadAsset = AVURLAsset(url: leadURL)
+        let leadItem = AVPlayerItem(asset: leadAsset)
+        let masterPlayer = AVQueuePlayer(playerItem: leadItem)
+        
+        var sources: [UUID: AVPlayer] = [:]
+        for track in tracks where track.id != lead.id {
+            if let url = track.url {
+                let asset = AVURLAsset(url: url)
+                let item = AVPlayerItem(asset: asset)
+                let player = AVPlayer(playerItem: item)
+                sources[track.id] = player
+            }
+        }
+        
+        timeObserver = masterPlayer.addPeriodicTimeObserver(forInterval: CMTime(value: 1, timescale: 60), queue: .main) { [weak masterPlayer] time in
+            guard let player = masterPlayer else { return }
             
             Task { @MainActor in
                 self.playbackTime = time.seconds
@@ -351,26 +418,43 @@ struct XRayAudioView: View {
                 let endTime = self.currentTimeRange?.end ?? CMTime(seconds: self.totalFileDuration, preferredTimescale: 600)
                 if time >= endTime {
                     if self.isLooping {
-                        player.seek(to: self.currentTimeRange?.start ?? .zero, toleranceBefore: .zero, toleranceAfter: .zero)
+                        self.seekAll(to: self.currentTimeRange?.start ?? .zero)
                         player.play()
+                        self.sourcePlayers.values.forEach { $0.play() }
                     } else {
-                        player.pause()
-                        self.isPlaying = false
+                        self.pausePlayback()
                     }
                 }
             }
         }
         
-        self.player = newPlayer
+        self.masterPlayer = masterPlayer
+        self.sourcePlayers = sources
     }
     
+    private func cursorTimeToSeconds() -> Double {
+        guard !tracks.isEmpty else { return 0 }
+        let totalDur = tracks.map(\.duration).max() ?? 1.0
+        let percent = Double(cursorPosition / contentWidth)
+        let startOffset = currentTimeRange?.start.seconds ?? 0
+        return startOffset + (percent * totalDur)
+    }
+
+    private func formatTime(_ seconds: Double) -> String {
+        let m = Int(seconds) / 60
+        let s = Int(seconds) % 60
+        let ms = Int((seconds.truncatingRemainder(dividingBy: 1)) * 100)
+        return String(format: "%d:%02d.%02d", m, s, ms)
+    }
+
     private func calculatePlayheadX() -> CGFloat {
         guard !tracks.isEmpty else { return -1 }
+        // Use the first track's duration as the total duration for scaling
         let totalDisplayDuration = tracks[0].duration 
         let startOffset = currentTimeRange?.start.seconds ?? 0
         
         let relativeTime = playbackTime - startOffset
-        if relativeTime < 0 || relativeTime > totalDisplayDuration + 0.1 { return -1 }
+        if relativeTime < 0 || relativeTime > totalDisplayDuration + 0.5 { return -1 }
         
         return (CGFloat(relativeTime) / CGFloat(totalDisplayDuration)) * contentWidth
     }
@@ -422,17 +506,32 @@ struct XRayAudioView: View {
         }
         
         var sources: [TrackSource] = []
-        if let sp = item.storePath, let url = FilePathResolver.resolve(storePath: sp) {
-            sources.append(TrackSource(label: item.caption ?? "MASTER MIX", url: url, mime: item.mimeType, position: 0))
+        if let sp = item.storePath {
+            if let url = FilePathResolver.resolve(storePath: sp) {
+                log("Found master track: \(sp) (mime: \(item.mimeType ?? "nil"))")
+                sources.append(TrackSource(label: item.caption ?? "MASTER MIX", url: url, mime: item.mimeType, position: 0))
+            } else {
+                log("Master track file missing from store: \(sp)")
+            }
         }
         
         if let files = item.files {
+            log("Item has \(files.count) attached files")
             for f in files {
                 if let url = FilePathResolver.resolve(storePath: f.storePath) {
                     let caption = f.caption ?? "ATTACHED TRACK"
+                    log("Found attached track: \(f.storePath) (\(caption))")
                     sources.append(TrackSource(label: caption, url: url, mime: f.mimeType, position: f.position))
+                } else {
+                    log("Attached track file missing from store: \(f.storePath)")
                 }
             }
+        }
+        
+        if sources.isEmpty {
+            log("No tracks found to analyze.")
+            errorMessage = "No audio tracks found in local store."
+            return
         }
         
         Task {
@@ -474,7 +573,7 @@ struct XRayAudioView: View {
                     } else {
                         self.tracks = final
                         self.loadingStatus = ""
-                        setupPlayer()
+                        setupPlayers()
                     }
                 }
             }
@@ -482,29 +581,44 @@ struct XRayAudioView: View {
     }
     
     private func loadTrack(label: String, url: URL, mime: String?) async -> XRayTrack? {
+        log("Loading track: \(label) (mime: \(mime ?? "nil"))")
         var opts: [String: Any]? = nil
         if let mime = mime { opts = ["AVURLAssetOutOfBandMIMETypeKey": mime] }
         
         let asset = AVURLAsset(url: url, options: opts)
-        guard let audioTrack = try? await asset.loadTracks(withMediaType: .audio).first else {
+        
+        do {
+            let tracks = try await asset.loadTracks(withMediaType: .audio)
+            guard let audioTrack = tracks.first else {
+                log("No audio track found in asset: \(label)")
+                return nil
+            }
+            
+            log("Extracting samples for: \(label)")
+            let samples = await WaveformGenerator.extractSamples(
+                from: asset, 
+                track: audioTrack, 
+                count: 5000, 
+                fullDuration: true,
+                timeRange: currentTimeRange
+            )
+            
+            let durObj = try? await asset.load(.duration)
+            let fullDuration = durObj?.seconds ?? 0
+            await MainActor.run { 
+                if self.totalFileDuration == 0 {
+                    self.totalFileDuration = fullDuration 
+                }
+            }
+            
+            let duration = currentTimeRange?.duration.seconds ?? fullDuration
+            log("Loaded track: \(label) (\(duration)s, \(samples.count) samples)")
+            
+            return XRayTrack(label: label, url: url, duration: duration, samples: samples, position: 0)
+        } catch {
+            log("Failed to load asset \(label): \(error.localizedDescription)")
             return nil
         }
-        
-        let samples = await WaveformGenerator.extractSamples(
-            from: asset, 
-            track: audioTrack, 
-            count: 5000, 
-            fullDuration: true,
-            timeRange: currentTimeRange
-        )
-        
-        let durObj = try? await asset.load(.duration)
-        let fullDuration = durObj?.seconds ?? 0
-        await MainActor.run { self.totalFileDuration = fullDuration }
-        
-        let duration = currentTimeRange?.duration.seconds ?? fullDuration
-        
-        return XRayTrack(label: label, url: url, duration: duration, samples: samples, position: 0)
     }
 }
 
@@ -654,7 +768,10 @@ private struct CompositeWaveformView: View {
                                     .fill(c)
                                     .frame(width: 20, height: 20)
                                     .overlay(Circle().stroke(Color.primary, lineWidth: color.wrappedValue == c ? 2 : 0))
-                                    .onTapGesture { color.wrappedValue = c }
+                                    .onTapGesture { 
+                                        color.wrappedValue = c 
+                                        showingColorPopoverFor = nil
+                                    }
                             }
                         }
                         .padding(12)
