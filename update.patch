@@ -1,0 +1,50 @@
+--- Sources/StashMac/Views/Detail/XRayAudioView.swift
++++ Sources/StashMac/Views/Detail/XRayAudioView.swift
+@@ -628,6 +628,29 @@
+         }
+         .frame(height: 180)
+     }
++    
++    struct ColorSwatchPopover: View {
++        @Binding var color: Color
++        let colors: [Color] = [.red, .orange, .yellow, .green, .mint, .teal, .cyan, .blue, .indigo, .purple, .pink, .brown]
++        
++        var body: some View {
++            LazyVGrid(columns: Array(repeating: GridItem(.fixed(20), spacing: 8), count: 4), spacing: 8) {
++                ForEach(colors, id: \.self) { c in
++                    Circle()
++                        .fill(c)
++                        .frame(width: 20, height: 20)
++                        .overlay(Circle().stroke(Color.white, lineWidth: color == c ? 2 : 0))
++                        .onTapGesture { color = c }
++                }
++            }
++            .padding(12)
++        }
++    }
++    
++    @State private var showingColorPopoverFor: String? = nil
+ 
+     @ViewBuilder
+     private func legendItem(label: String, color: Binding<Color>, isMaster: Bool) -> some View {
+         HStack(spacing: 4) {
+             if isMaster {
+                 Image(systemName: "circle.fill")
+                     .foregroundStyle(.white)
+             } else {
+-                ColorPicker("", selection: color, supportsOpacity: false)
+-                    .labelsHidden()
+-                    .scaleEffect(0.6)
+-                    .frame(width: 14, height: 14)
++                Circle()
++                    .fill(color.wrappedValue)
++                    .frame(width: 12, height: 12)
++                    .onTapGesture { showingColorPopoverFor = label }
++                    .popover(isPresented: Binding(
++                        get: { showingColorPopoverFor == label },
++                        set: { if !$0 && showingColorPopoverFor == label { showingColorPopoverFor = nil } }
++                    )) {
++                        ColorSwatchPopover(color: color)
++                    }
+             }
+             Text(label.uppercased())

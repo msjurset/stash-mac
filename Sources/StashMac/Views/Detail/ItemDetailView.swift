@@ -13,6 +13,11 @@ struct ItemDetailView: View {
     @State private var showLocationMapPopover = false
     @State private var isAddingTag = false
     @State private var newTagText = ""
+    @State private var isAddingCollection = false
+    @State private var newCollectionText = ""
+    /// Tracks if the user has manually scrolled since pinning, to break the pin.
+    @State private var hasScrolledSincePin = false
+    @State private var lastScrollOffset: CGFloat = 0
     /// Inline-edit mode for the title. Double-click on the title
     /// flips this; commit / cancel routes through InlineEditField
     /// (X-inside-the-field + click-off saves, per the project's
@@ -20,459 +25,346 @@ struct ItemDetailView: View {
     @State private var isEditingTitle = false
     @State private var titleDraft = ""
 
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                // Header
-                HStack {
-                    Image(systemName: item.type.icon)
-                        .font(.title2)
-                        .foregroundStyle(.secondary)
-                    VStack(alignment: .leading) {
-                        HStack(spacing: 8) {
-                            titleView
-                            // Favorite toggle — inline with title so
-                            // it reads like Mail's flag or Photos'
-                            // heart (action sits on the thing it
-                            // affects, not in a separate toolbar
-                            // group). Filled yellow when on, hollow
-                            // gray otherwise. Keyboard shortcut F
-                            // (no modifier) when the detail view
-                            // has focus and no text field is active.
-                            let isFavorite = item.tags?.contains(where: { $0.name == FavoriteTag.name }) ?? false
-                            Button {
-                                store.setFavorite(itemID: item.id, favorite: !isFavorite)
-                            } label: {
-                                Image(systemName: isFavorite ? "star.fill" : "star")
-                                    .font(.title3)
-                                    .foregroundStyle(isFavorite ? Color.yellow : Color.secondary)
-                            }
-                            .buttonStyle(.plain)
-                            .keyboardShortcut("f", modifiers: [])
-                            .help(isFavorite ? "Remove from favorites (F)" : "Mark as favorite (F)")
+    private var pinnedViews: PinnedScrollableViews {
+        if hasScrolledSincePin { return [] }
+        if isAddingTag || isAddingCollection {
+            return [.sectionHeaders]
+        }
+        return []
+    }
 
-                            // In-flight identify spinner mirrors the
-                            // list-row indicator so the user has a
-                            // visible signal that Stash is still
-                            // working when they pick "Identify with X"
-                            // from the right-click menu.
-                            if store.identifyingItemIDs.contains(item.id) {
-                                ProgressView()
-                                    .controlSize(.small)
-                            }
-                        }
-                        HStack(spacing: 4) {
-                            Text("\(String(item.type.label.dropLast())) \u{2022} \(item.shortID)")
-                                .font(.caption)
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 16, pinnedViews: pinnedViews) {
+                    // Header
+                    VStack(alignment: .leading, spacing: 16) {
+                        HStack {
+                            Image(systemName: item.type.icon)
+                                .font(.title2)
                                 .foregroundStyle(.secondary)
-                            Button {
-                                let pb = NSPasteboard.general
-                                pb.clearContents()
-                                pb.setString(item.id, forType: .string)
-                            } label: {
-                                Image(systemName: "doc.on.doc")
-                                    .font(.caption2)
-                                    .foregroundStyle(.tertiary)
+                            VStack(alignment: .leading) {
+                                HStack(spacing: 8) {
+                                    titleView
+                                    // Favorite toggle — inline with title so
+                                    // it reads like Mail's flag or Photos'
+                                    // heart (action sits on the thing it
+                                    // affects, not in a separate toolbar
+                                    // group). Filled yellow when on, hollow
+                                    // gray otherwise. Keyboard shortcut F
+                                    // (no modifier) when the detail view
+                                    // has focus and no text field is active.
+                                    let isFavorite = item.tags?.contains(where: { $0.name == FavoriteTag.name }) ?? false
+                                    Button {
+                                        store.setFavorite(itemID: item.id, favorite: !isFavorite)
+                                    } label: {
+                                        Image(systemName: isFavorite ? "star.fill" : "star")
+                                            .font(.title3)
+                                            .foregroundStyle(isFavorite ? Color.yellow : Color.secondary)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .keyboardShortcut("f", modifiers: [])
+                                    .help(isFavorite ? "Remove from favorites (F)" : "Mark as favorite (F)")
+
+                                    // In-flight identify spinner mirrors the
+                                    // list-row indicator so the user has a
+                                    // visible signal that Stash is still
+                                    // working when they pick "Identify with X"
+                                    // from the right-click menu.
+                                    if store.identifyingItemIDs.contains(item.id) {
+                                        ProgressView()
+                                            .controlSize(.small)
+                                    }
+                                }
+                                HStack(spacing: 4) {
+                                    Text("\(String(item.type.label.dropLast())) \u{2022} \(item.shortID)")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    Button {
+                                        let pb = NSPasteboard.general
+                                        pb.clearContents()
+                                        pb.setString(item.id, forType: .string)
+                                    } label: {
+                                        Image(systemName: "doc.on.doc")
+                                            .font(.caption2)
+                                            .foregroundStyle(.tertiary)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help("Copy full ID")
+                                    .onHover { hovering in
+                                        if hovering { NSCursor.pointingHand.push() }
+                                        else { NSCursor.pop() }
+                                    }
+                                }
                             }
-                            .buttonStyle(.plain)
-                            .help("Copy full ID")
-                            .onHover { hovering in
-                                if hovering { NSCursor.pointingHand.push() }
-                                else { NSCursor.pop() }
-                            }
+                            Spacer()
+                            ContextualHelpButton(topic: .itemTypes)
+                        }
+
+                        Divider()
+
+                        // Unified media area — switches between embed-only,
+                        // audio-beside-thumb, video tap-to-play, plain
+                        // thumbnail, or hidden, based on item shape.
+                        if item.files?.isEmpty != false {
+                            MediaSection(item: item)
                         }
                     }
-                    Spacer()
-                    ContextualHelpButton(topic: .itemTypes)
-                }
+                    .padding(.bottom, 8)
 
-                Divider()
-
-                // Unified media area — switches between embed-only,
-                // audio-beside-thumb, video tap-to-play, plain
-                // thumbnail, or hidden, based on item shape. Section
-                // title intentionally absent — the visual labels
-                // itself.
-                MediaSection(item: item)
-
-                // Media preview (Image, Multi-file, or Blob fallback).
-                // Shown for .image types OR any item with attached files.
-                if item.type == .image || (item.files?.isEmpty == false) {
-                    DetailSection(title: "Preview") {
-                        let primaryURL = item.storePath
-                            .flatMap { FilePathResolver.resolve(storePath: $0) }
-                        let thumbnailURL = (item.thumbnailPath?.isEmpty == false)
-                            .takeIf { $0 == true }
-                            .flatMap { _ in
-                                FilePathResolver.resolveRelative(item.thumbnailPath!)
-                            }
-                            .flatMap { url in
-                                FileManager.default.fileExists(atPath: url.path)
-                                    ? url : nil
-                            }
-                        if let files = item.files, !files.isEmpty {
-                            // Items with attached files render a
-                            // carousel + filmstrip; single-file items
-                            // stay on the lean ImagePreviewSection so we
-                            // don't pay the LazyHStack / drop-target
-                            // overhead on the 99% case. MultiFilePreview
-                            // owns the missing-primary-blob fallback for
-                            // these items (cached thumbnail + heal
-                            // banner when every slot has lost its blob).
-                            MultiFilePreview(item: item)
-                        } else if let primary = primaryURL {
-                            ImagePreviewSection(fileURL: primary)
-                                .onDrop(of: [.fileURL], isTargeted: nil) { providers in
-                                    attachDroppedFiles(providers: providers)
+                    // Media preview (Image, Multi-file, or Blob fallback).
+                    if item.type == .image || (item.files?.isEmpty == false) {
+                        DetailSection(title: "Preview") {
+                            let primaryURL = item.storePath
+                                .flatMap { FilePathResolver.resolve(storePath: $0) }
+                            let thumbnailURL = (item.thumbnailPath?.isEmpty == false)
+                                .takeIf { $0 == true }
+                                .flatMap { _ in
+                                    FilePathResolver.resolveRelative(item.thumbnailPath!)
                                 }
-                        } else if let fallback = thumbnailURL {
-                            // Primary blob is missing on disk (rare —
-                            // a `stash heal` or re-import will bring
-                            // it back). Render the cached thumbnail so
-                            // the user can still see what the item is.
-                            VStack(alignment: .leading, spacing: 6) {
-                                ImagePreviewSection(fileURL: fallback)
+                                .flatMap { url in
+                                    FileManager.default.fileExists(atPath: url.path)
+                                        ? url : nil
+                                }
+                            if let files = item.files, !files.isEmpty {
+                                MultiFilePreview(item: item)
+                            } else if let primary = primaryURL {
+                                ImagePreviewSection(fileURL: primary)
+                                    .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+                                        attachDroppedFiles(providers: providers)
+                                    }
+                            } else if let fallback = thumbnailURL {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    ImagePreviewSection(fileURL: fallback)
+                                    MissingBlobBanner(itemID: item.id)
+                                }
+                            } else {
                                 MissingBlobBanner(itemID: item.id)
                             }
-                        } else {
-                            // Neither primary blob nor thumbnail —
-                            // surface the missing-blob warning so the
-                            // user knows the item needs healing.
-                            MissingBlobBanner(itemID: item.id)
                         }
                     }
-                }
 
-                // URL
-                if let urlString = item.url, !urlString.isEmpty {
-                    DetailSection(title: "URL") {
-                        VStack(alignment: .leading, spacing: 8) {
-                            ClickableURLText(urlString: urlString)
-                            // Single-click affordance to walk the page
-                            // for images / files. Routes through the
-                            // same FetchURLSheet as the toolbar /
-                            // File menu, just pre-populated.
-                            Button {
-                                NotificationCenter.default.post(
-                                    name: .stashOpenFetchURL,
-                                    object: nil,
-                                    userInfo: ["url": urlString]
-                                )
-                            } label: {
-                                Label("Fetch Files from this URL…", systemImage: "tray.and.arrow.down")
-                            }
-                            .controlSize(.small)
-                            .help("Discover images and files on this page and stash them as separate items.")
-                        }
-                    }
-                }
-
-                // Notes — Markdown-rendered, with double-click to
-                // open a full popout editor (mirrors Extracted Text).
-                // Long notes truncate to 500 chars with Show More;
-                // single click toggles expand when truncated.
-                //
-                // AI Follow-up Chat is also hosted inside NotesView.
-                NotesView(text: item.notes ?? "", itemID: item.id)
-
-                // Location — only shown when an item has a stored
-                // latitude/longitude (auto-extracted from EXIF on
-                // ingest, set on mobile capture, or typed manually).
-                if let loc = item.location {
-                    DetailSection(title: "Location") {
-                        locationRow(loc: loc)
-                    }
-                }
-
-                // Tags
-                DetailSection(title: "Tags") {
-                    FlowLayout(spacing: 6) {
-                        if let tags = item.tags {
-                            ForEach(tags) { tag in
+                    // URL
+                    if let urlString = item.url, !urlString.isEmpty {
+                        DetailSection(title: "URL") {
+                            VStack(alignment: .leading, spacing: 8) {
+                                ClickableURLText(urlString: urlString)
                                 Button {
-                                    store.filterByTag(tag.name)
+                                    NotificationCenter.default.post(
+                                        name: .stashOpenFetchURL,
+                                        object: nil,
+                                        userInfo: ["url": urlString]
+                                    )
                                 } label: {
-                                    Text("#\(tag.name)")
-                                        .kerning(0.5)
-                                        .font(.callout)
-                                        .padding(.horizontal, 8)
-                                        .padding(.vertical, 3)
-                                        .background(.quaternary)
-                                        .clipShape(Capsule())
+                                    Label("Fetch Files from this URL…", systemImage: "tray.and.arrow.down")
                                 }
-                                .buttonStyle(.plain)
-                                .onHover { hovering in
-                                    if hovering {
-                                        NSCursor.pointingHand.push()
-                                    } else {
-                                        NSCursor.pop()
-                                    }
-                                }
-                            }
-                        }
-
-                        if isAddingTag {
-                            InlineTagInput(
-                                text: $newTagText,
-                                allTags: store.tags,
-                                onCommit: { input in
-                                    let tags = input.split(separator: ",")
-                                        .map { $0.trimmingCharacters(in: .whitespaces) }
-                                        .filter { !$0.isEmpty }
-                                    if !tags.isEmpty {
-                                        store.addTagsToItem(id: item.id, tags: tags)
-                                    }
-                                    newTagText = ""
-                                    isAddingTag = false
-                                },
-                                onCancel: {
-                                    newTagText = ""
-                                    isAddingTag = false
-                                }
-                            )
-                        } else {
-                            Button {
-                                isAddingTag = true
-                            } label: {
-                                Image(systemName: "plus")
-                                    .font(.caption)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 4)
-                                    .background(.quaternary)
-                                    .clipShape(Capsule())
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-
-                // Collections
-                if let cols = item.collections, !cols.isEmpty {
-                    DetailSection(title: "Collections") {
-                        HStack {
-                            ForEach(cols) { col in
-                                Label(col.name, systemImage: "folder")
-                                    .font(.callout)
+                                .controlSize(.small)
                             }
                         }
                     }
-                }
 
-                // Related Items — computed from tag/link/domain/hash
-                // overlap. Distinct from "Linked Items" which is the
-                // user's explicit set; this is the serendipitous
-                // neighbor list. Section hides itself when empty.
-                RelatedSection(itemID: item.id)
+                    NotesView(text: item.notes ?? "", itemID: item.id)
 
-                // Linked Items
-                if let links = item.links, !links.isEmpty {
-                    DetailSection(title: "Linked Items") {
-                        ForEach(links) { link in
-                            HStack {
-                                Text(link.directionArrow)
-                                    .font(.body.monospaced())
-                                    .foregroundStyle(.secondary)
-                                Image(systemName: link.type.icon)
-                                    .foregroundStyle(.secondary)
-                                Button {
-                                    store.selectedItemID = link.itemId
-                                } label: {
-                                    Text(link.title)
-                                        .foregroundStyle(.primary)
-                                }
-                                .buttonStyle(.plain)
-                                .pointingHandCursor()
-                                if let label = link.label, !label.isEmpty {
-                                    Text("(\(label))")
-                                        .font(.callout)
-                                        .foregroundStyle(.tertiary)
-                                }
-                                Spacer()
-                                Button {
-                                    store.unlinkItems(idA: item.id, idB: link.itemId)
-                                } label: {
-                                    Image(systemName: "xmark.circle")
+                    if let loc = item.location {
+                        DetailSection(title: "Location") {
+                            locationRow(loc: loc)
+                        }
+                    }
+
+                    tagsSection(proxy: proxy)
+
+                    collectionsSection(proxy: proxy)
+
+                    RelatedSection(itemID: item.id)
+
+                    if let links = item.links, !links.isEmpty {
+                        DetailSection(title: "Linked Items") {
+                            ForEach(links) { link in
+                                HStack {
+                                    Text(link.directionArrow)
+                                        .font(.body.monospaced())
                                         .foregroundStyle(.secondary)
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                    }
-                }
-
-                // Info — file metadata (when present) plus ID and
-                // timestamps, always shown. Single section replaces
-                // the previous "File Info" + "Dates" split since
-                // every item has an ID and dates and the file-only
-                // fields read fine alongside them.
-                DetailSection(title: "Info") {
-                    InfoTable {
-                        if let mime = item.mimeType {
-                            InfoRow.row("MIME Type") { Text(mime).textSelection(.enabled) }
-                        }
-                        if let lang = item.language {
-                            InfoRow.row("Language") {
-                                Text(lang)
-                                    .font(.callout.monospaced())
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(.blue.opacity(0.15), in: RoundedRectangle(cornerRadius: 4))
-                                    .foregroundStyle(.blue)
-                            }
-                        }
-                        if let size = item.humanFileSize {
-                            InfoRow.row("Size") { Text(size) }
-                        }
-                        if let source = item.sourcePath {
-                            InfoRow.row("Source") {
-                                Text(source)
-                                    .textSelection(.enabled)
-                                    .lineLimit(3)
-                                    .truncationMode(.middle)
-                            }
-                        }
-                        // "Captured" sits above "Created" because in the
-                        // photo-heavy case it's what users actually want
-                        // to see — when the shutter fired, not when the
-                        // row landed in the stash. Shown only when
-                        // populated (URL items leave it nil; older
-                        // captures pre-backfill also nil).
-                        if let captured = item.capturedAt {
-                            InfoRow.row("Captured") {
-                                Text(captured.formatted(date: .abbreviated, time: .shortened))
-                                    .help("From EXIF / email headers / file mtime. Distinct from Created (when the row landed in this stash).")
-                            }
-                        }
-                        InfoRow.row("Created") {
-                            Text(item.createdAt.formatted(date: .abbreviated, time: .shortened))
-                        }
-                        InfoRow.row("Updated") {
-                            Text(item.updatedAt.formatted(date: .abbreviated, time: .shortened))
-                        }
-                        // Camera EXIF rows — only render the
-                        // pieces that have values. Shape matches
-                        // Google Photos's "Info" panel for parity:
-                        // device name, settings (ƒ-stop / shutter
-                        // / focal / ISO), dimensions, lens.
-                        if let cam = item.metadata?.camera, cam.hasAny {
-                            if let device = cam.deviceLabel {
-                                InfoRow.row("Capture device") {
-                                    Text(device).textSelection(.enabled)
-                                }
-                            }
-                            if let settings = cam.settingsLine {
-                                InfoRow.row("Settings") {
-                                    Text(settings)
-                                        .font(.callout.monospacedDigit())
-                                        .textSelection(.enabled)
-                                }
-                            }
-                            if let dims = cam.dimensionsLine {
-                                InfoRow.row("Dimensions") {
-                                    Text(dims).textSelection(.enabled)
-                                }
-                            }
-                            if let lens = cam.lens, !lens.isEmpty,
-                               lens != cam.deviceLabel {
-                                InfoRow.row("Lens") {
-                                    Text(lens)
-                                        .textSelection(.enabled)
-                                        .lineLimit(2)
-                                        .truncationMode(.tail)
+                                    Image(systemName: link.type.icon)
+                                        .foregroundStyle(.secondary)
+                                    Button {
+                                        store.selectedItemID = link.itemId
+                                    } label: {
+                                        Text(link.title)
+                                            .foregroundStyle(.primary)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .pointingHandCursor()
+                                    if let label = link.label, !label.isEmpty {
+                                        Text("(\(label))")
+                                            .font(.callout)
+                                            .foregroundStyle(.tertiary)
+                                    }
+                                    Spacer()
+                                    Button {
+                                        store.unlinkItems(idA: item.id, idB: link.itemId)
+                                    } label: {
+                                        Image(systemName: "xmark.circle")
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    .buttonStyle(.plain)
                                 }
                             }
                         }
                     }
-                }
 
-                // Provenance — capture / rule / tag timeline reconstructed
-                // from capture.log and tags.log. Sits right after Info
-                // because both sections are "metadata about the item"
-                // rather than the item's content.
-                ProvenanceSection(itemID: item.id)
+                    DetailSection(title: "Info") {
+                        InfoTable {
+                            if let mime = item.mimeType {
+                                InfoRow.row("MIME Type") { Text(mime).textSelection(.enabled) }
+                            }
+                            if let lang = item.language {
+                                InfoRow.row("Language") {
+                                    Text(lang)
+                                        .font(.callout.monospaced())
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(.blue.opacity(0.15), in: RoundedRectangle(cornerRadius: 4))
+                                        .foregroundStyle(.blue)
+                                }
+                            }
+                            if let size = item.humanFileSize {
+                                InfoRow.row("Size") { Text(size) }
+                            }
+                            if let source = item.sourcePath {
+                                InfoRow.row("Source") {
+                                    Text(source)
+                                        .textSelection(.enabled)
+                                        .lineLimit(3)
+                                        .truncationMode(.middle)
+                                }
+                            }
+                            if let captured = item.capturedAt {
+                                InfoRow.row("Captured") {
+                                    Text(captured.formatted(date: .abbreviated, time: .shortened))
+                                }
+                            }
+                            InfoRow.row("Created") {
+                                Text(item.createdAt.formatted(date: .abbreviated, time: .shortened))
+                            }
+                            InfoRow.row("Updated") {
+                                Text(item.updatedAt.formatted(date: .abbreviated, time: .shortened))
+                            }
+                            if let cam = item.metadata?.camera, cam.hasAny {
+                                if let device = cam.deviceLabel {
+                                    InfoRow.row("Capture device") {
+                                        Text(device).textSelection(.enabled)
+                                    }
+                                }
+                                if let settings = cam.settingsLine {
+                                    InfoRow.row("Settings") {
+                                        Text(settings)
+                                            .font(.callout.monospacedDigit())
+                                            .textSelection(.enabled)
+                                    }
+                                }
+                                if let dims = cam.dimensionsLine {
+                                    InfoRow.row("Dimensions") {
+                                        Text(dims).textSelection(.enabled)
+                                    }
+                                }
+                                if let lens = cam.lens, !lens.isEmpty,
+                                   lens != cam.deviceLabel {
+                                    InfoRow.row("Lens") {
+                                        Text(lens)
+                                            .textSelection(.enabled)
+                                            .lineLimit(2)
+                                            .truncationMode(.tail)
+                                    }
+                                }
+                            }
+                        }
+                    }
 
-                // Archive contents
-                if let mime = item.mimeType, isArchiveMIME(mime),
-                   let storePath = item.storePath,
-                   let fileURL = FilePathResolver.resolve(storePath: storePath) {
-                    ArchiveContentsView(fileURL: fileURL, mimeType: mime)
-                }
+                    ProvenanceSection(itemID: item.id)
 
-                // Extracted text (skip for archives — tree view or nothing is shown instead)
-                if let text = item.extractedText, !text.isEmpty,
-                   !(item.mimeType.map(isArchiveMIME) ?? false) {
-                    VStack(alignment: .leading, spacing: 0) {
-                        if item.type == .url {
+                    if let mime = item.mimeType, isArchiveMIME(mime),
+                       let storePath = item.storePath,
+                       let fileURL = FilePathResolver.resolve(storePath: storePath) {
+                        ArchiveContentsView(fileURL: fileURL, mimeType: mime)
+                    }
+
+                    if let text = item.extractedText, !text.isEmpty,
+                       !(item.mimeType.map(isArchiveMIME) ?? false) {
+                        VStack(alignment: .leading, spacing: 0) {
+                            if item.type == .url {
+                                HStack {
+                                    Spacer()
+                                    Button {
+                                        refetchContent()
+                                    } label: {
+                                        Image(systemName: "arrow.clockwise")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .disabled(isFetchingContent)
+                                }
+                            }
+                            if item.type == .email {
+                                EmailContentView(text: text)
+                            } else {
+                                let isMedia = item.type == .file &&
+                                    (item.mimeType?.hasPrefix("audio/") == true || item.mimeType?.hasPrefix("video/") == true)
+                                ExtractedTextView(
+                                    text: text,
+                                    itemID: item.id,
+                                    sectionTitle: isMedia ? "Transcript" : "Extracted Text",
+                                    editorTitle: isMedia ? "Edit Transcript" : "Edit Extracted Text"
+                                )
+                            }
+                        }
+                    } else if item.type == .url {
+                        DetailSection(title: "Extracted Text") {
                             HStack {
+                                Text("No content extracted")
+                                    .font(.callout)
+                                    .foregroundStyle(.secondary)
                                 Spacer()
                                 Button {
                                     refetchContent()
                                 } label: {
-                                    Image(systemName: "arrow.clockwise")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
+                                    if isFetchingContent {
+                                        ProgressView().controlSize(.small)
+                                    } else {
+                                        Label("Fetch", systemImage: "arrow.clockwise")
+                                            .font(.caption)
+                                    }
                                 }
-                                .buttonStyle(.plain)
-                                .help("Re-fetch page content")
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
                                 .disabled(isFetchingContent)
                             }
                         }
-                        if item.type == .email {
-                            EmailContentView(text: text)
-                        } else {
-                            // Audio and Video file items (voice memos, podcast
-                            // clips, etc.) get a "Transcript" heading
-                            // since the text is ASR output, not OCR
-                            // or page-content. Everything else stays
-                            // generic "Extracted Text".
-                            let isMedia = item.type == .file &&
-                                (item.mimeType?.hasPrefix("audio/") == true || item.mimeType?.hasPrefix("video/") == true)
-                            ExtractedTextView(
-                                text: text,
-                                itemID: item.id,
-                                sectionTitle: isMedia ? "Transcript" : "Extracted Text",
-                                editorTitle: isMedia ? "Edit Transcript" : "Edit Extracted Text",
-                            )
-                        }
-                    }
-                } else if item.type == .url {
-                    // URL with no extracted text — offer to fetch
-                    DetailSection(title: "Extracted Text") {
-                        HStack {
-                            Text("No content extracted")
-                                .font(.callout)
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            Button {
-                                refetchContent()
-                            } label: {
-                                if isFetchingContent {
-                                    ProgressView()
-                                        .controlSize(.small)
-                                } else {
-                                    Label("Fetch", systemImage: "arrow.clockwise")
-                                        .font(.caption)
-                                }
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                            .disabled(isFetchingContent)
-                        }
                     }
                 }
-
+                .padding()
+                .onGeometryChange(for: CGFloat.self) { proxy in
+                    proxy.frame(in: .named("scroll")).minY
+                } action: { newValue in
+                    if (isAddingTag || isAddingCollection) && !hasScrolledSincePin {
+                        let delta = abs(newValue - lastScrollOffset)
+                        if delta > 1.0 {
+                            hasScrolledSincePin = true
+                        }
+                    }
+                    lastScrollOffset = newValue
+                }
             }
-            .padding()
+            .coordinateSpace(name: "scroll")
             .helpAnchor(.itemDetail)
         }
+        .onAppear { store.markSeen(item.id) }
         .toolbar {
             ToolbarItemGroup {
                 Button { showLinkSheet = true } label: {
                     Label("Link...", systemImage: "link")
                 }
                 .keyboardShortcut("l", modifiers: .command)
-                .help("Link to another item (⌘L)")
                 Button {
                     if let current = store.selectedItem {
                         store.openItem(id: current.id)
@@ -481,7 +373,6 @@ struct ItemDetailView: View {
                     Label("Open", systemImage: "arrow.up.forward.square")
                 }
                 .keyboardShortcut("o", modifiers: .command)
-                .help("Open in default application (⌘O)")
                 
                 let isVideo = item.type == .file && item.mimeType?.hasPrefix("video/") == true
                 if item.type == .image || item.type == .snippet || isVideo {
@@ -490,7 +381,6 @@ struct ItemDetailView: View {
                     } label: {
                         Label("Search", systemImage: "magnifyingglass")
                     }
-                    .help("Search the Web")
                 }
                 
                 if item.archived == true {
@@ -499,46 +389,32 @@ struct ItemDetailView: View {
                     } label: {
                         Label("Restore", systemImage: "arrow.uturn.backward")
                     }
-                    .help("Restore from archive")
                 }
                 
                 ShareButton(item: { item })
                     .frame(width: 22, height: 22)
-                    .help("Copy image / caption / link to clipboard, or open the macOS share sheet")
                 Button { showEditSheet = true } label: {
                     Label("Edit", systemImage: "pencil")
                 }
                 .keyboardShortcut("e", modifiers: .command)
-                .help("Edit item (⌘E)")
                 Button { showDeleteConfirm = true } label: {
                     Label("Delete", systemImage: "trash")
                 }
                 .keyboardShortcut(.delete, modifiers: .command)
-                .help("Delete item (⌘⌫)")
             }
         }
         .sheet(isPresented: $showLinkSheet) {
             LinkItemSheet(sourceItemID: item.id)
         }
         .dropDestination(for: String.self) { items, _ in
-            // Drag payloads are now comma-joined for multi-select
-            // support; the link path takes one source-of-truth id,
-            // so use the first non-self id from the bundle.
-            let ids = items
-                .flatMap { $0.split(separator: ",").map(String.init) }
-                .filter { id in
-                    // Item IDs are typically short hashes or UUIDs.
-                    // Definitely no spaces, newlines, or tabs.
-                    !id.isEmpty && 
-                    id != item.id && 
-                    !id.contains(where: { $0.isWhitespace }) &&
-                    id.count <= 40
-                }
-            guard let droppedID = ids.first else { return false }
+            let rawIds = items.flatMap { $0.split(separator: ",").map(String.init) }
+            let filteredIds = rawIds.filter { id in
+                !id.isEmpty && id != item.id && !id.contains(where: { $0.isWhitespace }) && id.count <= 40
+            }
+            guard let droppedID = filteredIds.first else { return false }
             store.linkItems(from: item.id, to: droppedID)
             return true
         }
-        .onAppear { store.markSeen(item.id) }
         .confirmationDialog("Delete \"\(item.title)\"?", isPresented: $showDeleteConfirm) {
             Button("Delete", role: .destructive) {
                 store.deleteItem(id: item.id)
@@ -548,12 +424,158 @@ struct ItemDetailView: View {
         }
     }
 
-    /// Renders the single Location row: pin glyph + lat/lon (six
-    /// decimal places ≈ 11cm precision, plenty), a crosshair button
-    /// that pops up a MapKit preview with a pin, jump-out links to
-    /// Apple / Google Maps, and a small source badge so the user
-    /// can tell at a glance whether the value came from EXIF,
-    /// mobile capture, or a manual edit.
+    @ViewBuilder
+    private func tagsSection(proxy: ScrollViewProxy) -> some View {
+        Section {
+            FlowLayout(spacing: 6) {
+                if let tags = item.tags {
+                    ForEach(tags) { tag in
+                        Button {
+                            store.filterByTag(tag.name)
+                        } label: {
+                            Text("#\(tag.name)")
+                                .kerning(0.5)
+                                .font(.callout)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(.quaternary)
+                                .clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .onHover { hovering in
+                            if hovering { NSCursor.pointingHand.push() }
+                            else { NSCursor.pop() }
+                        }
+                    }
+                }
+
+                if isAddingTag {
+                    InlineTagInput(
+                        text: $newTagText,
+                        allTags: store.tags,
+                        onBeginEditing: {
+                            hasScrolledSincePin = false
+                            withAnimation(.spring(duration: 0.3)) {
+                                proxy.scrollTo("tags-section", anchor: .top)
+                            }
+                        },
+                        onCommit: { input in
+                            let tags = input.split(separator: ",")
+                                .map { $0.trimmingCharacters(in: .whitespaces) }
+                                .filter { !$0.isEmpty }
+                            if !tags.isEmpty {
+                                store.addTagsToItem(id: item.id, tags: tags)
+                            }
+                            newTagText = ""
+                            isAddingTag = false
+                        },
+                        onCancel: {
+                            newTagText = ""
+                            isAddingTag = false
+                        }
+                    )
+                } else {
+                    Button {
+                        isAddingTag = true
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.caption)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(.quaternary)
+                            .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.leading, 14)
+            .padding(.bottom, 8)
+            .background(Color(NSColor.windowBackgroundColor))
+        } header: {
+            HStack(spacing: 4) {
+                Text("Tags")
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(NSColor.windowBackgroundColor))
+        }
+        .id("tags-section")
+    }
+
+    @ViewBuilder
+    private func collectionsSection(proxy: ScrollViewProxy) -> some View {
+        Section {
+            FlowLayout(spacing: 6) {
+                if let cols = item.collections {
+                    ForEach(cols) { col in
+                        Label(col.name, systemImage: "folder")
+                            .font(.callout)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(.quaternary)
+                            .clipShape(Capsule())
+                    }
+                }
+                
+                if isAddingCollection {
+                    InlineCollectionInput(
+                        text: $newCollectionText,
+                        allCollections: store.collections,
+                        onBeginEditing: {
+                            hasScrolledSincePin = false
+                            withAnimation(.spring(duration: 0.3)) {
+                                proxy.scrollTo("collections-section", anchor: .top)
+                            }
+                        },
+                        onCommit: { input in
+                            let names = input.split(separator: ",")
+                                .map { $0.trimmingCharacters(in: .whitespaces) }
+                                .filter { !$0.isEmpty }
+                            if !names.isEmpty {
+                                store.addCollectionsToItem(id: item.id, collections: names)
+                            }
+                            newCollectionText = ""
+                            isAddingCollection = false
+                        },
+                        onCancel: {
+                            newCollectionText = ""
+                            isAddingCollection = false
+                        }
+                    )
+                } else {
+                    Button {
+                        isAddingCollection = true
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.caption)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(.quaternary)
+                            .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.leading, 14)
+            .padding(.bottom, 8)
+            .background(Color(NSColor.windowBackgroundColor))
+        } header: {
+            HStack(spacing: 4) {
+                Text("Collections")
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(NSColor.windowBackgroundColor))
+        }
+        .id("collections-section")
+    }
+
     private func locationRow(loc: ItemLocation) -> some View {
         HStack(spacing: 10) {
             Image(systemName: "mappin.and.ellipse")
@@ -567,7 +589,6 @@ struct ItemDetailView: View {
                 Image(systemName: "scope")
             }
             .buttonStyle(.borderless)
-            .help("Preview on a map")
             .popover(isPresented: $showLocationMapPopover, arrowEdge: .top) {
                 LocationMapPopover(lat: loc.lat, lon: loc.lon)
             }
@@ -587,11 +608,6 @@ struct ItemDetailView: View {
         }
     }
 
-    /// Single-file preview's drop-target callback. Promotes the
-    /// item from "one file" to "carousel" by attaching the dropped
-    /// file(s) as additional slides. The store refresh will swap
-    /// the rendered view from ImagePreviewSection to MultiFilePreview
-    /// on the next pass.
     private func attachDroppedFiles(providers: [NSItemProvider]) -> Bool {
         var attached = 0
         for p in providers where p.canLoadObject(ofClass: URL.self) {
@@ -610,22 +626,12 @@ struct ItemDetailView: View {
     private func refetchContent() {
         isFetchingContent = true
         store.refetchURLContent(id: item.id)
-        // Reset after a delay to allow the store to reload
         Task {
             try? await Task.sleep(for: .seconds(3))
             isFetchingContent = false
         }
     }
 
-    /// Detail-view title: read-only Text by default with a hover-
-    /// revealed pencil button that flips into edit mode. Avoided
-    /// View-mode title is plain Text; `ClickCatcher` lifts double-
-    /// click into edit mode at the AppKit level so the second
-    /// mouseDown is consumed before SwiftUI's gesture recognizer can
-    /// cascade it onto the image preview's single-tap handler. The
-    /// edit-mode `InlineEditField` auto-focuses on appear so the
-    /// click-outside monitor inside it can resign first responder
-    /// (and fire commitTitleEdit) when the user clicks away.
     @ViewBuilder
     private var titleView: some View {
         if isEditingTitle {
@@ -643,7 +649,6 @@ struct ItemDetailView: View {
                 .fontWeight(.semibold)
                 .textSelection(.enabled)
                 .background(ClickCatcher(onDoubleClick: startTitleEdit))
-                .help("Double-click to edit")
         }
     }
 
@@ -653,25 +658,13 @@ struct ItemDetailView: View {
     }
 
     private func commitTitleEdit() {
-        print("Commit title edit called: '\(titleDraft)'")
         let trimmed = titleDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Empty title is meaningless — silently drop the edit and
-        // bail back to read mode rather than letting the user save
-        // a blank title that's hard to recover.
         guard !trimmed.isEmpty else {
             isEditingTitle = false
             return
         }
-        // No-op if unchanged.
         if trimmed != item.title {
-            store.editItem(
-                id: item.id,
-                title: trimmed,
-                note: nil,
-                addTags: [],
-                removeTags: [],
-                collection: nil
-            )
+            store.editItem(id: item.id, title: trimmed, note: nil, addTags: [], removeTags: [], collection: nil)
         }
         isEditingTitle = false
     }
@@ -683,109 +676,28 @@ struct ItemDetailView: View {
     private func openGoogleSearch(for item: StashItem) {
         Task {
             var q = item.title
-            
-            // Snippets: Search the exact extracted text instead of the title,
-            // and omit any location logic since it's a text clip, not a physical capture.
             if item.type == .snippet, let text = item.extractedText, !text.isEmpty {
-                // Take the first couple sentences or up to ~100 chars to form a valid query
-                let snippetPreview = String(text.prefix(150)).trimmingCharacters(in: .whitespacesAndNewlines)
-                q = "\"\(snippetPreview)\""
+                q = "\"\(String(text.prefix(150)))\""
             } else if let loc = item.location {
-                // Images/Videos: Use Title + Reverse Geocoded Location
                 let clLoc = CoreLocation.CLLocation(latitude: loc.lat, longitude: loc.lon)
                 if let placemarks = try? await CoreLocation.CLGeocoder().reverseGeocodeLocation(clLoc),
                    let place = placemarks.first {
                     let parts = [place.administrativeArea, place.country].compactMap { $0 }
-                    if !parts.isEmpty {
-                        q += " " + parts.joined(separator: ", ")
-                    } else {
-                        q += " \(loc.lat), \(loc.lon)"
-                    }
+                    q += " " + (parts.isEmpty ? "\(loc.lat), \(loc.lon)" : parts.joined(separator: ", "))
                 } else {
                     q += " \(loc.lat), \(loc.lon)"
                 }
             }
-            
             await MainActor.run {
                 var comps = URLComponents(string: "https://www.google.com/search")
                 comps?.queryItems = [URLQueryItem(name: "q", value: q)]
-                if let searchURL = comps?.url {
-                    NSWorkspace.shared.open(searchURL)
-                }
+                if let searchURL = comps?.url { NSWorkspace.shared.open(searchURL) }
             }
         }
     }
 }
 
-func isArchiveMIME(_ mimeType: String) -> Bool {
-    mimeType.contains("gzip") || mimeType.contains("tar") || mimeType.contains("zip")
-}
-
-func isAudioMIME(_ mimeType: String) -> Bool {
-    mimeType.hasPrefix("audio/") || mimeType.contains("m4a")
-}
-
-/// One label-value pair rendered inside `InfoTable`. The value is
-/// retained as an `AnyView` so callers can hand in arbitrary content
-/// (styled badges, multi-line text, etc.) without genericizing the
-/// table builder.
-struct InfoRow: Identifiable {
-    let id = UUID()
-    let label: String
-    let value: AnyView
-
-    static func row<V: View>(_ label: String, @ViewBuilder value: () -> V) -> InfoRow {
-        InfoRow(label: label, value: AnyView(value()))
-    }
-}
-
-/// Container that lays InfoRows out as a striped two-column table:
-/// fixed-width label column on the left, flexible value column on
-/// the right, alternating row backgrounds for scan-ability. Callers
-/// hand in rows via a result-builder that filters out nils so each
-/// row can be conditional (e.g. "show MIME only when set").
-struct InfoTable: View {
-    let rows: [InfoRow]
-
-    init(@InfoRowBuilder _ rows: () -> [InfoRow]) {
-        self.rows = rows()
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            ForEach(Array(rows.enumerated()), id: \.element.id) { idx, row in
-                HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    Text(row.label)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .frame(width: 96, alignment: .leading)
-                    row.value
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(idx.isMultiple(of: 2) ? Color.secondary.opacity(0.08) : Color.clear)
-            }
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 6))
-    }
-}
-
-/// Result-builder so InfoTable's body reads like a sequence of rows
-/// with conditional `if let` blocks (same ergonomics as ViewBuilder).
-/// Skips nil/empty branches automatically.
-@resultBuilder
-enum InfoRowBuilder {
-    static func buildBlock(_ groups: [InfoRow]...) -> [InfoRow] {
-        groups.flatMap { $0 }
-    }
-    static func buildOptional(_ rows: [InfoRow]?) -> [InfoRow] { rows ?? [] }
-    static func buildEither(first rows: [InfoRow]) -> [InfoRow] { rows }
-    static func buildEither(second rows: [InfoRow]) -> [InfoRow] { rows }
-    static func buildExpression(_ row: InfoRow) -> [InfoRow] { [row] }
-    static func buildExpression(_ rows: [InfoRow]) -> [InfoRow] { rows }
-    static func buildArray(_ rows: [[InfoRow]]) -> [InfoRow] { rows.flatMap { $0 } }
-}
+// MARK: - Components
 
 struct DetailSection<Content: View>: View {
     let title: String
@@ -795,113 +707,106 @@ struct DetailSection<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 4) {
-                Text(title)
-                    .font(.headline)
-                    .foregroundStyle(.secondary)
-                if showIndicator {
-                    Circle()
-                        .fill(Color.blue)
-                        .frame(width: 6, height: 6)
-                }
+                Text(title).font(.headline).foregroundStyle(.secondary)
+                if showIndicator { Circle().fill(Color.blue).frame(width: 6, height: 6) }
             }
-            content
-                .padding(.leading, 14)
+            content.padding(.leading, 14)
         }
     }
 }
 
 struct FlowLayout: Layout {
     var spacing: CGFloat = 6
-
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let result = arrange(proposal: proposal, subviews: subviews)
-        return result.size
+        arrange(proposal: proposal, subviews: subviews).size
     }
-
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         let result = arrange(proposal: proposal, subviews: subviews)
         for (index, position) in result.positions.enumerated() {
             subviews[index].place(at: CGPoint(x: bounds.minX + position.x, y: bounds.minY + position.y), proposal: .unspecified)
         }
     }
-
     private func arrange(proposal: ProposedViewSize, subviews: Subviews) -> (size: CGSize, positions: [CGPoint]) {
         let maxWidth = proposal.width ?? .infinity
-        var positions: [CGPoint] = []
-        var x: CGFloat = 0
-        var y: CGFloat = 0
-        var rowHeight: CGFloat = 0
-        var maxX: CGFloat = 0
-
+        var positions: [CGPoint] = [], x: CGFloat = 0, y: CGFloat = 0, rowHeight: CGFloat = 0, maxX: CGFloat = 0
         for subview in subviews {
             let size = subview.sizeThatFits(.unspecified)
-            if x + size.width > maxWidth && x > 0 {
-                x = 0
-                y += rowHeight + spacing
-                rowHeight = 0
-            }
+            if x + size.width > maxWidth && x > 0 { x = 0; y += rowHeight + spacing; rowHeight = 0 }
             positions.append(CGPoint(x: x, y: y))
-            rowHeight = max(rowHeight, size.height)
-            x += size.width + spacing
-            maxX = max(maxX, x)
+            x += size.width + spacing; rowHeight = max(rowHeight, size.height); maxX = max(maxX, x)
         }
-
         return (CGSize(width: maxX, height: y + rowHeight), positions)
     }
 }
 
-/// Banner shown when the primary content blob for an image item
-/// is missing on disk. Surfaces the gap to the user along with a
-/// "Heal" button that fires `stash heal <id>` to re-fetch from
-/// the item's source URL when possible. Pairs with the existing
-/// Health-Check workflow but appears in the detail pane itself
-/// so the user notices immediately.
-struct MissingBlobBanner: View {
-    let itemID: String
-    @Environment(StashStore.self) private var store
-    @State private var isHealing = false
-
+struct InfoTable: View {
+    let rows: [InfoRow]
+    init(@InfoRowBuilder _ rows: () -> [InfoRow]) { self.rows = rows() }
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.yellow)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Content file missing on disk")
-                    .font(.callout.weight(.medium))
-                Text("Showing the cached thumbnail. Heal to re-fetch the full file from the source URL.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+        VStack(spacing: 0) {
+            ForEach(Array(rows.enumerated()), id: \.element.id) { idx, row in
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Text(row.label).font(.callout).foregroundStyle(.secondary).frame(width: 96, alignment: .leading)
+                    row.value.frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(.horizontal, 10).padding(.vertical, 6)
+                .background(idx.isMultiple(of: 2) ? Color.secondary.opacity(0.08) : Color.clear)
             }
+        }.clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+}
+
+@resultBuilder
+enum InfoRowBuilder {
+    static func buildBlock(_ groups: [InfoRow]...) -> [InfoRow] { groups.flatMap { $0 } }
+    static func buildOptional(_ rows: [InfoRow]?) -> [InfoRow] { rows ?? [] }
+    static func buildEither(first rows: [InfoRow]) -> [InfoRow] { rows }
+    static func buildEither(second rows: [InfoRow]) -> [InfoRow] { rows }
+    static func buildExpression(_ row: InfoRow) -> [InfoRow] { [row] }
+    static func buildExpression(_ rows: [InfoRow]) -> [InfoRow] { rows }
+    static func buildArray(_ rows: [[InfoRow]]) -> [InfoRow] { rows.flatMap { $0 } }
+}
+
+struct InfoRow: Identifiable {
+    let id = UUID()
+    let label: String
+    let value: AnyView
+    init<V: View>(label: String, @ViewBuilder value: () -> V) {
+        self.label = label
+        self.value = AnyView(value())
+    }
+    static func row<V: View>(_ label: String, @ViewBuilder value: () -> V) -> InfoRow {
+        InfoRow(label: label, value: value)
+    }
+}
+
+struct MissingBlobBanner: View {
+    @Environment(StashStore.self) private var store
+    let itemID: String
+    @State private var healing = false
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange)
+            Text("File content is missing from local storage.").font(.subheadline)
             Spacer()
-            Button {
-                isHealing = true
-                Task {
-                    await store.healItem(id: itemID)
-                    isHealing = false
-                }
-            } label: {
-                if isHealing {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Text("Heal")
-                }
-            }
-            .disabled(isHealing)
-        }
-        .padding(10)
-        .background(.yellow.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
-        .overlay(
-            RoundedRectangle(cornerRadius: 6)
-                .stroke(.yellow.opacity(0.4), lineWidth: 1)
-        )
+            Button(healing ? "Healing..." : "Heal") {
+                healing = true
+                Task { await store.healItem(id: itemID); healing = false }
+            }.buttonStyle(.bordered).controlSize(.small).disabled(healing)
+        }.padding(10).background(.orange.opacity(0.1)).clipShape(RoundedRectangle(cornerRadius: 8))
     }
 }
 
 private extension Bool {
-    /// Compose-style `takeIf` for nullable chaining, used by the
-    /// preview-section thumbnail fallback to keep the conditional
-    /// pipeline readable.
-    func takeIf(_ predicate: (Bool) -> Bool) -> Bool? {
-        predicate(self) ? self : nil
-    }
+    func takeIf(_ predicate: (Bool) -> Bool) -> Bool? { predicate(self) ? self : nil }
+}
+
+/// Helper to identify audio MIME types across the app.
+func isAudioMIME(_ mime: String) -> Bool {
+    mime.hasPrefix("audio/") || mime == "application/ogg" || mime == "application/x-flac" || mime.contains("m4a")
+}
+
+func isArchiveMIME(_ mime: String) -> Bool {
+    mime.contains("gzip") || mime.contains("tar") || mime.contains("zip") || 
+    mime == "application/x-bzip2" || mime == "application/x-7z-compressed"
 }

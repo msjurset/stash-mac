@@ -25,6 +25,7 @@ struct ItemListView: View {
     @Binding var showEditSheet: Bool
 
     @State private var state = TagSuggestionState()
+    @State private var regexGuideShown = false
 
     /// Drives the per-row Tags popover. When non-nil, the popover
     /// is presented anchored to the row whose id matches `id`. The
@@ -75,12 +76,37 @@ struct ItemListView: View {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
                 FilterField(
-                    placeholder: "Search items... (tag: to filter)",
+                    placeholder: store.regexMode ? "Regex search... /pattern/" : "Search items... (tag: to filter)",
                     text: $store.searchQuery,
                     onSubmit: { store.refresh() },
                     onBeginEditing: { state.isSearchFocused = true },
                     onEndEditing:   { state.isSearchFocused = false }
                 )
+                // Regex toggle (*) inside the search bar area
+                Button {
+                    store.regexMode.toggle()
+                    if store.regexMode {
+                        regexGuideShown = true
+                    }
+                    store.refresh()
+                } label: {
+                    Image(systemName: "asterisk")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(store.regexMode ? Color.white : Color.secondary)
+                        .frame(width: 20, height: 20)
+                        .background(store.regexMode ? Color.accentColor : Color.clear, in: RoundedRectangle(cornerRadius: 4))
+                }
+                .buttonStyle(.plain)
+                .help(store.regexMode ? "Regex search active — click to disable" : "Search by regex — click to enable")
+                .background(
+                    PersistentPopoverHost(
+                        isPresented: $regexGuideShown,
+                        preferredEdge: .minY
+                    ) {
+                        RegexGuideView(context: .searchPanel)
+                    }
+                )
+
                 if !store.searchQuery.isEmpty {
                     Button {
                         store.searchQuery = ""
@@ -97,6 +123,26 @@ struct ItemListView: View {
             .padding(.vertical, 7)
             .background(.bar)
             .helpAnchor(.searchBar)
+            .onChange(of: store.searchQuery) { _, newQuery in
+                // "//" auto-detection for regex mode
+                if newQuery == "//" && !store.regexMode {
+                    store.regexMode = true
+                    regexGuideShown = true
+                    store.searchQuery = "//"
+                    
+                    // Position cursor between the slashes: /|/
+                    DispatchQueue.main.async {
+                        for window in NSApplication.shared.windows where window.isVisible {
+                            if let field = findSearchField(in: window.contentView),
+                               let editor = field.currentEditor() {
+                                editor.selectedRange = NSRange(location: 1, length: 0)
+                                return
+                            }
+                        }
+                    }
+                }
+                store.debouncedRefresh()
+            }
 
             // Type filter chips. Replaces the per-type sidebar entries
             // we had before — discoverable in the items pane itself.
@@ -1153,6 +1199,24 @@ struct SearchFieldKeyMonitor: NSViewRepresentable {
             monitor = nil
             super.removeFromSuperview()
         }
+    }
+}
+
+// MARK: - Helpers
+
+extension ItemListView {
+    /// DFS the view hierarchy for the search field (a NoAutoFillTextField
+    /// whose placeholder starts with "Search").
+    private func findSearchField(in view: NSView?) -> NSTextField? {
+        guard let view else { return nil }
+        if let tf = view as? NSTextField,
+           (tf.placeholderString ?? "").lowercased().contains("search") {
+            return tf
+        }
+        for sub in view.subviews {
+            if let f = findSearchField(in: sub) { return f }
+        }
+        return nil
     }
 }
 

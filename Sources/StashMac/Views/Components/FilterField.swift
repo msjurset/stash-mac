@@ -5,8 +5,8 @@ import OSLog
 private let log = Logger(subsystem: "com.msjurseth.stash", category: "phantom-diagnostics")
 
 /// Keys the suggestion / auto-complete infrastructure cares about.
-/// Shared across `FilterField`, `SearchFieldKeyMonitor`, and
-/// `TagAwareSearchField` so every input type maps the same way.
+/// Shared across `FilterField` and `TagAwareSearchField` so every
+/// input type maps the same way.
 enum SuggestKey {
     case tab, shiftTab, arrowDown, arrowUp, ctrlJ, ctrlK, enter, escape
 }

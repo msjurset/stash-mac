@@ -150,8 +150,7 @@ enum HelpTopic: String, CaseIterable, Identifiable, Codable, Hashable {
         case .searching:
             return [
                 .heading("Quick Search Panel"),
-                .paragraph("Open the global search panel with ⌘F, ⌘K, or `/`. Results update in real time as you type. Use ↑/↓ (or Ctrl-J/K) to move the highlight, Return to jump to the highlighted result, Escape to dismiss. Selecting a result that lives outside your current sidebar scope automatically switches to All Items so the row is visible and highlighted."),
-                .paragraph("Pressing `/` always opens the panel when no field has focus. When the list filter field has focus *and is empty* (the common state on first launch), `/` opens the panel as well — that way you don't have to click anywhere first. Mid-text `/` stays a literal character so you can include slashes in queries."),
+                .paragraph("Open the global search panel with ⌘F or ⌘K. Results update in real time as you type. Use ↑/↓ (or Ctrl-J/K) to move the highlight, Return to jump to the highlighted result, Escape to dismiss. Selecting a result that lives outside your current sidebar scope automatically switches to All Items so the row is visible and highlighted."),
                 .heading("Search Tokens"),
                 .paragraph("Stash supports structured tokens in both the global panel and list filter field. Type the prefix followed by the name; name completion (Tab/Return) works for tags and collections."),
                 .table(headers: ["Token", "Match Effect"], rows: [
@@ -181,12 +180,13 @@ enum HelpTopic: String, CaseIterable, Identifiable, Codable, Hashable {
                 .heading("Regex Mode"),
                 .paragraph("Click the * button next to the field (or press ⌘R) to switch to RE2 regex. The pattern matches against title + notes + URL + extracted text. A small popover opens with a syntax cheatsheet that stays visible while you type — click outside the panel to dismiss."),
                 .bullet([
+                    "**// breakthrough** — Type `//` in any search field to auto-switch to Regex mode. The field resets to `/ /` with the cursor positioned between the slashes for immediate pattern entry.",
                     "Prefix the pattern with `!` to negate the match (e.g. `!^https://` for items whose URL doesn't start with https).",
                     "Tag filters are disabled in regex mode — `tag:` may be a literal in your pattern.",
                     "The pattern is pre-validated client-side; bad syntax surfaces an inline warning under the field instead of silently empty results.",
                 ]),
                 .heading("List Filter"),
-                .paragraph("The search field at the top of the item list filters items within the current sidebar selection. Press Return to search, or clear the field to show all items. Free-text only — for regex use the global panel."),
+                .paragraph("The search field at the top of the item list filters items within the current sidebar selection. Press Return to search, or clear the field to show all items. Supports standard search tokens and Regex mode (via the * toggle or `//` prefix)."),
                 .heading("Combining Filters"),
                 .paragraph("Select a type, tag, or collection in the sidebar first, then use the list search to narrow further. For example, select URLs in the sidebar, then search for \"api\" to find only URL items matching that term."),
             ]
@@ -581,7 +581,7 @@ enum HelpTopic: String, CaseIterable, Identifiable, Codable, Hashable {
         case .keyboard:
             return [
                 .heading("Global"),
-                .paragraph("Active anywhere in the main window. The plain-key shortcuts (`/`, `?`) defer to whichever editable field has focus — they only fire when you're not actively typing into one."),
+                .paragraph("Active anywhere in the main window."),
                 .table(headers: ["Shortcut", "Action"], rows: [
                     ["⌘N",  "Add new item"],
                     ["⌘R",  "Reload all data from the CLI (picks up external changes)"],
@@ -591,7 +591,6 @@ enum HelpTopic: String, CaseIterable, Identifiable, Codable, Hashable {
                     ["⌘⇧I", "Import Archive — round-trip a `stash export` zip back in"],
                     ["⌘[",  "Back — return to the previous navigation state (e.g. the Moment you drilled into an item from)"],
                     ["⌘]",  "Forward — redo a Back step"],
-                    ["/",   "Open the global search panel (when no field has focus, or list filter is empty)"],
                     ["⌘?",  "Toggle Interactive Help (X-Ray mode)"],
                 ]),
                 .heading("Global Search Panel"),

@@ -629,6 +629,8 @@ private struct CompositeWaveformView: View {
         .frame(height: 180)
     }
     
+    @State private var showingColorPopoverFor: String? = nil
+
     @ViewBuilder
     private func legendItem(label: String, color: Binding<Color>, isMaster: Bool) -> some View {
         HStack(spacing: 4) {
@@ -636,10 +638,27 @@ private struct CompositeWaveformView: View {
                 Image(systemName: "circle.fill")
                     .foregroundStyle(.white)
             } else {
-                ColorPicker("", selection: color, supportsOpacity: false)
-                    .labelsHidden()
-                    .scaleEffect(0.6)
-                    .frame(width: 14, height: 14)
+                Circle()
+                    .fill(color.wrappedValue)
+                    .frame(width: 12, height: 12)
+                    .contentShape(Rectangle())
+                    .onTapGesture { showingColorPopoverFor = label }
+                    .popover(isPresented: Binding(
+                        get: { showingColorPopoverFor == label },
+                        set: { if !$0 && showingColorPopoverFor == label { showingColorPopoverFor = nil } }
+                    )) {
+                        let colors: [Color] = [.red, .orange, .yellow, .green, .mint, .teal, .cyan, .blue, .indigo, .purple, .pink, .brown]
+                        LazyVGrid(columns: Array(repeating: GridItem(.fixed(20), spacing: 8), count: 4), spacing: 8) {
+                            ForEach(colors, id: \.self) { c in
+                                Circle()
+                                    .fill(c)
+                                    .frame(width: 20, height: 20)
+                                    .overlay(Circle().stroke(Color.primary, lineWidth: color.wrappedValue == c ? 2 : 0))
+                                    .onTapGesture { color.wrappedValue = c }
+                            }
+                        }
+                        .padding(12)
+                    }
             }
             Text(label.uppercased())
                 .foregroundStyle(isMaster ? .white : color.wrappedValue)

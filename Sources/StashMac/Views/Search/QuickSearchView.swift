@@ -258,6 +258,30 @@ struct QuickSearchView: View {
         }
         .frame(width: 500)
         .onChange(of: query) { _, newQuery in
+            // "//" auto-detection for regex mode.
+            // If the user starts a query with "//", we auto-enable regex mode,
+            // clear the commands dropdown, and replace the text with "/ /"
+            // (single slashes) with the cursor in the middle.
+            if newQuery == "//" && !regexMode {
+                regexMode = true
+                regexGuideShown = true
+                clearChipDropdown()
+                
+                // Set field to a pair of slashes for pattern entry
+                query = "//"
+                
+                // Position cursor between the slashes: /|/
+                DispatchQueue.main.async {
+                    for window in NSApplication.shared.windows where window.isVisible {
+                        if let field = findSearchField(in: window.contentView),
+                           let editor = field.currentEditor() {
+                            editor.selectedRange = NSRange(location: 1, length: 0)
+                            return
+                        }
+                    }
+                }
+            }
+
             recomputeSuggestions()
             if !hasChipDropdown {
                 debounceSearch(newQuery)
@@ -295,18 +319,26 @@ struct QuickSearchView: View {
     @ViewBuilder
     private var browseToggleBar: some View {
         HStack(spacing: 6) {
+            if !results.isEmpty {
+                Text("\(results.count) result\(results.count == 1 ? "" : "s")")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .padding(.leading, 12)
+            }
             Spacer()
-            browseToggleButton(mode: .recent,
-                               icon: "clock",
-                               tooltip: "Recent searches")
-            browseToggleButton(mode: .frequent,
-                               icon: "chart.bar",
-                               tooltip: "Frequent searches")
+            HStack(spacing: 6) {
+                browseToggleButton(mode: .recent,
+                                   icon: "clock",
+                                   tooltip: "Recent searches")
+                browseToggleButton(mode: .frequent,
+                                   icon: "chart.bar",
+                                   tooltip: "Frequent searches")
+            }
+            .disabled(!query.isEmpty)
+            .opacity(query.isEmpty ? 1.0 : 0.4)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
-        .disabled(!query.isEmpty)
-        .opacity(query.isEmpty ? 1.0 : 0.4)
     }
 
     private func browseToggleButton(mode: BrowseMode, icon: String, tooltip: String) -> some View {
@@ -959,15 +991,26 @@ struct QuickSearchView: View {
                 .trimmingCharacters(in: .whitespaces)
         }
 
-        // Pre-validate the regex client-side so the user gets fast
-        // feedback on syntax errors instead of an empty result list.
-        // RE2 and NSRegularExpression don't have identical syntax but
-        // the common subset (anchors, groups, character classes,
-        // alternation, quantifiers) covers virtually every practical
-        // pattern; edge-case mismatches will still show up as
-        // "no results" rather than an inline error.
+        let isSemantic = !regexMode && textQuery.hasPrefix("~")
+        var finalQuery = isSemantic ? String(textQuery.dropFirst()).trimmingCharacters(in: .whitespaces) : textQuery
+
+        // For regex mode, strip exactly one pair of wrapping slashes (e.g. /pattern/ -> pattern)
+        // and validate the pattern.
         if regexMode {
-            if (try? NSRegularExpression(pattern: textQuery)) == nil {
+            if finalQuery.hasPrefix("/") && finalQuery.hasSuffix("/") && finalQuery.count >= 2 {
+                finalQuery = String(finalQuery.dropFirst().dropLast())
+            }
+            
+            // Block searches on empty patterns (avoids matching everything)
+            if finalQuery.isEmpty {
+                results = []
+                regexError = nil
+                return
+            }
+
+            // Pre-validate the regex client-side so the user gets fast
+            // feedback on syntax errors instead of an empty result list.
+            if (try? NSRegularExpression(pattern: finalQuery)) == nil {
                 regexError = "Invalid regex pattern"
                 results = []
                 return
@@ -976,9 +1019,6 @@ struct QuickSearchView: View {
         } else {
             regexError = nil
         }
-
-        let isSemantic = !regexMode && textQuery.hasPrefix("~")
-        let finalQuery = isSemantic ? String(textQuery.dropFirst()).trimmingCharacters(in: .whitespaces) : textQuery
 
         searchTask = Task {
             try? await Task.sleep(for: .milliseconds(200))
@@ -989,7 +1029,7 @@ struct QuickSearchView: View {
                     found = try await StashCLI.shared.searchItems(
                         query: "",
                         limit: 50,
-                        regex: textQuery
+                        regex: finalQuery
                     )
                 } else if finalQuery.isEmpty && (!tagTokens.isEmpty || collectionToken != nil) {
                     found = try await StashCLI.shared.listItems(
@@ -1039,6 +1079,7 @@ struct TagAwareSearchField: NSViewRepresentable {
         field.font = .preferredFont(forTextStyle: .title3)
         field.focusRingType = .none
         field.delegate = context.coordinator
+        field.isAutomaticTextCompletionEnabled = false  // NSView-level suppression
         context.coordinator.installCtrlJKMonitor(on: field)
         // Layer-5 interceptor wiring is handled by
         // NoAutoFillTextField.viewDidMoveToWindow itself — no per
@@ -1120,89 +1161,6 @@ struct TagAwareSearchField: NSViewRepresentable {
         func removeCtrlJKMonitor() {
             if let eventMonitor { NSEvent.removeMonitor(eventMonitor) }
             eventMonitor = nil
-        }
-    }
-}
-
-// MARK: - Search Key Monitor
-
-struct SearchKeyMonitor: NSViewRepresentable {
-    let onSearch: () -> Void
-
-    func makeNSView(context: Context) -> NSView {
-        let view = SearchKeyMonitorView()
-        view.onSearch = onSearch
-        return view
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {
-        (nsView as? SearchKeyMonitorView)?.onSearch = onSearch
-    }
-
-    class SearchKeyMonitorView: NSView {
-        var onSearch: (() -> Void)?
-        private var monitor: Any?
-
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            guard monitor == nil else { return }
-            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-                guard let self else { return event }
-
-                // "/" without modifiers. Fire global search when:
-                //   - no text field is focused, OR
-                //   - a text field is focused but empty (catches the
-                //     first-load case where the list-filter field has
-                //     initial focus and "/" should still mean "open
-                //     search," not insert a literal slash into nothing)
-                // ...AND we're not inside a sheet. The sheet guard is
-                // important: an empty notes/title field inside a Log
-                // Maintenance / Item Editor sheet must keep "/" literal
-                // so the user can type a slash as the first character,
-                // and so dismissing the sheet doesn't reveal a search
-                // panel that opened behind it.
-                if event.charactersIgnoringModifiers == "/" &&
-                   event.modifierFlags.intersection(.deviceIndependentFlagsMask) == [] {
-                    if !Self.isInSheet(for: event) &&
-                       (!Self.isTextFieldActive(for: event) || Self.isFocusedFieldEmpty(for: event)) {
-                        DispatchQueue.main.async { self.onSearch?() }
-                        return nil
-                    }
-                }
-
-                return event
-            }
-        }
-
-        private static func isTextFieldActive(for event: NSEvent) -> Bool {
-            let responder = event.window?.firstResponder ?? NSApp.keyWindow?.firstResponder
-            return responder is NSTextView || responder is NSTextField
-        }
-
-        private static func isFocusedFieldEmpty(for event: NSEvent) -> Bool {
-            let responder = event.window?.firstResponder ?? NSApp.keyWindow?.firstResponder
-            if let tv = responder as? NSTextView {
-                return tv.string.isEmpty
-            }
-            if let tf = responder as? NSTextField {
-                return tf.stringValue.isEmpty
-            }
-            if let editor = responder as? NSText,
-               let field = editor.delegate as? NSTextField {
-                return field.stringValue.isEmpty
-            }
-            return false
-        }
-
-        private static func isInSheet(for event: NSEvent) -> Bool {
-            let window = event.window ?? NSApp.keyWindow
-            return window?.sheetParent != nil
-        }
-
-        override func removeFromSuperview() {
-            if let monitor { NSEvent.removeMonitor(monitor) }
-            monitor = nil
-            super.removeFromSuperview()
         }
     }
 }

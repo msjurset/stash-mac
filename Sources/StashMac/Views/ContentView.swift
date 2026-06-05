@@ -95,9 +95,6 @@ struct ContentView: View {
             }
         }
         .background {
-            SearchKeyMonitor(onSearch: { showQuickSearch = true })
-        }
-        .background {
             Button("") { showQuickSearch = true }
                 .keyboardShortcut("k", modifiers: .command)
                 .hidden()
