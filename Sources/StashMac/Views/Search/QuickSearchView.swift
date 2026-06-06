@@ -1121,6 +1121,12 @@ struct TagAwareSearchField: NSViewRepresentable {
         func controlTextDidChange(_ obj: Notification) {
             guard let field = obj.object as? NSTextField else { return }
             parent.query = field.stringValue
+            reapPredictivePanels()
+            for delay in [0.05, 0.15, 0.35, 0.7] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                    reapPredictivePanels()
+                }
+            }
         }
 
         func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {

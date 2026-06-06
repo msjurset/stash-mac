@@ -2,6 +2,7 @@ import SwiftUI
 import Foundation
 import AVFoundation
 import OSLog
+import UniformTypeIdentifiers
 
 private let logger = Logger(subsystem: "com.msjurseth.stash", category: "store")
 
@@ -134,10 +135,26 @@ final class StashStore {
               let url = FilePathResolver.resolve(storePath: storePath)
         else { return nil }
         
+        let mime = mediaMIMEHint(forSourcePath: item.sourcePath, mimeType: item.mimeType)
         return await Task.detached {
-            let asset = AVURLAsset(url: url)
+            let opts: [String: Any]? = mime.map {
+                ["AVURLAssetOutOfBandMIMETypeKey": $0]
+            }
+            let asset = AVURLAsset(url: url, options: opts)
             return (try? await asset.load(.duration))?.seconds
         }.value
+    }
+
+    private func mediaMIMEHint(forSourcePath sourcePath: String?, mimeType: String?) -> String? {
+        if let sourcePath {
+            let ext = (sourcePath as NSString).pathExtension
+            if !ext.isEmpty,
+               let utType = UTType(filenameExtension: ext),
+               let mime = utType.preferredMIMEType {
+                return mime
+            }
+        }
+        return mimeType
     }
     /// True while the trip-suggest CLI call is in flight. Backs the
     /// header spinner in MomentSuggestionsView.

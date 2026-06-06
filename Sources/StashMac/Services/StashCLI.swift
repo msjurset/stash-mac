@@ -1561,6 +1561,10 @@ actor StashCLI {
         try await captureJSON(args: ["related", "--json", "-l", "\(limit)", id])
     }
 
+    func version() async throws -> String {
+        try await captureOutput(args: ["--version"])
+    }
+
     // MARK: - Private
 
     private func captureJSON<T: Decodable>(args: [String]) async throws -> T {

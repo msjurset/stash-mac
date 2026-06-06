@@ -116,6 +116,12 @@ struct FilterField: NSViewRepresentable {
         func controlTextDidChange(_ obj: Notification) {
             guard let field = obj.object as? NSTextField else { return }
             parent.text = field.stringValue
+            reapPredictivePanels()
+            for delay in [0.05, 0.15, 0.35, 0.7] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                    reapPredictivePanels()
+                }
+            }
         }
 
         func controlTextDidBeginEditing(_ obj: Notification) {
@@ -209,6 +215,12 @@ final class NoAutoFillTextField: NSTextField {
         if ok {
             (currentEditor() as? NSTextView)?.disableAutoFeatures()
             onFocusReceived?()
+            reapPredictivePanels()
+            for delay in [0.05, 0.15, 0.35, 0.7] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                    reapPredictivePanels()
+                }
+            }
         }
         return ok
     }
@@ -216,11 +228,23 @@ final class NoAutoFillTextField: NSTextField {
     override func textDidBeginEditing(_ notification: Notification) {
         super.textDidBeginEditing(notification)
         (notification.object as? NSTextView)?.disableAutoFeatures()
+        reapPredictivePanels()
+        for delay in [0.05, 0.15, 0.35, 0.7] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                reapPredictivePanels()
+            }
+        }
     }
 
     override func textShouldBeginEditing(_ textObject: NSText) -> Bool {
         let ok = super.textShouldBeginEditing(textObject)
         (textObject as? NSTextView)?.disableAutoFeatures()
+        reapPredictivePanels()
+        for delay in [0.05, 0.15, 0.35, 0.7] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                reapPredictivePanels()
+            }
+        }
         return ok
     }
 }

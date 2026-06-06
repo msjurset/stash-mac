@@ -27,3 +27,21 @@ private struct PointingHandCursorModifier: ViewModifier {
         }
     }
 }
+
+extension View {
+    func resizeLeftRightCursor() -> some View {
+        modifier(ResizeLeftRightCursorModifier())
+    }
+}
+
+private struct ResizeLeftRightCursorModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        content.onHover { hovering in
+            if hovering {
+                NSCursor.resizeLeftRight.push()
+            } else {
+                NSCursor.pop()
+            }
+        }
+    }
+}

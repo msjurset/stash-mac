@@ -1,8 +1,6 @@
 import AppKit
+import Quartz
 import SwiftUI
-import OSLog
-
-private let log = Logger(subsystem: "com.msjurseth.stash", category: "phantom-diagnostics")
 
 /// Once-and-for-all suppression of the empty rounded-rectangle popup
 /// that appears the first time any field-editor or menu surface
@@ -31,9 +29,28 @@ private let log = Logger(subsystem: "com.msjurseth.stash", category: "phantom-di
 private let sharedNoAutoFillFieldEditor: NSTextView = {
     let editor = NSTextView()
     editor.isFieldEditor = true
-    editor.disableAutoFeatures()
+    configureNoAutoFill(editor)
     return editor
 }()
+
+@MainActor
+private func configureNoAutoFill(_ editor: NSTextView) {
+    editor.isAutomaticTextCompletionEnabled = false
+    editor.isAutomaticSpellingCorrectionEnabled = false
+    editor.isAutomaticTextReplacementEnabled = false
+    editor.isContinuousSpellCheckingEnabled = false
+    editor.isAutomaticQuoteSubstitutionEnabled = false
+    editor.isAutomaticDashSubstitutionEnabled = false
+    editor.isAutomaticDataDetectionEnabled = false
+    editor.isAutomaticLinkDetectionEnabled = false
+    if #available(macOS 14.0, *) {
+        editor.inlinePredictionType = .no
+    }
+    if #available(macOS 15.0, *) {
+        editor.writingToolsBehavior = .none
+        editor.allowedWritingToolsResultOptions = []
+    }
+}
 
 /// Forwarding NSObject that wraps an existing NSWindowDelegate and
 /// adds `windowWillReturnFieldEditor`. All other delegate calls are
@@ -65,93 +82,105 @@ final class FieldEditorInterceptor: NSObject, NSWindowDelegate {
 
     @MainActor
     func windowWillReturnFieldEditor(_ sender: NSWindow, to client: Any?) -> Any? {
-        let frame = sender.frame
-        let level = sender.level
-        log.debug("[PHANTOM] FieldEditorInterceptor.windowWillReturnFieldEditor for window: \"\(sender.title)\" class: \(type(of: sender)) level: \(level.rawValue) frame: \(frame.origin.x),\(frame.origin.y) \(frame.width)x\(frame.height)")
-        // Re-apply flags every time AppKit asks for the editor — some of
-        // these are reset between editor uses, and Sequoia in particular
-        // re-enables `inlinePredictionType` on reuse.
-        sharedNoAutoFillFieldEditor.disableAutoFeatures()
+        // Re-apply flags every time AppKit asks for the editor — some
+        // of these are reset between editor uses, and Sequoia in
+        // particular re-enables `inlinePredictionType` on reuse.
+        configureNoAutoFill(sharedNoAutoFillFieldEditor)
         return sharedNoAutoFillFieldEditor
     }
 }
 
 /// Strong references to installed interceptors, keyed by window
-/// identity. Without this the wrapped objects would dealloc as soon as
-/// `installFieldEditorInterceptor` returns since `NSWindow.delegate`
+/// identity. Without this the wrapped objects would dealloc as soon
+/// as `installFieldEditorInterceptor` returns since NSWindow.delegate
 /// is a weak reference.
 @MainActor
 private var installedInterceptors: [ObjectIdentifier: FieldEditorInterceptor] = [:]
 
-/// Install (or replace) the interceptor on a window. Idempotent — safe
-/// to call repeatedly when SwiftUI re-assigns the delegate.
+/// Heuristic class-name fragments that identify AppKit predictive /
+/// Writing-Tools / inline-suggestion panels. Match is substring
+/// `contains`-based since Apple namespaces these with private
+/// underscore-prefixed classes and the exact names vary by macOS
+/// version. False positives would orderOut some other AppKit panel
+/// but the fragments are specific enough — "InlinePrediction",
+/// "WritingTools", "InlineSuggestion", "PredictionPanel" — that no
+/// legitimate panel in our app would match.
+@MainActor
+private let predictivePanelFragments: [String] = [
+    "InlinePrediction",
+    "InlineSuggestion",
+    "PredictionPanel",
+    "WritingTools",
+    "TextCompletion",
+    // macOS 26's empty-rounded autofill popup — confirmed via
+    // reaper diagnostics (~/.recruit/reaper.log). Animates from
+    // ~312×237 to ~332×265 right after a layout change (cold
+    // launch or console expand). The "SP" prefix isn't Sparkle —
+    // Sparkle uses SU/SPU. This is the system predictive surface
+    // that none of the documented per-editor flags suppress.
+    "SPRoundedWindow",
+]
+
+/// Order-out any visible panel whose class name matches a known
+/// predictive-text fragment. Cheap to call (NSApp.windows is small)
+/// and idempotent so multiple triggers per second are fine.
+///
+/// Diagnostic mode: when `verbose` is true, also logs the class
+/// name of every visible window — used to identify new predictive
+/// panel variants on macOS upgrades. Tap into this by setting the
+/// flag below; output goes to stderr so it shows up under
+/// `make deploy` console / Console.app.
+@MainActor
+private let reaperLogPath: String = {
+    // Always-on diagnostic file at a known path so the user
+    // doesn't need to mess with stderr redirection. Truncated on
+    // app launch via O_TRUNC equivalent so the log reflects only
+    // the current session.
+    let path = NSHomeDirectory() + "/.stash/reaper.log"
+    try? "".write(toFile: path, atomically: true, encoding: .utf8)
+    return path
+}()
+
+@MainActor
+private func reapLog(_ s: String) {
+    let line = s + "\n"
+    if let h = try? FileHandle(forWritingTo: URL(fileURLWithPath: reaperLogPath)) {
+        h.seekToEndOfFile()
+        h.write(Data(line.utf8))
+        try? h.close()
+    } else {
+        // First call: file may have been deleted; recreate.
+        try? line.write(toFile: reaperLogPath, atomically: true, encoding: .utf8)
+    }
+}
+
+@MainActor
+func reapPredictivePanels() {
+    for window in NSApp.windows where window.isVisible {
+        let name = NSStringFromClass(type(of: window))
+        if predictivePanelFragments.contains(where: { name.contains($0) }) {
+            reapLog("[reaper] KILLED \(name) frame=\(window.frame)")
+            window.orderOut(nil)
+        }
+    }
+}
+
+/// Install (or replace) the interceptor on a window. Idempotent —
+/// safe to call repeatedly when SwiftUI re-assigns the delegate.
 @MainActor
 func installFieldEditorInterceptor(on window: NSWindow) {
     let key = ObjectIdentifier(window)
     let currentDelegate = window.delegate as? NSObject
+    // If we've already wrapped this window's current delegate, leave it
+    // alone. Detect by checking whether the current delegate IS our
+    // interceptor for this window.
     if let existing = installedInterceptors[key],
        window.delegate === existing {
-        log.debug("[PHANTOM] installFieldEditorInterceptor: already installed on \"\(window.title)\"")
         return
     }
-    log.debug("[PHANTOM] installFieldEditorInterceptor: installing on \"\(window.title)\" (class: \(type(of: window)), level: \(window.level.rawValue), delegate: \(type(of: currentDelegate)))")
     let interceptor = FieldEditorInterceptor(wrapping: currentDelegate)
     installedInterceptors[key] = interceptor
     window.delegate = interceptor
 }
 
-/// Helper called by `AppDelegate` to wire up window-level field-editor
-/// interception. Sweeps existing windows and registers observers so any
-/// future window (sheets, popovers promoted to windows, etc.) is also
-/// wrapped at order-in time.
-@MainActor
-func installFieldEditorInterceptorsForAllWindows() -> [NSObjectProtocol] {
-    for window in NSApp.windows {
-        installFieldEditorInterceptor(on: window)
-    }
 
-    let didKey = NotificationCenter.default.addObserver(
-        forName: NSWindow.didBecomeKeyNotification,
-        object: nil,
-        queue: .main
-    ) { notification in
-        guard let window = notification.object as? NSWindow else { return }
-        MainActor.assumeIsolated {
-            log.debug("[PHANTOM] didBecomeKeyNotification for \"\(window.title)\"")
-            installFieldEditorInterceptor(on: window)
-        }
-    }
-
-    let didUpdate = NotificationCenter.default.addObserver(
-        forName: NSWindow.didUpdateNotification,
-        object: nil,
-        queue: .main
-    ) { notification in
-        guard let window = notification.object as? NSWindow else { return }
-        // didUpdate is very frequent, only log if we're actually installing/checking
-        MainActor.assumeIsolated {
-            installFieldEditorInterceptor(on: window)
-        }
-    }
-
-    // Belt-and-suspenders: before any user interaction reaches a
-    // text field, re-sweep every window. SwiftUI sometimes creates
-    // panels (sheets, popovers, QLPreviewPanel) whose lifecycle
-    // notifications don't reliably fire `didBecomeKey` /
-    // `didUpdate` before the field-editor warm-up that raises the
-    // phantom popup. Sweeping on `.leftMouseDown` and `.keyDown` is
-    // cheap (idempotent installs) and guarantees coverage.
-    _ = NSEvent.addLocalMonitorForEvents(
-        matching: [.leftMouseDown, .keyDown]
-    ) { event in
-        log.debug("[PHANTOM] NSEvent monitor triggered (\(event.type.rawValue))")
-        MainActor.assumeIsolated {
-            for window in NSApp.windows {
-                installFieldEditorInterceptor(on: window)
-            }
-        }
-        return event
-    }
-
-    return [didKey, didUpdate]
-}

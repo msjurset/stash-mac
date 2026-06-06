@@ -6,15 +6,90 @@ import UserNotifications
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let servicesProvider = ServicesProvider()
     private var fieldEditorObservers: [NSObjectProtocol] = []
+    private var eventMonitor: Any?
 
     func applicationWillFinishLaunching(_ notification: Notification) {
+        // Layer 0: Force-set the prediction-subsystem defaults in our app's
+        // persistent domain. Earlier attempts at register() (only
+        // fills gaps) and setVolatileDomain on NSArgumentDomain
+        // (didn't actually take — AppKit ignored those values when
+        // reading the predictive panel config) both let the empty
+        // ghost popup back through on launches when the user has
+        // system-wide predictive text enabled. set() writes to our
+        // app's persistent domain which AppKit reads with higher
+        // priority than NSGlobalDomain, so our values win. Trade-
+        // off: persists to ~/Library/Preferences/<bundle>.plist,
+        // but they're all "false" booleans for features we never
+        // want — harmless on disk.
+        let prefs = UserDefaults.standard
+        for key in [
+            "NSAutomaticTextCompletionEnabled",
+            "NSAutomaticInlinePredictionEnabled",
+            "WebAutomaticTextReplacementEnabled",
+            "NSAllowsCharacterPickerTouchBarItem",
+            "NSAutomaticSpellingCorrectionEnabled",
+            "NSAutomaticTextReplacementEnabled",
+            "NSAutomaticQuoteSubstitutionEnabled",
+            "NSAutomaticDashSubstitutionEnabled",
+            "NSAutomaticDataDetectionEnabled",
+            "NSAutomaticLinkDetectionEnabled",
+        ] {
+            prefs.set(false, forKey: key)
+        }
+
         // Earliest reliable hook — install the field-editor interceptor on
         // every NSWindow before the user can focus a text field. Layer 5
-        // of the autofill suppression stack; without this, the empty
-        // rounded ghost popup appears once per session the first time any
-        // AppKit menu/text-input infrastructure activates (including the
-        // first focus on any FilterField).
-        fieldEditorObservers = installFieldEditorInterceptorsForAllWindows()
+        // of the autofill suppression stack.
+        for window in NSApp.windows {
+            installFieldEditorInterceptor(on: window)
+        }
+
+        // didBecomeKey covers any future window that comes up.
+        let didKey = NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification,
+            object: nil,
+            queue: .main
+        ) { notification in
+            guard let window = notification.object as? NSWindow else { return }
+            MainActor.assumeIsolated {
+                installFieldEditorInterceptor(on: window)
+                reapPredictivePanels()
+            }
+        }
+        fieldEditorObservers.append(didKey)
+
+        // Any window that's added later (sheets, popovers that get
+        // promoted) gets wrapped at order-in time.
+        let didUpdate = NotificationCenter.default.addObserver(
+            forName: NSWindow.didUpdateNotification,
+            object: nil,
+            queue: .main
+        ) { notification in
+            guard let window = notification.object as? NSWindow else { return }
+            MainActor.assumeIsolated {
+                installFieldEditorInterceptor(on: window)
+            }
+        }
+        fieldEditorObservers.append(didUpdate)
+
+        // Belt-and-suspenders: before any user interaction reaches a
+        // text field, re-sweep every window.
+        eventMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .keyDown]
+        ) { event in
+            MainActor.assumeIsolated {
+                for window in NSApp.windows {
+                    installFieldEditorInterceptor(on: window)
+                }
+                reapPredictivePanels()
+                for delay in [0.05, 0.15, 0.35, 0.7] {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                        reapPredictivePanels()
+                    }
+                }
+            }
+            return event
+        }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -43,6 +118,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Tools / autofill-style subview. Runs in production so the
         // unified log captures regressions during normal use.
         PhantomPopupDetector.startWatching()
+
+        // Cold-launch flash fix. Fan a series of timer-based sweeps across
+        // the first few seconds of life so any predictive panel gets ordered-out
+        // within one runloop turn of instantiation.
+        reapPredictivePanels()
+        for delay in [0.05, 0.15, 0.3, 0.6, 1.2, 2.5] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                reapPredictivePanels()
+            }
+        }
+
+        // didChangeOcclusionStateNotification -> reap immediately when occlusion state changes
+        let didOcclusion = NotificationCenter.default.addObserver(
+            forName: NSWindow.didChangeOcclusionStateNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            MainActor.assumeIsolated {
+                reapPredictivePanels()
+            }
+        }
+        fieldEditorObservers.append(didOcclusion)
+
+        // didBecomeKeyNotification -> reap on focus shift
+        let keyToken = NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            MainActor.assumeIsolated {
+                reapPredictivePanels()
+            }
+        }
+        fieldEditorObservers.append(keyToken)
 
         // Check mode for `make phantom-check`: launch with
         // STASH_PHANTOM_CHECK=1 → app exits after a fixed window with
@@ -80,6 +189,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     deinit {
         for token in fieldEditorObservers {
             NotificationCenter.default.removeObserver(token)
+        }
+        if let monitor = eventMonitor {
+            NSEvent.removeMonitor(monitor)
         }
     }
 }
