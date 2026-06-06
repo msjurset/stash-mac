@@ -12,9 +12,18 @@ final class StashStore {
     var items: [StashItem] = [] {
         didSet {
             itemsByID = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0) })
+            itemIndexByID = Dictionary(uniqueKeysWithValues: items.enumerated().map { ($0.element.id, $0.offset) })
         }
     }
     private var itemsByID: [String: StashItem] = [:]
+    @ObservationIgnored
+    private var itemIndexByID: [String: Int] = [:]
+    @ObservationIgnored
+    private var prewarmTask: Task<Void, Never>?
+
+    func indexOfItem(id: String) -> Int? {
+        itemIndexByID[id]
+    }
     var tags: [StashTag] = []
     var collections: [StashCollection] = []
     /// Sidebar's cap-at-3 Static Collections slice — populated
@@ -114,21 +123,40 @@ final class StashStore {
     /// "do I need to re-fetch on toggle flip" decision.
     var momentsScanAll: Bool = false
 
-    /// In-memory cache of media durations (in seconds) keyed by item ID.
-    var mediaDurations: [String: Double] = [:]
+    @Observable
+    final class DurationWrapper {
+        var value: Double?
+        init(_ value: Double? = nil) {
+            self.value = value
+        }
+    }
+
+    @ObservationIgnored
+    private var durationWrappers: [String: DurationWrapper] = [:]
+
+    func durationWrapper(for id: String) -> DurationWrapper {
+        if let wrapper = durationWrappers[id] {
+            return wrapper
+        }
+        let wrapper = DurationWrapper()
+        durationWrappers[id] = wrapper
+        return wrapper
+    }
 
     /// Asynchronously loads and caches the duration for the given item ID if not already cached.
     func loadMediaDuration(id: String) {
-        guard mediaDurations[id] == nil else { return }
+        let wrapper = durationWrapper(for: id)
+        guard wrapper.value == nil else { return }
         Task {
             if let duration = await getMediaDuration(id: id) {
-                mediaDurations[id] = duration
+                wrapper.value = duration
             }
         }
     }
 
     /// Gets the duration of a media file in seconds.
     func getMediaDuration(id: String) async -> Double? {
+        if let cached = durationWrappers[id]?.value { return cached }
         guard let item = items.first(where: { $0.id == id })
                 ?? fetchedItem.flatMap({ $0.id == id ? $0 : nil }),
               let storePath = item.storePath,
@@ -513,6 +541,58 @@ final class StashStore {
         didSet {
             if let id = selectedItemID {
                 markSeen(id)
+                prewarmAdjacentItems(around: id)
+            }
+        }
+    }
+
+    private func prewarmAdjacentItems(around id: String) {
+        prewarmTask?.cancel()
+        prewarmTask = Task {
+            do {
+                // Debounce selection: wait 100ms before doing look-ahead pre-warming.
+                // This completely removes background overhead during rapid scrolling.
+                try await Task.sleep(nanoseconds: 100 * 1_000_000)
+                
+                guard let index = itemIndexByID[id] else { return }
+                
+                // 1. Prewarm adjacent media durations (up to 5 items in each direction)
+                let durationStart = max(0, index - 5)
+                let durationEnd = min(items.count - 1, index + 5)
+                for i in durationStart...durationEnd {
+                    let item = items[i]
+                    if item.type == .file, let mime = item.mimeType, (mime.hasPrefix("audio/") || mime.hasPrefix("video/")) {
+                        loadMediaDuration(id: item.id)
+                    }
+                }
+                
+                // 2. Prewarm adjacent thumbnails and images (up to 3 items in each direction)
+                let thumbStart = max(0, index - 3)
+                let thumbEnd = min(items.count - 1, index + 3)
+                for i in thumbStart...thumbEnd {
+                    guard i != index else { continue }
+                    let item = items[i]
+                    
+                    // Warm up thumbnail if present
+                    if let rel = item.thumbnailPath,
+                       let url = FilePathResolver.resolveRelative(rel) {
+                        await ThumbnailCache.shared.loadAsync(path: url.path)
+                    }
+                    
+                    // Warm up full preview if it's an image
+                    if item.type == .image,
+                       let storePath = item.storePath {
+                        // Avoid synchronous file existence check in FilePathResolver.resolve on the main thread
+                        let resolvedURL = await Task.detached(priority: .background) {
+                            FilePathResolver.resolve(storePath: storePath)
+                        }.value
+                        if let resolvedURL {
+                            await ThumbnailCache.shared.loadAsync(path: resolvedURL.path)
+                        }
+                    }
+                }
+            } catch {
+                // Cancelled
             }
         }
     }
@@ -549,9 +629,31 @@ final class StashStore {
     var isLoading = false
     var error: String?
     var flashMessage: String?
+    @ObservationIgnored
     var seenItemIDs: Set<String> = {
         Set(UserDefaults.standard.stringArray(forKey: "seenItemIDs") ?? [])
     }()
+
+    @Observable
+    final class SeenWrapper {
+        var isUnseen: Bool = true
+        init(_ isUnseen: Bool = true) {
+            self.isUnseen = isUnseen
+        }
+    }
+
+    @ObservationIgnored
+    private var seenWrappers: [String: SeenWrapper] = [:]
+
+    func seenWrapper(for id: String) -> SeenWrapper {
+        if let wrapper = seenWrappers[id] {
+            return wrapper
+        }
+        let isUnseen = !seenItemIDs.contains(id)
+        let wrapper = SeenWrapper(isUnseen)
+        seenWrappers[id] = wrapper
+        return wrapper
+    }
     /// IDs of items that have received new AI follow-up content
     /// since they were last marked as seen. Drives the "new content"
     /// indicator in the UI.
@@ -2059,6 +2161,7 @@ final class StashStore {
     func markSeen(_ id: String) {
         updatedItemIDs.remove(id)
         if seenItemIDs.insert(id).inserted {
+            seenWrapper(for: id).isUnseen = false
             // Keep the set from growing unbounded — trim to last 2000
             if seenItemIDs.count > 2000 {
                 seenItemIDs = Set(Array(seenItemIDs).suffix(1500))
@@ -2077,7 +2180,7 @@ final class StashStore {
     }
 
     func isUnseen(_ id: String) -> Bool {
-        !seenItemIDs.contains(id)
+        seenWrapper(for: id).isUnseen
     }
 
     func hasUpdate(_ id: String) -> Bool {

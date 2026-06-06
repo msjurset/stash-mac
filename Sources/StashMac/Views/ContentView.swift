@@ -54,9 +54,7 @@ struct ContentView: View {
             .sheet(isPresented: $showAddCollectionSheet) { AddCollectionSheet() }
             .sheet(isPresented: $showAddItemSheet) { AddItemSheet() }
             .sheet(isPresented: $showEditSheet) {
-                if let id = store.selectedItemID, let item = store.items.first(where: { $0.id == id }) {
-                    EditItemSheet(item: item)
-                }
+                EditItemSheetWrapper()
             }
             .sheet(isPresented: $showImportBookmarksSheet) { ImportBookmarksSheet() }
             .sheet(isPresented: $showImportHistorySheet) { ImportHistorySheet() }
@@ -185,5 +183,15 @@ struct ContentView: View {
         .help("Refresh (R)")
         .keyboardShortcut("r", modifiers: .command)
         .focusable(false)
+    }
+}
+
+private struct EditItemSheetWrapper: View {
+    @Environment(StashStore.self) private var store
+    
+    var body: some View {
+        if let id = store.selectedItemID, let item = store.items.first(where: { $0.id == id }) {
+            EditItemSheet(item: item)
+        }
     }
 }

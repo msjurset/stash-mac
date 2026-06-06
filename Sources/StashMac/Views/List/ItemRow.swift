@@ -193,7 +193,7 @@ struct ItemRow: View {
     }
 
     private var durationLabel: String? {
-        guard let dur = store.mediaDurations[item.id], dur > 0 else { return nil }
+        guard let dur = store.durationWrapper(for: item.id).value, dur > 0 else { return nil }
         return formatDuration(dur)
     }
 

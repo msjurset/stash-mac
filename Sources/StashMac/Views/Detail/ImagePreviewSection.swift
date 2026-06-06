@@ -54,34 +54,24 @@ struct ImagePreviewSection: View {
         // when the user taps from one strip thumbnail to another.
         .animation(.easeInOut(duration: 0.18), value: image)
         .task(id: fileURL.path) {
-            await load()
+            do {
+                // Debounce selection: wait 100ms before loading full image.
+                try await Task.sleep(nanoseconds: 100 * 1_000_000)
+                await load()
+            } catch {
+                // Task was cancelled, do nothing
+            }
         }
     }
 
     private func load() async {
         let url = fileURL
-        // Keep the previous image visible while decoding the next
-        // one — clearing it produced a "whole page refresh" flash
-        // when tapping carousel strip thumbnails. The detached
-        // decode is fast for any already-on-disk file and the new
-        // image swaps in via the .animation crossfade above.
-        let img = await Task.detached(priority: .userInitiated) { () -> NSImage? in
-            guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-            // ThumbnailCache.loadOriented honors EXIF rotation —
-            // bare NSImage(contentsOf:) leaves portrait-shot photos
-            // rendering on their side. The cache version reads
-            // through CGImageSource at up to 1024px on the long
-            // edge, which is more than enough for the detail
-            // preview at this view size and saves multi-MP decodes.
-            return ThumbnailCache.loadOriented(from: url)
-        }.value
+        // Use the shared ThumbnailCache so it benefits from memory caching and pre-warming.
+        let img = await ThumbnailCache.shared.loadAsync(path: url.path)
+        
         // Guard against the file URL having changed (user navigated)
-        // mid-decode. SwiftUI cancels the .task on id change, but
-        // detached children still finish.
+        // mid-decode.
         guard fileURL == url else { return }
-        // Only update if we actually got a new image — leaves the
-        // previous image up if the next file is unreadable rather
-        // than blanking the view.
         if img != nil { image = img }
     }
 }

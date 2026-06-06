@@ -75,7 +75,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Belt-and-suspenders: before any user interaction reaches a
         // text field, re-sweep every window.
         eventMonitor = NSEvent.addLocalMonitorForEvents(
-            matching: [.leftMouseDown, .keyDown]
+            matching: [.leftMouseDown]
         ) { event in
             MainActor.assumeIsolated {
                 for window in NSApp.windows {

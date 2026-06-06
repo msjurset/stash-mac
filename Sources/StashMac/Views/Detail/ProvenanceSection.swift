@@ -40,7 +40,13 @@ struct ProvenanceSection: View {
             }
         }
         .task(id: itemID) {
-            await reload()
+            do {
+                // Debounce selection: wait 150ms before triggering heavy CLI calls.
+                try await Task.sleep(nanoseconds: 150 * 1_000_000)
+                await reload()
+            } catch {
+                // Task was cancelled, do nothing
+            }
         }
     }
 

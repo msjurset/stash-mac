@@ -401,7 +401,8 @@ struct ItemListView: View {
         @Bindable var store = store
         return ScrollViewReader { proxy in
             List(selection: $store.selectedItems) {
-            ForEach(Array(store.items.enumerated()), id: \.element.id) { idx, item in
+            ForEach(store.items) { item in
+                let idx = store.indexOfItem(id: item.id) ?? 0
                 ItemRow(item: item, shownThumbnailID: $shownThumbnailID)
                     .listRowBackground(idx.isMultiple(of: 2) ? Color.clear : Color.primary.opacity(0.04))
                     .tag(item.id)

@@ -38,17 +38,21 @@ struct RelatedSection: View {
             }
         }
         .task(id: itemID) {
-            // Safety timeout: if the Go CLI hangs on a database lock
-            // or complex scoring query, don't leave the UI spinning
-            // forever. 10s is plenty for SQLite.
-            await withThrowingTaskGroup(of: Void.self) { group in
-                group.addTask { await reload() }
-                group.addTask {
-                    try await Task.sleep(nanoseconds: 10 * 1_000_000_000)
-                    throw CancellationError()
+            do {
+                // Debounce selection: wait 150ms before triggering heavy CLI calls.
+                try await Task.sleep(nanoseconds: 150 * 1_000_000)
+                
+                await withThrowingTaskGroup(of: Void.self) { group in
+                    group.addTask { await reload() }
+                    group.addTask {
+                        try await Task.sleep(nanoseconds: 10 * 1_000_000_000)
+                        throw CancellationError()
+                    }
+                    _ = try? await group.next()
+                    group.cancelAll()
                 }
-                _ = try? await group.next()
-                group.cancelAll()
+            } catch {
+                // Task was cancelled, do nothing
             }
         }
     }

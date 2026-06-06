@@ -267,18 +267,25 @@ struct DirectMediaPlayer: View {
             }
         }
         .task(id: url) {
-            status = .checking
-            let currentUrl = url
-            let currentMime = mimeHint
-            let playable = await Task.detached {
-                var opts: [String: Any]? = nil
-                if let mime = currentMime {
-                    opts = ["AVURLAssetOutOfBandMIMETypeKey": mime]
-                }
-                let asset = AVURLAsset(url: currentUrl, options: opts)
-                return (try? await asset.load(.isPlayable)) ?? false
-            }.value
-            status = playable ? .playable : .notPlayable
+            do {
+                status = .checking
+                // Debounce selection: wait 150ms before checking playable status.
+                try await Task.sleep(nanoseconds: 150 * 1_000_000)
+                
+                let currentUrl = url
+                let currentMime = mimeHint
+                let playable = await Task.detached {
+                    var opts: [String: Any]? = nil
+                    if let mime = currentMime {
+                        opts = ["AVURLAssetOutOfBandMIMETypeKey": mime]
+                    }
+                    let asset = AVURLAsset(url: currentUrl, options: opts)
+                    return (try? await asset.load(.isPlayable)) ?? false
+                }.value
+                status = playable ? .playable : .notPlayable
+            } catch {
+                // Task was cancelled, do nothing
+            }
         }
     }
 }
@@ -415,7 +422,13 @@ private struct CustomAudioPlayer: View {
         }
         .padding(.horizontal, 4)
         .task(id: url) {
-            await loadAndObserve()
+            do {
+                // Debounce selection: wait 150ms before loading and observing audio.
+                try await Task.sleep(nanoseconds: 150 * 1_000_000)
+                await loadAndObserve()
+            } catch {
+                // Task was cancelled, do nothing
+            }
         }
         .onDisappear { tearDown() }
     }
