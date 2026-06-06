@@ -68,24 +68,43 @@ struct ItemRow: View {
                     }
                 }
 
-                HStack(spacing: 6) {
-                    if let lang = item.language {
-                        Text(lang)
-                            .font(.caption2.monospaced())
-                            .padding(.horizontal, 4)
-                            .padding(.vertical, 1)
-                            .background(.blue.opacity(0.15), in: RoundedRectangle(cornerRadius: 3))
-                            .foregroundStyle(.blue)
+                HStack(spacing: 0) {
+                    ForEach(Array(subtitleElements.enumerated()), id: \.element) { index, element in
+                        if index > 0 {
+                            Spacer()
+                        }
+                        switch element {
+                        case .language(let lang):
+                            Text(lang)
+                                .font(.caption2.monospaced())
+                                .padding(.horizontal, 4)
+                                .padding(.vertical, 1)
+                                .background(.blue.opacity(0.15), in: RoundedRectangle(cornerRadius: 3))
+                                .foregroundStyle(.blue)
+                        case .emailFrom(let from):
+                            Text(from)
+                                .lineLimit(1)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        case .duration(let dur):
+                            Text(dur)
+                                .lineLimit(1)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        case .fileSize(let size):
+                            Text(size)
+                                .lineLimit(1)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
-                    if item.type == .email, let from = item.fromName {
-                        Text(from)
-                            .lineLimit(1)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+                    
+                    Spacer()
+                    
                     Text(item.createdAt, style: .relative)
                         .font(.caption)
                         .foregroundStyle(.tertiary)
+                        .lineLimit(1)
                 }
                 
                 if let tags = item.tags, !tags.isEmpty {
@@ -97,11 +116,15 @@ struct ItemRow: View {
                 }
             }
             .allowsHitTesting(false)
-
-            Spacer()
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.vertical, 2)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .onAppear {
+            if isAudioOrVideo {
+                store.loadMediaDuration(id: item.id)
+            }
+        }
     }
 
     /// Leading type-icon. Clicking it opens / toggles the thumbnail
@@ -155,6 +178,52 @@ struct ItemRow: View {
                         shownThumbnailID = nil
                     }
             }
+    }
+
+    private enum SubtitleElement: Hashable {
+        case language(String)
+        case emailFrom(String)
+        case duration(String)
+        case fileSize(String)
+    }
+
+    private var isAudioOrVideo: Bool {
+        guard item.type == .file, let mime = item.mimeType else { return false }
+        return mime.hasPrefix("audio/") || mime.hasPrefix("video/")
+    }
+
+    private var durationLabel: String? {
+        guard let dur = store.mediaDurations[item.id], dur > 0 else { return nil }
+        return formatDuration(dur)
+    }
+
+    private func formatDuration(_ seconds: Double) -> String {
+        let totalSecs = Int(round(seconds))
+        let h = totalSecs / 3600
+        let m = (totalSecs % 3600) / 60
+        let s = totalSecs % 60
+        if h > 0 {
+            return String(format: "%d:%02d:%02d", h, m, s)
+        } else {
+            return String(format: "%02d:%02d", m, s)
+        }
+    }
+
+    private var subtitleElements: [SubtitleElement] {
+        var list: [SubtitleElement] = []
+        if let lang = item.language {
+            list.append(.language(lang))
+        }
+        if item.type == .email, let from = item.fromName {
+            list.append(.emailFrom(from))
+        }
+        if isAudioOrVideo, let durStr = durationLabel {
+            list.append(.duration(durStr))
+        }
+        if let sizeStr = item.humanFileSize {
+            list.append(.fileSize(sizeStr))
+        }
+        return list
     }
 }
 

@@ -67,6 +67,10 @@ final class StashStore {
         }
     }
 
+    func getCLIVersion() async throws -> String {
+        try await cli.version()
+    }
+
     /// Call when the user navigates to a collection so the
     /// view_count signal underlying the "Frequent" sort tracks
     /// reality. Fire-and-forget — failures here would just stale
@@ -108,6 +112,19 @@ final class StashStore {
     /// Last scope `moments` was loaded with. Drives the
     /// "do I need to re-fetch on toggle flip" decision.
     var momentsScanAll: Bool = false
+
+    /// In-memory cache of media durations (in seconds) keyed by item ID.
+    var mediaDurations: [String: Double] = [:]
+
+    /// Asynchronously loads and caches the duration for the given item ID if not already cached.
+    func loadMediaDuration(id: String) {
+        guard mediaDurations[id] == nil else { return }
+        Task {
+            if let duration = await getMediaDuration(id: id) {
+                mediaDurations[id] = duration
+            }
+        }
+    }
 
     /// Gets the duration of a media file in seconds.
     func getMediaDuration(id: String) async -> Double? {
