@@ -18,7 +18,47 @@ struct NotesView: View {
     private var isTruncated: Bool { text.count > 500 }
 
     private var displayText: String {
-        (isTruncated && !isExpanded) ? String(text.prefix(500)) + "..." : text
+        let baseText = (isTruncated && !isExpanded) ? String(text.prefix(500)) + "..." : text
+        
+        // Dynamic speaker name replacement
+        guard let item = store.items.first(where: { $0.id == itemID })
+                ?? store.fetchedItem.flatMap({ $0.id == itemID ? $0 : nil }),
+              let map = item.speakerMap, !map.isEmpty else {
+            return baseText
+        }
+        
+        var processed = baseText
+        // Support #### SPEAKER X and Speaker X: (anywhere in text to catch timeline lists)
+        let replacements = [
+            (pattern: "#### SPEAKER (\\d+)", template: "#### %@"),
+            (pattern: "Speaker\\s+(\\d+):", template: "%@:"),
+            (pattern: "\\bSpeaker\\s+(\\d+)\\b", template: "%@")
+        ]
+        
+        for rep in replacements {
+            if let regex = try? NSRegularExpression(pattern: rep.pattern, options: [.caseInsensitive]) {
+                var offset = 0
+                let nsRange = NSRange(processed.startIndex..<processed.endIndex, in: processed)
+                let matches = regex.matches(in: processed, options: [], range: nsRange)
+                
+                for match in matches {
+                    if match.numberOfRanges > 1,
+                       let idRange = Range(match.range(at: 1), in: processed) {
+                        let id = String(processed[idRange])
+                        if let name = map[id] {
+                            let replacement = String(format: rep.template, name.uppercased())
+                            let fullNSRange = NSRange(location: match.range.location + offset, length: match.range.length)
+                            if let fullRange = Range(fullNSRange, in: processed) {
+                                processed.replaceSubrange(fullRange, with: replacement)
+                                offset += replacement.count - match.range.length
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        return processed
     }
 
     var body: some View {

@@ -30,12 +30,53 @@ struct ExtractedTextView: View {
     private let maxRenderLength = 100_000
 
     private var displayText: String {
+        let baseText: String
         if isExpanded {
-            return text.count > maxRenderLength 
+            baseText = text.count > maxRenderLength 
                 ? String(text.prefix(maxRenderLength)) + "\n\n[... truncated for performance ...]"
                 : text
+        } else {
+            baseText = isTruncated ? String(text.prefix(500)) + "..." : text
         }
-        return isTruncated ? String(text.prefix(500)) + "..." : text
+        
+        // Dynamic speaker name replacement
+        guard let item = store.items.first(where: { $0.id == itemID }),
+              let map = item.speakerMap, !map.isEmpty else {
+            return baseText
+        }
+        
+        var processed = baseText
+        // Support #### SPEAKER X and Speaker X: (anywhere in text)
+        let replacements = [
+            (pattern: "#### SPEAKER (\\d+)", template: "#### %@"),
+            (pattern: "Speaker\\s+(\\d+):", template: "%@:"),
+            (pattern: "\\bSpeaker\\s+(\\d+)\\b", template: "%@")
+        ]
+        
+        for rep in replacements {
+            if let regex = try? NSRegularExpression(pattern: rep.pattern, options: [.caseInsensitive]) {
+                var offset = 0
+                let nsRange = NSRange(processed.startIndex..<processed.endIndex, in: processed)
+                let matches = regex.matches(in: processed, options: [], range: nsRange)
+                
+                for match in matches {
+                    if match.numberOfRanges > 1,
+                       let idRange = Range(match.range(at: 1), in: processed) {
+                        let id = String(processed[idRange])
+                        if let name = map[id] {
+                            let replacement = String(format: rep.template, name.uppercased())
+                            let fullNSRange = NSRange(location: match.range.location + offset, length: match.range.length)
+                            if let fullRange = Range(fullNSRange, in: processed) {
+                                processed.replaceSubrange(fullRange, with: replacement)
+                                offset += replacement.count - match.range.length
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        return processed
     }
 
     /// Heuristic to detect if the text is likely binary junk (e.g. an MP4 header).

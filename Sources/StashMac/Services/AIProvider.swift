@@ -286,28 +286,23 @@ func downscaleForIdentify(
 enum AIResponseParser {
     private static let titleMarkers = ["TITLE", "Title", "Common Name", "Common name", "Name", "Subject"]
     private static let notesMarkers = ["NOTES", "Notes", "Description", "Details"]
+    private static let summaryMarkers = ["SUMMARY", "Summary"]
+    private static let actionItemsMarkers = ["ACTION ITEMS", "Action Items", "ACTION ITEM", "Action Item", "TODO", "Todos", "TASKS", "Tasks"]
     private static let transcriptMarkers = ["TRANSCRIPT", "Transcript", "Text", "OCR"]
 
     static func parse(_ raw: String) -> AIIdentifyResult {
         let lines = raw.components(separatedBy: "\n")
         var title: String? = nil
-        var notes: String? = nil
+        var summary: String? = nil
+        var actionItems: String? = nil
 
         for line in lines {
             if title == nil, let val = extractValue(line, markers: titleMarkers) {
                 title = val.cleanInlineMarkers()
             }
-            if notes == nil, let val = extractValue(line, markers: notesMarkers) {
-                notes = val.cleanInlineMarkers()
-            }
-            if title != nil && notes != nil { break }
         }
 
-        // Capture TRANSCRIPT as a multi-line block — unlike title /
-        // notes which are single-line values, transcripts are
-        // paragraphs verbatim from the photo. Walks from the
-        // marker line to the next known marker or EOF. "NONE" or
-        // empty → nil so callers treat as "no readable text".
+        // Capture multi-line blocks
         let transcriptLines = extractMultilineValue(lines, markers: transcriptMarkers)
         let transcript: String? = transcriptLines.map { lines in
             lines.joined(separator: "\n")
@@ -317,16 +312,39 @@ enum AIResponseParser {
             if s.isEmpty || s.caseInsensitiveCompare("NONE") == .orderedSame { return nil }
             return s
         }
-        let transcriptLineSet = Set(transcriptLines ?? [])
+        
+        let summaryLines = extractMultilineValue(lines, markers: summaryMarkers)
+        summary = summaryLines?.joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .cleanInlineMarkers()
+            .flatMap { $0.isEmpty ? nil : $0 }
+            
+        let actionItemsLines = extractMultilineValue(lines, markers: actionItemsMarkers)
+        actionItems = actionItemsLines?.joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .cleanInlineMarkers()
+            .flatMap { s in
+                if s.isEmpty || s.caseInsensitiveCompare("NONE") == .orderedSame { return nil }
+                return s
+            }
 
         let notesText: String
-        if let n = notes {
-            notesText = n
+        if summary != nil || actionItems != nil {
+            var parts: [String] = []
+            if let s = summary { parts.append(s) }
+            if let a = actionItems {
+                parts.append("#### ACTION ITEMS\n\(a)")
+            }
+            notesText = parts.joined(separator: "\n\n")
         } else {
+            // Fallback: use lines that aren't markers or transcript
+            let transcriptLineSet = Set(transcriptLines ?? [])
             let filtered = lines.filter { line in
                 extractValue(line, markers: titleMarkers) == nil &&
-                    extractValue(line, markers: transcriptMarkers) == nil &&
-                    !transcriptLineSet.contains(line)
+                extractValue(line, markers: summaryMarkers) == nil &&
+                extractValue(line, markers: actionItemsMarkers) == nil &&
+                extractValue(line, markers: transcriptMarkers) == nil &&
+                !transcriptLineSet.contains(line)
             }
             let joined = filtered.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
             notesText = joined.isEmpty ? raw : joined
@@ -354,6 +372,8 @@ enum AIResponseParser {
             let line = lines[i]
             if extractValue(line, markers: titleMarkers) != nil { break }
             if extractValue(line, markers: notesMarkers) != nil { break }
+            if extractValue(line, markers: summaryMarkers) != nil { break }
+            if extractValue(line, markers: actionItemsMarkers) != nil { break }
             if extractValue(line, markers: transcriptMarkers) != nil { break }
             out.append(line)
         }
@@ -362,7 +382,7 @@ enum AIResponseParser {
 
     private static func extractValue(_ line: String, markers: [String]) -> String? {
         let trimmed = line.drop { $0 == " " || $0 == "\t" }
-        let stripped = String(trimmed).trimmingCharacters(in: CharacterSet(charactersIn: "*_ "))
+        let stripped = String(trimmed).trimmingCharacters(in: CharacterSet(charactersIn: "*_# "))
         for m in markers {
             let needle = "\(m):"
             if let r = stripped.range(of: needle, options: [.caseInsensitive, .anchored]) {

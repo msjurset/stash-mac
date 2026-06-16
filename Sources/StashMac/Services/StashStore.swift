@@ -1117,15 +1117,16 @@ final class StashStore {
 
     func editItem(
         id: String,
-        title: String?,
-        note: String?,
+        title: String? = nil,
+        note: String? = nil,
         extractedText: String? = nil,
         url: String? = nil,
-        addTags: [String],
-        removeTags: [String],
-        collection: String?,
+        addTags: [String] = [],
+        removeTags: [String] = [],
+        collection: String? = nil,
         location: ItemLocation? = nil,
-        clearLocation: Bool = false
+        clearLocation: Bool = false,
+        speakerMap: [String: String]? = nil
     ) {
         Task {
             do {
@@ -1139,7 +1140,8 @@ final class StashStore {
                     removeTags: removeTags,
                     collection: collection,
                     location: location,
-                    clearLocation: clearLocation
+                    clearLocation: clearLocation,
+                    speakerMap: speakerMap
                 )
             } catch {
                 await MainActor.run { self.error = error.localizedDescription }
@@ -1149,25 +1151,18 @@ final class StashStore {
 
     func editItem(
         id: String,
-        title: String?,
-        note: String?,
+        title: String? = nil,
+        note: String? = nil,
         extractedText: String? = nil,
         url: String? = nil,
-        addTags: [String],
-        removeTags: [String],
-        collection: String?,
+        addTags: [String] = [],
+        removeTags: [String] = [],
+        collection: String? = nil,
         location: ItemLocation? = nil,
-        clearLocation: Bool = false
+        clearLocation: Bool = false,
+        speakerMap: [String: String]? = nil
     ) async throws {
-        // Optimistic update for the Health Check view
-        if let url, let issues = checkResult?.brokenUrls,
-           let idx = issues.firstIndex(where: { $0.id == id }) {
-            var current = checkResult ?? CheckResult()
-            current.brokenUrls?[idx].detail = "\(url) — rechecking…"
-            checkResult = current
-        }
-
-        _ = try await cli.editItem(
+        let updated = try await cli.editItem(
             id: id,
             title: title,
             note: note,
@@ -1177,10 +1172,17 @@ final class StashStore {
             removeTags: removeTags,
             collection: collection,
             location: location,
-            clearLocation: clearLocation
+            clearLocation: clearLocation,
+            speakerMap: speakerMap
         )
         
         await MainActor.run {
+            if let idx = self.items.firstIndex(where: { $0.id == id }) {
+                self.items[idx] = updated
+            }
+            if self.fetchedItem?.id == id {
+                self.fetchedItem = updated
+            }
             loadAll()
         }
         
@@ -2190,7 +2192,13 @@ final class StashStore {
     func addTagToItem(id: String, tag: String) {
         Task {
             do {
-                _ = try await cli.editItem(id: id, addTags: [tag])
+                let updated = try await cli.editItem(id: id, addTags: [tag])
+                if let idx = self.items.firstIndex(where: { $0.id == id }) {
+                    self.items[idx] = updated
+                }
+                if self.fetchedItem?.id == id {
+                    self.fetchedItem = updated
+                }
                 loadAll()
             } catch {
                 self.error = error.localizedDescription
@@ -2201,7 +2209,13 @@ final class StashStore {
     func addTagsToItem(id: String, tags: [String]) {
         Task {
             do {
-                _ = try await cli.editItem(id: id, addTags: tags)
+                let updated = try await cli.editItem(id: id, addTags: tags)
+                if let idx = self.items.firstIndex(where: { $0.id == id }) {
+                    self.items[idx] = updated
+                }
+                if self.fetchedItem?.id == id {
+                    self.fetchedItem = updated
+                }
                 loadAll()
             } catch {
                 self.error = error.localizedDescription
@@ -2214,8 +2228,17 @@ final class StashStore {
             do {
                 // CLI edit -c is additive but only supports one at a time.
                 // Call sequentially to ensure all are added.
+                var lastUpdated: StashItem? = nil
                 for col in collections {
-                    _ = try await cli.editItem(id: id, collection: col)
+                    lastUpdated = try await cli.editItem(id: id, collection: col)
+                }
+                if let updated = lastUpdated {
+                    if let idx = self.items.firstIndex(where: { $0.id == id }) {
+                        self.items[idx] = updated
+                    }
+                    if self.fetchedItem?.id == id {
+                        self.fetchedItem = updated
+                    }
                 }
                 loadAll()
             } catch {
@@ -2233,11 +2256,17 @@ final class StashStore {
     func setFavorite(itemID: String, favorite: Bool) {
         Task {
             do {
-                _ = try await cli.editItem(
+                let updated = try await cli.editItem(
                     id: itemID,
                     addTags: favorite ? [FavoriteTag.name] : [],
                     removeTags: favorite ? [] : [FavoriteTag.name]
                 )
+                if let idx = self.items.firstIndex(where: { $0.id == itemID }) {
+                    self.items[idx] = updated
+                }
+                if self.fetchedItem?.id == itemID {
+                    self.fetchedItem = updated
+                }
                 loadAll()
             } catch {
                 self.error = error.localizedDescription
@@ -3197,7 +3226,7 @@ final class StashStore {
             return (t?.isEmpty == false) ? t : nil
         }()
         do {
-            _ = try await cli.editItem(
+            let updated = try await cli.editItem(
                 id: itemID,
                 title: newTitle?.isEmpty == false ? newTitle : nil,
                 note: combinedNotes,
@@ -3205,6 +3234,12 @@ final class StashStore {
                 addTags: [],
                 removeTags: []
             )
+            if let idx = items.firstIndex(where: { $0.id == itemID }) {
+                items[idx] = updated
+            }
+            if fetchedItem?.id == itemID {
+                fetchedItem = updated
+            }
             flashMessage = "Identified ✓"
             refresh()
         } catch {
@@ -3221,6 +3256,13 @@ final class StashStore {
     func healItem(id: String) async {
         do {
             try await cli.healItem(id: id)
+            let updated = try await cli.getItem(id: id)
+            if let idx = items.firstIndex(where: { $0.id == id }) {
+                items[idx] = updated
+            }
+            if fetchedItem?.id == id {
+                fetchedItem = updated
+            }
             flashMessage = "Healed ✓"
             refresh()
         } catch {

@@ -31,6 +31,7 @@ struct StashItem: Codable, Identifiable, Hashable {
     var tags: [StashTag]?
     var collections: [StashCollection]?
     var links: [StashLink]?
+    var speakerMap: [String: String]?
 
     var tagNames: [String] {
         tags?.map(\.name) ?? []
