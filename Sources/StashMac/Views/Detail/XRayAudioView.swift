@@ -699,6 +699,7 @@ struct XRayAudioView: View {
             mime: nil,
             duration: tracks.map(\.duration).max() ?? 0,
             samples: [], 
+            maxAmplitude: 1.0,
             role: .composite,
             position: -1
         )
@@ -1067,7 +1068,7 @@ struct XRayAudioView: View {
                 for source in sources {
                     if source.isMissing {
                         group.addTask {
-                            return XRayTrack(label: source.label, url: nil, mime: source.mime, duration: 0, samples: [], position: source.position, isMissing: true)
+                            return XRayTrack(label: source.label, url: nil, mime: source.mime, duration: 0, samples: [], maxAmplitude: 1.0, position: source.position, isMissing: true)
                         }
                     } else if let url = source.url {
                         group.addTask {
@@ -1076,7 +1077,7 @@ struct XRayAudioView: View {
                                 t.position = source.position
                                 return t
                             }
-                            return XRayTrack(label: source.label, url: nil, mime: source.mime, duration: 0, samples: [], position: source.position, isMissing: true)
+                            return XRayTrack(label: source.label, url: nil, mime: source.mime, duration: 0, samples: [], maxAmplitude: 1.0, position: source.position, isMissing: true)
                         }
                     }
                 }
@@ -1152,7 +1153,8 @@ struct XRayAudioView: View {
             
             log("Loaded: \(label)")
             
-            return XRayTrack(label: label, url: url, mime: mime, duration: fullDuration, samples: samples, position: 0)
+            let maxAmp = samples.max() ?? 1.0
+            return XRayTrack(label: label, url: url, mime: mime, duration: fullDuration, samples: samples, maxAmplitude: maxAmp, position: 0)
         } catch {
             log("Load error \(label): \(error.localizedDescription)")
             return nil
@@ -1366,6 +1368,7 @@ struct XRayTrack: Identifiable {
     let mime: String?
     let duration: Double
     let samples: [Float]
+    let maxAmplitude: Float
     var role: Role = .source
     var position: Int = 0
     var color: Color = .white
@@ -1439,13 +1442,16 @@ private struct CompositeWaveformView: View {
                 
                 let sources = currentTracks.filter { $0.role == .source && !$0.isMissing }
                 
-                // 1. Calculate max amplitudes for normalization
-                let masterMax = masterSamples.max() ?? 1.0
-                let sourceMaxes = sources.map { $0.samples.max() ?? 1.0 }
+                // 1. Use precalculated max amplitudes for normalization (no linear scans in draw loop)
+                let masterMax = master.maxAmplitude
+                let sourceMaxes = sources.map { $0.maxAmplitude }
                 
                 let totalDur = master.duration
                 let startOffset = currentTimeRange?.start.seconds ?? 0
                 let displayDuration = currentTimeRange?.duration.seconds ?? totalDur
+                
+                // 2. Batch drawing by color to reduce draw calls from W (1000+) to ~3-4
+                var rectsByColor: [Color: [CGRect]] = [:]
                 
                 for x in stride(from: 0, to: W, by: 1) {
                     let tNorm = xToTNorm(x)
@@ -1476,7 +1482,13 @@ private struct CompositeWaveformView: View {
                     
                     let barH = CGFloat(mVal) * H * 0.8
                     let rect = CGRect(x: x, y: midY - (barH/2), width: 1, height: max(1, barH))
-                    context.fill(Path(rect), with: .color(bestMatchColor.opacity(0.8)))
+                    rectsByColor[bestMatchColor, default: []].append(rect)
+                }
+                
+                for (color, rects) in rectsByColor {
+                    var path = Path()
+                    path.addRects(rects)
+                    context.fill(path, with: .color(color.opacity(0.8)))
                 }
                 
                 var topPath = Path()
