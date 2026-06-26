@@ -1100,6 +1100,7 @@ struct XRayAudioView: View {
                     if up.contains("WATCH") { track.color = .orange }
                     else if up.contains("PHONE") { track.color = .blue }
                     else if track.role == .source { track.color = .cyan }
+                    track.isSelected = (track.role == .master)
                     return track
                 }
                 
@@ -1222,15 +1223,34 @@ struct XRayAudioView: View {
                     }
                 )
                 
-                // 4. Overwrite the master track file on disk
-                if FileManager.default.fileExists(atPath: masterURL.path) {
-                    try FileManager.default.removeItem(at: masterURL)
+                // 4. Attach the new mix to the item
+                let caption = "Remix (\(mixMode.rawValue)\(enhanceSpeech ? " + EQ" : ""))"
+                log("Attaching new mix file \(tempOutputURL.path) with caption \(caption)")
+                let updatedItem = try await store.cli.attachFile(itemID: item.id, path: tempOutputURL.path, caption: caption)
+                
+                // Find the index (1-based) of the newly attached file
+                guard let files = updatedItem.files, !files.isEmpty else {
+                    throw NSError(domain: "XRayAudioView", code: 22, userInfo: [NSLocalizedDescriptionKey: "Attached files list is empty after attaching remix"])
                 }
-                try FileManager.default.moveItem(at: tempOutputURL, to: masterURL)
                 
-                log("Successfully optimized and wrote mixed track back to master file: \(masterURL.lastPathComponent)")
+                // Find the file that matches the caption and has the highest ID
+                let matchingFiles = files.enumerated().filter { $0.element.caption == caption }
+                guard let bestMatch = matchingFiles.max(by: { $0.element.id < $1.element.id }) else {
+                    throw NSError(domain: "XRayAudioView", code: 23, userInfo: [NSLocalizedDescriptionKey: "Could not find the attached remix file in item files list"])
+                }
                 
-                // 5. Reload tracks to refresh waveforms and update duration
+                let targetIndex = bestMatch.offset + 1
+                log("Promoting newly attached remix at index \(targetIndex) to primary")
+                _ = try await store.cli.promoteFile(itemID: item.id, index: targetIndex)
+                
+                // Clean up temp file
+                try? FileManager.default.removeItem(at: tempOutputURL)
+                
+                // 5. Sync the item cache and refresh the store
+                await refreshItem()
+                store.refresh()
+                
+                // 6. Reload tracks to refresh waveforms and update duration
                 await MainActor.run {
                     self.isOptimizing = false
                     self.loadTracks()

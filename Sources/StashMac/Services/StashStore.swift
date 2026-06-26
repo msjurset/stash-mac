@@ -659,7 +659,7 @@ final class StashStore {
     /// indicator in the UI.
     var updatedItemIDs: Set<String> = []
 
-    private let cli = StashCLI.shared
+    let cli = StashCLI.shared
     private var searchTask: Task<Void, Never>?
     private var suppressNavigationChange = false
     private var ingestObserver: NSObjectProtocol?
@@ -2286,7 +2286,16 @@ final class StashStore {
     /// commit-result path so a global search hit lands in the list
     /// where the highlight is visible.
     func getItem(id: String) async throws -> StashItem {
-        try await cli.getItem(id: id)
+        let updated = try await cli.getItem(id: id)
+        await MainActor.run {
+            if let idx = self.items.firstIndex(where: { $0.id == id }) {
+                self.items[idx] = updated
+            }
+            if self.fetchedItem?.id == id {
+                self.fetchedItem = updated
+            }
+        }
+        return updated
     }
 
     func selectItemByID(_ id: String, revealInList: Bool = false) {
