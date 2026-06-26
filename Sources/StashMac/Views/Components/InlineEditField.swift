@@ -102,6 +102,7 @@ struct InlineEditField: View {
         // happen between install and click are picked up.
         let holder = frameHolder
         clickOutsideMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { event in
+            guard event.clickCount == 1 else { return event }
             guard let window = event.window else { return event }
             let frame = holder.frame
             // Frame not yet known (probe view hasn't laid out). The
