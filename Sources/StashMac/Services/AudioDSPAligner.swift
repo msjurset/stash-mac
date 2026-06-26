@@ -42,21 +42,21 @@ enum AudioDSPAligner {
                     for shift in -maxShift...maxShift {
                         let start = max(0, -shift)
                         let end = min(N, M - shift)
+                        let count = end - start
                         
-                        guard (end - start) > 125 else { continue } // Ensure sufficient overlap (at least 0.5s at 250Hz)
+                        guard count > 125 else { continue } // Ensure sufficient overlap (at least 0.5s at 250Hz)
+                        
+                        let len = vDSP_Length(count)
+                        let masterStartPtr = masterPtr.advanced(by: start)
+                        let sourceStartPtr = sourcePtr.advanced(by: start + shift)
                         
                         var dotProduct: Float = 0
                         var energyMaster: Float = 0
                         var energySource: Float = 0
                         
-                        for i in start..<end {
-                            let j = i + shift
-                            let a = masterPtr[i]
-                            let b = sourcePtr[j]
-                            dotProduct += a * b
-                            energyMaster += a * a
-                            energySource += b * b
-                        }
+                        vDSP_dotpr(masterStartPtr, 1, sourceStartPtr, 1, &dotProduct, len)
+                        vDSP_svesq(masterStartPtr, 1, &energyMaster, len)
+                        vDSP_svesq(sourceStartPtr, 1, &energySource, len)
                         
                         let denom = sqrt(energyMaster * energySource)
                         let normCorr = denom > 0.001 ? (dotProduct / denom) : 0
@@ -97,21 +97,21 @@ enum AudioDSPAligner {
                         let shift = coarseFineShift + shiftOffset
                         let start = max(0, -shift)
                         let end = min(NFine, MFine - shift)
+                        let count = end - start
                         
-                        guard (end - start) > 5000 else { continue } // at least 0.5s overlap (5000 samples at 10kHz)
+                        guard count > 5000 else { continue } // at least 0.5s overlap (5000 samples at 10kHz)
+                        
+                        let len = vDSP_Length(count)
+                        let masterStartPtr = masterPtr.advanced(by: start)
+                        let sourceStartPtr = sourcePtr.advanced(by: start + shift)
                         
                         var dotProduct: Float = 0
                         var energyMaster: Float = 0
                         var energySource: Float = 0
                         
-                        for i in start..<end {
-                            let j = i + shift
-                            let a = masterPtr[i]
-                            let b = sourcePtr[j]
-                            dotProduct += a * b
-                            energyMaster += a * a
-                            energySource += b * b
-                        }
+                        vDSP_dotpr(masterStartPtr, 1, sourceStartPtr, 1, &dotProduct, len)
+                        vDSP_svesq(masterStartPtr, 1, &energyMaster, len)
+                        vDSP_svesq(sourceStartPtr, 1, &energySource, len)
                         
                         let denom = sqrt(energyMaster * energySource)
                         let normCorr = denom > 0.001 ? (dotProduct / denom) : 0
@@ -595,7 +595,6 @@ enum AudioDSPAligner {
         return AudioPCMData(samples: samples, sampleRate: nativeRate)
     }
     
-    /// Extracts a volume envelope (rectified average) by downsampling the PCM data to a specific target sample rate.
     static func extractEnvelope(_ samples: [Float], sampleRate: Double, targetRate: Double) -> [Float] {
         let step = sampleRate / targetRate
         let length = Int(Double(samples.count) / step)
@@ -606,18 +605,31 @@ enum AudioDSPAligner {
         let halfWindow = windowSize / 2
         
         var envelope = [Float](repeating: 0, count: length)
-        for i in 0..<length {
-            let centerIdx = Int(Double(i) * step)
-            let startIdx = max(0, centerIdx - halfWindow)
-            let endIdx = min(samples.count, centerIdx + halfWindow)
-            let count = endIdx - startIdx
-            guard count > 0 else { continue }
-            
-            var sum: Float = 0
-            for j in startIdx..<endIdx {
-                sum += abs(samples[j])
+        var tempBuffer = [Float](repeating: 0, count: windowSize)
+        
+        tempBuffer.withUnsafeMutableBufferPointer { tempPtr in
+            let tempBase = tempPtr.baseAddress!
+            samples.withUnsafeBufferPointer { samplesPtr in
+                envelope.withUnsafeMutableBufferPointer { envPtr in
+                    guard let baseSamples = samplesPtr.baseAddress,
+                          let baseEnv = envPtr.baseAddress else { return }
+                    
+                    for i in 0..<length {
+                        let centerIdx = Int(Double(i) * step)
+                        let startIdx = max(0, centerIdx - halfWindow)
+                        let endIdx = min(samples.count, centerIdx + halfWindow)
+                        let count = endIdx - startIdx
+                        guard count > 0 else { continue }
+                        
+                        let chunkPtr = baseSamples.advanced(by: startIdx)
+                        vDSP_vabs(chunkPtr, 1, tempBase, 1, vDSP_Length(count))
+                        
+                        var mean: Float = 0
+                        vDSP_meanv(tempBase, 1, &mean, vDSP_Length(count))
+                        baseEnv[i] = mean
+                    }
+                }
             }
-            envelope[i] = sum / Float(count)
         }
         return envelope
     }
