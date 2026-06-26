@@ -210,6 +210,9 @@ struct XRayAudioView: View {
                                             currentTimeRange: currentTimeRange,
                                             dragStart: $dragStart,
                                             dragCurrent: $dragCurrent,
+                                            editingTrackID: $editingTrackID,
+                                            draftCaption: $draftCaption,
+                                            commitCaptionEdit: commitCaptionEdit,
                                             onSeekPercent: { seekToPercent($0) },
                                             onZoomEnded: { startPct, endPct in
                                                 handleZoomToSelection(startPct: startPct, endPct: endPct)
@@ -859,7 +862,31 @@ struct XRayAudioView: View {
     }
     private func commitCaptionEdit(trackID: UUID) {
         if let idx = tracks.firstIndex(where: { $0.id == trackID }) {
+            let track = tracks[idx]
             tracks[idx].label = draftCaption
+            
+            if track.role == .master {
+                store.editFileCaption(in: item.id, index: 0, caption: draftCaption)
+            } else {
+                let currentItem = store.items.first(where: { $0.id == item.id }) ?? item
+                if let files = currentItem.files {
+                    let sortedFiles = files.sorted { f1, f2 in
+                        if f1.position == f2.position {
+                            return f1.id < f2.id
+                        }
+                        return f1.position < f2.position
+                    }
+                    if let fileIndex = sortedFiles.firstIndex(where: { f in
+                        if let trackUrl = track.url, let resolvedUrl = FilePathResolver.resolve(storePath: f.storePath) {
+                            return resolvedUrl.standardizedFileURL == trackUrl.standardizedFileURL
+                        }
+                        return f.caption == track.label
+                    }) {
+                        let attachmentIndex = fileIndex + 1
+                        store.editFileCaption(in: item.id, index: attachmentIndex, caption: draftCaption)
+                    }
+                }
+            }
         }
         editingTrackID = nil
     }
@@ -1560,48 +1587,68 @@ private struct CompositeWaveformView: View {
     @State private var showingColorPopoverFor: UUID? = nil
 
     @ViewBuilder
-    private func legendItem(label: String, color: Binding<Color>, trackID: UUID, isMaster: Bool, isMissing: Bool) -> some View {
+    private func colorCircle(color: Binding<Color>, trackID: UUID) -> some View {
         let colors: [Color] = [.white, .red, .orange, .yellow, .green, .mint, .teal, .cyan, .blue, .indigo, .purple, .pink, .brown]
-        
+        Circle()
+            .fill(color.wrappedValue)
+            .frame(width: 12, height: 12)
+            .contentShape(Rectangle())
+            .onTapGesture { showingColorPopoverFor = trackID }
+            .popover(isPresented: Binding(
+                get: { showingColorPopoverFor == trackID },
+                set: { if !$0 && showingColorPopoverFor == trackID { showingColorPopoverFor = nil } }
+            )) {
+                LazyVGrid(columns: Array(repeating: GridItem(.fixed(20), spacing: 8), count: 4), spacing: 8) {
+                    ForEach(colors, id: \.self) { c in
+                        Circle()
+                            .fill(c)
+                            .frame(width: 20, height: 20)
+                            .overlay(Circle().stroke(Color.primary, lineWidth: color.wrappedValue == c ? 2 : 0))
+                            .onTapGesture { 
+                                color.wrappedValue = c 
+                                showingColorPopoverFor = nil
+                            }
+                    }
+                }
+                .padding(12)
+            }
+    }
+
+    @ViewBuilder
+    private func legendItem(label: String, color: Binding<Color>, trackID: UUID, isMaster: Bool, isMissing: Bool) -> some View {
         HStack(spacing: 4) {
             if isMissing {
                 Image(systemName: "exclamationmark.circle.fill")
                     .foregroundStyle(.red)
             } else {
-                Circle()
-                    .fill(color.wrappedValue)
-                    .frame(width: 12, height: 12)
-                    .contentShape(Rectangle())
-                    .onTapGesture { showingColorPopoverFor = trackID }
-                    .popover(isPresented: Binding(
-                        get: { showingColorPopoverFor == trackID },
-                        set: { if !$0 && showingColorPopoverFor == trackID { showingColorPopoverFor = nil } }
-                    )) {
-                        LazyVGrid(columns: Array(repeating: GridItem(.fixed(20), spacing: 8), count: 4), spacing: 8) {
-                            ForEach(colors, id: \.self) { c in
-                                Circle()
-                                    .fill(c)
-                                    .frame(width: 20, height: 20)
-                                    .overlay(Circle().stroke(Color.primary, lineWidth: color.wrappedValue == c ? 2 : 0))
-                                    .onTapGesture { 
-                                        color.wrappedValue = c 
-                                        showingColorPopoverFor = nil
-                                    }
-                            }
+                colorCircle(color: color, trackID: trackID)
+            }
+            if editingTrackID == trackID {
+                InlineEditField(
+                    text: $draftCaption,
+                    placeholder: "track name…",
+                    font: .systemFont(ofSize: 10, weight: .bold),
+                    alignment: .left,
+                    onCommit: {
+                        commitCaptionEdit(trackID)
+                    },
+                    onCancel: {
+                        editingTrackID = nil
+                    }
+                )
+                .frame(width: 120, height: 20)
+            } else {
+                Text(label.uppercased())
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(isMissing ? .secondary : color.wrappedValue)
+                    .strikethrough(isMissing)
+                    .onTapGesture(count: 2) {
+                        if !isMaster {
+                            draftCaption = label
+                            editingTrackID = trackID
                         }
-                        .padding(12)
                     }
             }
-            Text(label.uppercased())
-                .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(isMissing ? .secondary : color.wrappedValue)
-                .strikethrough(isMissing)
-                .onTapGesture(count: 2) {
-                    if !isMaster {
-                        draftCaption = label
-                        editingTrackID = trackID
-                    }
-                }
         }
         .padding(.vertical, 2)
         .padding(.horizontal, 6)
@@ -1621,6 +1668,9 @@ private struct WaveformTrackView: View {
     
     @Binding var dragStart: CGPoint?
     @Binding var dragCurrent: CGPoint?
+    @Binding var editingTrackID: UUID?
+    @Binding var draftCaption: String
+    let commitCaptionEdit: (UUID) -> Void
     let onSeekPercent: (Double) -> Void
     let onZoomEnded: (Double, Double) -> Void
     
@@ -1632,9 +1682,31 @@ private struct WaveformTrackView: View {
                     .labelsHidden()
                     .controlSize(.small)
                 
-                Text(track.label)
-                    .font(.system(size: 10, weight: .black))
-                    .foregroundStyle(track.isMissing ? .secondary : track.color)
+                if editingTrackID == track.id {
+                    InlineEditField(
+                        text: $draftCaption,
+                        placeholder: "track name…",
+                        font: .systemFont(ofSize: 10, weight: .black),
+                        alignment: .left,
+                        onCommit: {
+                            commitCaptionEdit(track.id)
+                        },
+                        onCancel: {
+                            editingTrackID = nil
+                        }
+                    )
+                    .frame(width: 120, height: 20)
+                } else {
+                    Text(track.label)
+                        .font(.system(size: 10, weight: .black))
+                        .foregroundStyle(track.isMissing ? .secondary : track.color)
+                        .onTapGesture(count: 2) {
+                            if track.role != .master {
+                                draftCaption = track.label
+                                editingTrackID = track.id
+                            }
+                        }
+                }
                 if !track.isMissing {
                     HStack(spacing: 4) {
                         Image(systemName: track.isSelected ? (track.volume > 0.5 ? "speaker.wave.2.fill" : "speaker.wave.1.fill") : "speaker.slash.fill")
