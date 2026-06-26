@@ -1028,6 +1028,7 @@ struct XRayAudioView: View {
             let mime: String?
             let position: Int
             let isMissing: Bool
+            let role: XRayTrack.Role
         }
         
         var sources: [TrackSource] = []
@@ -1036,10 +1037,10 @@ struct XRayAudioView: View {
         if let sp = currentItem.storePath {
             if let url = FilePathResolver.resolve(storePath: sp) {
                 log("Master: \(currentItem.caption ?? "MASTER MIX")")
-                sources.append(TrackSource(label: currentItem.caption ?? "MASTER MIX", url: url, mime: currentItem.mimeType, position: 0, isMissing: false))
+                sources.append(TrackSource(label: currentItem.caption ?? "MASTER MIX", url: url, mime: currentItem.mimeType, position: 0, isMissing: false, role: .master))
             } else {
                 log("Missing master: \(sp)")
-                sources.append(TrackSource(label: currentItem.caption ?? "MASTER MIX", url: nil, mime: currentItem.mimeType, position: 0, isMissing: true))
+                sources.append(TrackSource(label: currentItem.caption ?? "MASTER MIX", url: nil, mime: currentItem.mimeType, position: 0, isMissing: true, role: .master))
             }
         }
         
@@ -1048,11 +1049,11 @@ struct XRayAudioView: View {
                 if let url = FilePathResolver.resolve(storePath: f.storePath) {
                     let caption = f.caption ?? "ATTACHED TRACK"
                     log("Track: \(caption)")
-                    sources.append(TrackSource(label: caption, url: url, mime: f.mimeType, position: f.position, isMissing: false))
+                    sources.append(TrackSource(label: caption, url: url, mime: f.mimeType, position: f.position, isMissing: false, role: .source))
                 } else {
                     let caption = f.caption ?? "ATTACHED TRACK"
                     log("Missing track: \(caption)")
-                    sources.append(TrackSource(label: caption, url: nil, mime: f.mimeType, position: f.position, isMissing: true))
+                    sources.append(TrackSource(label: caption, url: nil, mime: f.mimeType, position: f.position, isMissing: true, role: .source))
                 }
             }
         }
@@ -1068,16 +1069,17 @@ struct XRayAudioView: View {
                 for source in sources {
                     if source.isMissing {
                         group.addTask {
-                            return XRayTrack(label: source.label, url: nil, mime: source.mime, duration: 0, samples: [], maxAmplitude: 1.0, position: source.position, isMissing: true)
+                            return XRayTrack(label: source.label, url: nil, mime: source.mime, duration: 0, samples: [], maxAmplitude: 1.0, role: source.role, position: source.position, isMissing: true)
                         }
                     } else if let url = source.url {
                         group.addTask {
                             let track = await loadTrack(label: source.label, url: url, mime: source.mime)
                             if var t = track {
                                 t.position = source.position
+                                t.role = source.role
                                 return t
                             }
-                            return XRayTrack(label: source.label, url: nil, mime: source.mime, duration: 0, samples: [], maxAmplitude: 1.0, position: source.position, isMissing: true)
+                            return XRayTrack(label: source.label, url: nil, mime: source.mime, duration: 0, samples: [], maxAmplitude: 1.0, role: source.role, position: source.position, isMissing: true)
                         }
                     }
                 }
@@ -1087,14 +1089,13 @@ struct XRayAudioView: View {
                     if let track { results.append(track) }
                 }
                 
-                let sorted = results.sorted { $0.position < $1.position }
+                let sorted = results.sorted { t1, t2 in
+                    if t1.role == .master { return true }
+                    if t2.role == .master { return false }
+                    return t1.position < t2.position
+                }
                 let final = sorted.map { t -> XRayTrack in
                     var track = t
-                    if t.position == 0 { 
-                        track.role = .master 
-                    } else { 
-                        track.role = .source 
-                    }
                     let up = track.label.uppercased()
                     if up.contains("WATCH") { track.color = .orange }
                     else if up.contains("PHONE") { track.color = .blue }
