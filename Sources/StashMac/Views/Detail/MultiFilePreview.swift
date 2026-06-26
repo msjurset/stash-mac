@@ -80,10 +80,14 @@ struct MultiFilePreview: View {
                             Button(action: { withAnimation { xrayActive = true } }) {
                                 Label("X-Ray", systemImage: "waveform.path")
                                     .font(.caption)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 4)
+                                    .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
                             .foregroundStyle(Color.accentColor)
                             .help("Open multi-track analyzer")
+                            .pointingHandCursor()
                         }
                     }
                     
