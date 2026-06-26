@@ -59,6 +59,7 @@ struct XRayAudioView: View {
     // Optimize Mix state
     @State private var isOptimizing = false
     @State private var optimizingProgress: Double = 0.0
+    @State private var showRemixSettings = false
     
     // Caption Editing State
     @State private var editingTrackID: UUID? = nil
@@ -563,20 +564,29 @@ struct XRayAudioView: View {
                 
                 Spacer()
                 
-                if !tracks.isEmpty {
-                    Toggle("Enhance Speech", isOn: $enhanceSpeech)
-                        .toggleStyle(.checkbox)
-                        .controlSize(.small)
-                        .disabled(isOptimizing)
-                        .fixedSize(horizontal: true, vertical: false)
-                    
-                    Button(action: runOptimizeMix) {
-                        Label("Optimize Mix", systemImage: "wand.and.stars")
+                if tracks.contains(where: { $0.role == .source && !$0.isMissing }) {
+                    Button(action: { showRemixSettings = true }) {
+                        Label("Remix Options...", systemImage: "wand.and.stars")
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
                     .disabled(isOptimizing)
                     .fixedSize(horizontal: true, vertical: false)
+                    .popover(isPresented: $showRemixSettings, arrowEdge: .bottom) {
+                        RemixSettingsView(
+                            enhanceSpeech: $enhanceSpeech,
+                            selectedTrackCount: tracks.filter { $0.role == .source && $0.isSelected && !$0.isMissing }.count,
+                            onRun: { mixMode, gate, voice, hold in
+                                showRemixSettings = false
+                                runOptimizeMix(
+                                    mixMode: mixMode,
+                                    noiseFloorGate: gate,
+                                    voiceThreshold: voice,
+                                    gateHoldTimeMs: hold
+                                )
+                            }
+                        )
+                    }
                 }
             }
             
@@ -1149,7 +1159,12 @@ struct XRayAudioView: View {
         }
     }
     
-    private func runOptimizeMix() {
+    private func runOptimizeMix(
+        mixMode: AudioDSPAligner.MixMode,
+        noiseFloorGate: Float,
+        voiceThreshold: Float,
+        gateHoldTimeMs: Double
+    ) {
         stopPlayback()
         isOptimizing = true
         optimizingProgress = 0.0
@@ -1181,7 +1196,7 @@ struct XRayAudioView: View {
                     throw NSError(domain: "XRayAudioView", code: 21, userInfo: [NSLocalizedDescriptionKey: "No attached source tracks to align"])
                 }
                 
-                log("Optimizing mix: \(sourceMixInfos.count) source tracks relative to master")
+                log("Optimizing mix: \(sourceMixInfos.count) source tracks relative to master (mode: \(mixMode.rawValue))")
                 
                 // 2. Create a temporary output file path
                 let tempDir = FileManager.default.temporaryDirectory
@@ -1193,6 +1208,10 @@ struct XRayAudioView: View {
                     sourceTracks: sourceMixInfos,
                     outputURL: tempOutputURL,
                     enhanceSpeech: enhanceSpeech,
+                    mixMode: mixMode,
+                    noiseFloorGate: noiseFloorGate,
+                    voiceThreshold: voiceThreshold,
+                    gateHoldTimeMs: gateHoldTimeMs,
                     progress: { progressValue in
                         Task { @MainActor in
                             self.optimizingProgress = progressValue
@@ -1221,6 +1240,121 @@ struct XRayAudioView: View {
                 }
             }
         }
+    }
+}
+
+struct RemixSettingsView: View {
+    @Binding var enhanceSpeech: Bool
+    let selectedTrackCount: Int
+    let onRun: (AudioDSPAligner.MixMode, Float, Float, Double) -> Void
+    
+    @State private var mixMode: AudioDSPAligner.MixMode = .adaptive
+    @State private var noiseFloorGate: Float = 0.012
+    @State private var voiceThreshold: Float = 0.035
+    @State private var gateHoldTimeMs: Double = 160.0
+    
+    init(enhanceSpeech: Binding<Bool>, selectedTrackCount: Int, onRun: @escaping (AudioDSPAligner.MixMode, Float, Float, Double) -> Void) {
+        self._enhanceSpeech = enhanceSpeech
+        self.selectedTrackCount = selectedTrackCount
+        self.onRun = onRun
+        
+        // If track count is not exactly 2, we fallback to linear mix mode
+        if selectedTrackCount != 2 {
+            self._mixMode = State(initialValue: .linear)
+        }
+    }
+    
+    var body: some View {
+        VStack(spacing: 16) {
+            Text("Remix Options")
+                .font(.headline)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            
+            Form {
+                Picker("Mix Mode", selection: $mixMode) {
+                    Text("Adaptive Switcher").tag(AudioDSPAligner.MixMode.adaptive)
+                    Text("Simple Linear Mix").tag(AudioDSPAligner.MixMode.linear)
+                }
+                .pickerStyle(.segmented)
+                .disabled(selectedTrackCount != 2)
+                
+                if selectedTrackCount != 2 {
+                    Text("Adaptive Switcher requires exactly 2 selected tracks. Using simple linear mix.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .padding(.bottom, 4)
+                }
+                
+                if mixMode == .adaptive {
+                    Section {
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text("Noise Floor Gate:")
+                                    .font(.caption.bold())
+                                Spacer()
+                                Text(String(format: "%.3f", noiseFloorGate))
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                            }
+                            Slider(value: $noiseFloorGate, in: 0.001...0.050, step: 0.001)
+                            Text("Gating threshold. Audio below this energy level is attenuated (filters background hum).")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 4)
+                        
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text("Voice Threshold:")
+                                    .font(.caption.bold())
+                                Spacer()
+                                Text(String(format: "%.3f", voiceThreshold))
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                            }
+                            Slider(value: $voiceThreshold, in: 0.010...0.100, step: 0.005)
+                            Text("Speech activation threshold. Levels above this trigger switcher focus.")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 4)
+                        
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text("Gate Hold Time:")
+                                    .font(.caption.bold())
+                                Spacer()
+                                Text("\(Int(gateHoldTimeMs)) ms")
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                            }
+                            Slider(value: $gateHoldTimeMs, in: 50.0...500.0, step: 10.0)
+                            Text("Hold delay. Minimum quiet duration before the noise gate closes, avoiding word-chopping.")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+                
+                Toggle("Speech Enhancement (EQ)", isOn: $enhanceSpeech)
+                    .toggleStyle(.checkbox)
+                    .font(.caption.bold())
+                    .help("High-pass filtering and vocal range boost")
+            }
+            .formStyle(.grouped)
+            .frame(height: mixMode == .adaptive ? 330 : 120)
+            
+            HStack {
+                Spacer()
+                Button("Run Remix") {
+                    onRun(mixMode, noiseFloorGate, voiceThreshold, gateHoldTimeMs)
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding()
+        .frame(width: 320)
     }
 }
 

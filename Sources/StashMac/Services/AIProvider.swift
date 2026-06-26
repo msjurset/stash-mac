@@ -139,7 +139,13 @@ Respond with exactly these three lines, no preamble, no markdown:
 
 TITLE: <a descriptive title for the recording based on its content, maximum 60 characters>
 NOTES: <one or two sentences describing the tone, context, or key takeaway of the audio>
-TRANSCRIPT: <the verbatim transcript of every word spoken, preserving natural speech flow and line breaks where they're meaningful. Do NOT use speaker designations (like SPEAKER 1:, SPEAKER 2:) unless there are actually multiple distinct speakers engaged in a conversation; if there is only one speaker, output the transcript directly without any speaker prefix.>
+TRANSCRIPT: <the verbatim transcript of every word spoken, preserving natural speech flow and line breaks where they're meaningful.
+
+CRITICAL SPEAKER RULES:
+1. Carefully analyze if the recording contains only one person speaking, or multiple distinct voices engaged in conversation.
+2. If there is ONLY ONE speaker throughout the entire recording (or if you are not absolutely certain there are multiple distinct people talking), you MUST NOT use any speaker labels, names, or prefixes (such as "SPEAKER 1:", "Speaker 1:", "Speaker:", etc.) anywhere in the transcript. Simply transcribe the speech as continuous plain paragraphs.
+3. A single speaker pausing, changing their tone, or speaking after a silence must NOT be given a label or split into multiple speakers. Keep them as one continuous stream of text.
+4. Only use speaker labels (e.g., "SPEAKER 1:", "SPEAKER 2:") if there is an actual conversation, interview, or Q&A dialogue between two or more different people.>
 
 If the audio is not spoken words (e.g. ambient noise, music, or silence), write TITLE: Audio Capture and describe what you hear in NOTES.
 """
@@ -151,7 +157,13 @@ Respond with exactly these three lines, no preamble, no markdown:
 
 TITLE: <a descriptive title for the video based on its content, maximum 60 characters>
 NOTES: <natural prose, three to six sentences describing the visual subject and context of the video>
-TRANSCRIPT: <the verbatim transcript of every word spoken in the video, preserving natural speech flow and line breaks where they're meaningful. If no words are spoken, write NONE. Do NOT use speaker designations (like SPEAKER 1:, SPEAKER 2:) unless there are actually multiple distinct speakers engaged in a conversation; if there is only one speaker, output the transcript directly without any speaker prefix.>
+TRANSCRIPT: <the verbatim transcript of every word spoken in the video, preserving natural speech flow and line breaks where they're meaningful. If no words are spoken, write NONE.
+
+CRITICAL SPEAKER RULES:
+1. Carefully analyze if the recording contains only one person speaking, or multiple distinct voices engaged in conversation.
+2. If there is ONLY ONE speaker throughout the entire recording (or if you are not absolutely certain there are multiple distinct people talking), you MUST NOT use any speaker labels, names, or prefixes (such as "SPEAKER 1:", "Speaker 1:", "Speaker:", etc.) anywhere in the transcript. Simply transcribe the speech as continuous plain paragraphs.
+3. A single speaker pausing, changing their tone, or speaking after a silence must NOT be given a label or split into multiple speakers. Keep them as one continuous stream of text.
+4. Only use speaker labels (e.g., "SPEAKER 1:", "SPEAKER 2:") if there is an actual conversation, interview, or Q&A dialogue between two or more different people.>
 
 If the video is silent and has no clear subject, write TITLE: Video Capture and describe what you see in NOTES.
 """

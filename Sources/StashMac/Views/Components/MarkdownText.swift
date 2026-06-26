@@ -209,11 +209,30 @@ struct MarkdownText: View {
             }
 
         case .bullet(let text):
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text("•")
-                    .foregroundStyle(.secondary)
-                Text(inlineMarkdown(text))
-                    .textSelectionEnabled(isSelectable)
+            let trimmed = text.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("[ ]") {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Image(systemName: "square")
+                        .font(.system(size: 12, weight: .regular))
+                        .foregroundStyle(.secondary)
+                    Text(inlineMarkdown(String(trimmed.dropFirst(3)).trimmingCharacters(in: .whitespaces)))
+                        .textSelectionEnabled(isSelectable)
+                }
+            } else if trimmed.hasPrefix("[x]") || trimmed.hasPrefix("[X]") {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Image(systemName: "checkmark.square.fill")
+                        .font(.system(size: 12, weight: .regular))
+                        .foregroundStyle(Color.accentColor)
+                    Text(inlineMarkdown(String(trimmed.dropFirst(3)).trimmingCharacters(in: .whitespaces)))
+                        .textSelectionEnabled(isSelectable)
+                }
+            } else {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text("•")
+                        .foregroundStyle(.secondary)
+                    Text(inlineMarkdown(text))
+                        .textSelectionEnabled(isSelectable)
+                }
             }
 
         case .numberedItem(let text, let num):
@@ -295,6 +314,12 @@ struct MarkdownText: View {
                 return "**\(m.output.2)**"
             }
             if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") {
+                let bulletText = trimmed.dropFirst(2).trimmingCharacters(in: .whitespaces)
+                if bulletText.hasPrefix("[ ]") {
+                    return "☐ \(bulletText.dropFirst(3).trimmingCharacters(in: .whitespaces))"
+                } else if bulletText.hasPrefix("[x]") || bulletText.hasPrefix("[X]") {
+                    return "☑ \(bulletText.dropFirst(3).trimmingCharacters(in: .whitespaces))"
+                }
                 return "• \(trimmed.dropFirst(2))"
             }
             return String(line)
