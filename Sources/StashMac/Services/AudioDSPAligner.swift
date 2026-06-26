@@ -341,7 +341,8 @@ enum AudioDSPAligner {
                 var renderedFrames: AVAudioFramePosition = 0
                 
                 renderLoop: while renderedFrames < totalFramesToRender {
-                    let framesToRender = min(maxFrames, AVAudioFrameCount(totalFramesToRender - renderedFrames))
+                    let remaining = totalFramesToRender - renderedFrames
+                    let framesToRender = AVAudioFrameCount(min(AVAudioFramePosition(maxFrames), remaining))
                     let status = try audioEngine.renderOffline(framesToRender, to: buffer)
                     
                     switch status {
@@ -548,7 +549,8 @@ enum AudioDSPAligner {
         var renderedFrames: AVAudioFramePosition = 0
         
         while renderedFrames < totalFrames {
-            let framesToRender = min(maxFrames, AVAudioFrameCount(totalFrames - renderedFrames))
+            let remaining = totalFrames - renderedFrames
+            let framesToRender = AVAudioFrameCount(min(AVAudioFramePosition(maxFrames), remaining))
             let status = try audioEngine.renderOffline(framesToRender, to: buffer)
             if status == .success {
                 try outputFile.write(from: buffer)
@@ -571,9 +573,12 @@ enum AudioDSPAligner {
         let file = try AVAudioFile(forReading: url)
         let format = file.processingFormat
         let nativeRate = format.sampleRate
-        
         // Cap frame capacity to avoid loading massive files into RAM
-        let frameCount = min(AVAudioFrameCount(file.length), AVAudioFrameCount(maxDuration * nativeRate))
+        let fileLengthDouble = Double(file.length)
+        let durationFrames = maxDuration * nativeRate
+        let minFrames = min(fileLengthDouble, durationFrames)
+        let safeFrames = min(minFrames, Double(UInt32.max))
+        let frameCount = AVAudioFrameCount(safeFrames)
         guard frameCount > 0 else {
             return AudioPCMData(samples: [], sampleRate: nativeRate)
         }
