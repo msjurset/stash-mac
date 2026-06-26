@@ -18,7 +18,7 @@ import VimEngine
 /// setSelectedRanges, insertText for R-mode overstrike) live here.
 /// Don't fork this class into per-editor subclasses; pass options
 /// in via VimHostEditor's parameters instead.
-final class VimHostTextView: NSTextView {
+class VimHostTextView: NSTextView {
 
     /// Live VimEngine when vim is active in this editor's host
     /// view. Nil otherwise. Closure rather than stored reference so

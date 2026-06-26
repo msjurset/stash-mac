@@ -10,6 +10,7 @@ struct DetailRouter: View {
         Group {
             if let item = debouncedItem {
                 ItemDetailView(item: item, showEditSheet: $showEditSheet)
+                    .id(item.id)
             } else {
                 ContentUnavailableView("Select an Item", systemImage: "doc.text.magnifyingglass", description: Text("Choose an item from the list to view its details."))
             }
@@ -32,6 +33,13 @@ struct DetailRouter: View {
         }
         .onAppear {
             debouncedItem = store.selectedItem
+        }
+        .onChange(of: store.selectedItem) { oldItem, newItem in
+            if newItem == nil {
+                debouncedItem = nil
+            } else if oldItem?.id == newItem?.id {
+                debouncedItem = newItem
+            }
         }
     }
 }

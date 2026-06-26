@@ -59,6 +59,7 @@ struct FilterField: NSViewRepresentable {
     var font: NSFont = .preferredFont(forTextStyle: .body)
     var isBordered: Bool = false
     var backgroundColor: NSColor = .clear
+    var alignment: NSTextAlignment = .left
     /// Makes the field the window's first responder after it appears.
     var autoFocus: Bool = false
     var onSubmit: (() -> Void)?
@@ -75,6 +76,7 @@ struct FilterField: NSViewRepresentable {
         field.isBordered = isBordered
         field.backgroundColor = backgroundColor
         field.drawsBackground = backgroundColor != .clear
+        field.alignment = alignment
         field.focusRingType = .none
         field.delegate = context.coordinator
         field.stringValue = text
@@ -97,6 +99,12 @@ struct FilterField: NSViewRepresentable {
         }
         if nsView.placeholderString != placeholder {
             nsView.placeholderString = placeholder
+        }
+        if nsView.alignment != alignment {
+            nsView.alignment = alignment
+        }
+        if nsView.font != font {
+            nsView.font = font
         }
         context.coordinator.parent = self
     }

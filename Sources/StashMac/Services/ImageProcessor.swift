@@ -1,6 +1,7 @@
 import AppKit
 import ImageIO
 import UniformTypeIdentifiers
+import CoreLocation
 
 /// Stateless image-resize + JPEG-encode helpers used by
 /// `ThumbnailService` to produce canonical thumbnails. Phase 1 keeps
@@ -67,5 +68,28 @@ enum ImageProcessor {
         CGImageDestinationAddImage(dest, cgImage, opts as CFDictionary)
         guard CGImageDestinationFinalize(dest) else { return nil }
         return data as Data
+    }
+
+    /// Extract GPS coordinates from the given file URL, if available.
+    static func extractLocation(from url: URL) -> CLLocationCoordinate2D? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        guard let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [String: Any] else { return nil }
+        guard let gps = props[kCGImagePropertyGPSDictionary as String] as? [String: Any] else { return nil }
+        
+        guard let latRef = gps[kCGImagePropertyGPSLatitudeRef as String] as? String,
+              let latVal = gps[kCGImagePropertyGPSLatitude as String] as? Double,
+              let lonRef = gps[kCGImagePropertyGPSLongitudeRef as String] as? String,
+              let lonVal = gps[kCGImagePropertyGPSLongitude as String] as? Double else {
+            return nil
+        }
+        
+        let lat = latRef == "S" ? -latVal : latVal
+        let lon = lonRef == "W" ? -lonVal : lonVal
+        
+        if lat == 0.0 && lon == 0.0 {
+            return nil
+        }
+        
+        return CLLocationCoordinate2D(latitude: lat, longitude: lon)
     }
 }

@@ -575,6 +575,14 @@ struct RuleDetailView: View {
                     }
                 }
             }
+            if let v = action.exec, !v.isEmpty {
+                actionLine(icon: "terminal", label: "Execute script") {
+                    Text(v)
+                        .font(.callout.monospaced())
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
         }
     }
 
@@ -617,6 +625,8 @@ struct RuleDetailView: View {
         if let v = m.pathGlob, !v.isEmpty { out.append(("path_glob", v)) }
         if let v = m.content, !v.isEmpty { out.append(("content", v)) }
         if let v = m.contentRegex, !v.isEmpty { out.append(("content_regex", v)) }
+        if let v = m.hasTag, !v.isEmpty { out.append(("has_tag", v)) }
+        if let v = m.isDuplicate { out.append(("is_duplicate", String(v))) }
         if out.isEmpty { out.append(("(empty)", "—")) }
         return out
     }
@@ -1054,6 +1064,18 @@ struct RuleDetailView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+        case .exec:
+            VStack(alignment: .leading, spacing: 4) {
+                VimAwareCodeEditor(text: row.stringValue)
+                    .frame(minHeight: 120, maxHeight: 300)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 4)
+                    .background(.quaternary.opacity(0.5))
+                    .clipShape(RoundedRectangle(cornerRadius: 5))
+                Text("Command is executed in a background shell. {{.ExtractedText | quote}} supported.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -1134,6 +1156,7 @@ struct RuleDetailView: View {
             case .pathGlob:       match.pathGlob = value
             case .content:        match.content = value
             case .contentRegex:   match.contentRegex = value
+            case .hasTag:         match.hasTag = value
             }
         }
         let actions = actionRows.compactMap { $0.toRuleAction() }
@@ -1160,6 +1183,7 @@ struct RuleDetailView: View {
             case .notify:        return "notify=\(row.stringValue)"
             case .skip:          return "skip"
             case .linkTo:        return "link=\(row.linkMode.rawValue):\(row.linkTag):\(row.linkID)"
+            case .exec:          return "exec=\(row.stringValue)"
             }
         }.joined(separator: "|")
         return "\(name)|\(desc)|\(enabled)|\(cond)|\(acts)"
@@ -1194,6 +1218,13 @@ enum RuleEffectFormatter {
         if raw.hasPrefix("notify×") {
             let n = raw.dropFirst("notify×".count)
             return ("Sent \(n) notifications", "")
+        }
+        if raw == "exec" {
+            return ("Executed script", "")
+        }
+        if raw.hasPrefix("exec×") {
+            let n = raw.dropFirst("exec×".count)
+            return ("Executed \(n) scripts", "")
         }
         guard let colon = raw.firstIndex(of: ":") else {
             return (raw, "")

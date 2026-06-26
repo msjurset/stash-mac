@@ -37,6 +37,13 @@ struct ImagePreviewSection: View {
                         }
                     }
                     .help("Click to open in viewer")
+                    .contextMenu {
+                        Button("Set as Desktop Background") {
+                            for screen in NSScreen.screens {
+                                try? NSWorkspace.shared.setDesktopImageURL(fileURL, for: screen, options: [:])
+                            }
+                        }
+                    }
             } else {
                 // Skeleton-ish placeholder while the decode runs.
                 // Same maxWidth/maxHeight as the loaded image so the

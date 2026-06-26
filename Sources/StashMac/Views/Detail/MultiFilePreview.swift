@@ -19,6 +19,7 @@ struct MultiFilePreview: View {
     @State private var editingCaptionID: String? = nil
     @State private var draftCaption: String = ""
     @State private var xrayActive: Bool = false
+    @State private var confirmDeleteIndex: Int? = nil
 
     var body: some View {
         Group {
@@ -39,7 +40,28 @@ struct MultiFilePreview: View {
             selectedID = allSlots.first?.id
             xrayActive = false
         }
+        .onChange(of: allSlots.map { $0.id }) { _, newIDs in
+            if let sel = selectedID, !newIDs.contains(sel) {
+                selectedID = newIDs.first
+            }
+        }
         .onDrop(of: [.fileURL], isTargeted: nil, perform: handleDrop)
+        .alert("Delete Attached File", isPresented: .init(
+            get: { confirmDeleteIndex != nil },
+            set: { if !$0 { confirmDeleteIndex = nil } }
+        )) {
+            Button("Delete", role: .destructive) {
+                if let index = confirmDeleteIndex {
+                    store.detachFile(from: item.id, index: index)
+                }
+                confirmDeleteIndex = nil
+            }
+            Button("Cancel", role: .cancel) {
+                confirmDeleteIndex = nil
+            }
+        } message: {
+            Text("Are you sure? This will effectively delete this image from the stash item.")
+        }
     }
 
     @ViewBuilder
@@ -160,6 +182,7 @@ struct MultiFilePreview: View {
                     text: $draftCaption,
                     placeholder: "caption…",
                     font: .preferredFont(forTextStyle: .caption2),
+                    alignment: .center,
                     onCommit: {
                         if slot.isPrimary {
                             store.editFileCaption(in: item.id, index: 0, caption: draftCaption)
@@ -193,6 +216,15 @@ struct MultiFilePreview: View {
 
     @ViewBuilder
     private func slotMenu(slot: Slot) -> some View {
+        if isImageSlot(slot), let url = slot.url {
+            Button("Set as Desktop Background") {
+                for screen in NSScreen.screens {
+                    try? NSWorkspace.shared.setDesktopImageURL(url, for: screen, options: [:])
+                }
+            }
+            Divider()
+        }
+
         if slot.isPrimary {
             Text("Primary file")
                 .foregroundStyle(.secondary)
@@ -201,8 +233,8 @@ struct MultiFilePreview: View {
                 store.promoteFile(in: item.id, index: attachmentIndex)
             }
             Divider()
-            Button("Detach", role: .destructive) {
-                store.detachFile(from: item.id, index: attachmentIndex)
+            Button("Delete...", role: .destructive) {
+                confirmDeleteIndex = attachmentIndex
             }
         }
     }
@@ -237,6 +269,15 @@ struct MultiFilePreview: View {
         return false
     }
 
+    private func isImageSlot(_ slot: Slot) -> Bool {
+        if let mime = slot.mimeType, mime.hasPrefix("image/") { return true }
+        if let url = slot.url {
+            let ext = url.pathExtension.lowercased()
+            return ["jpg", "jpeg", "png", "heic", "webp", "gif"].contains(ext)
+        }
+        return false
+    }
+
     private var activeSlot: Slot? {
         let slots = allSlots
         return slots.first { $0.id == selectedID }
@@ -255,12 +296,17 @@ struct MultiFilePreview: View {
             ))
         }
         if let files = item.files {
-            let sortedFiles = files.sorted { $0.position < $1.position }
-            for f in sortedFiles {
+            let sortedFiles = files.sorted {
+                if $0.position == $1.position {
+                    return $0.id < $1.id
+                }
+                return $0.position < $1.position
+            }
+            for (i, f) in sortedFiles.enumerated() {
                 slots.append(Slot(
                     id: "\(f.id)",
                     isPrimary: false,
-                    attachmentIndex: f.position,
+                    attachmentIndex: i + 1,
                     url: FilePathResolver.resolve(storePath: f.storePath),
                     caption: f.caption,
                     mimeType: f.mimeType

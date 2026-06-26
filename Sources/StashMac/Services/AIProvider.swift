@@ -139,7 +139,7 @@ Respond with exactly these three lines, no preamble, no markdown:
 
 TITLE: <a descriptive title for the recording based on its content, maximum 60 characters>
 NOTES: <one or two sentences describing the tone, context, or key takeaway of the audio>
-TRANSCRIPT: <the verbatim transcript of every word spoken, preserving natural speech flow and line breaks where they're meaningful>
+TRANSCRIPT: <the verbatim transcript of every word spoken, preserving natural speech flow and line breaks where they're meaningful. Do NOT use speaker designations (like SPEAKER 1:, SPEAKER 2:) unless there are actually multiple distinct speakers engaged in a conversation; if there is only one speaker, output the transcript directly without any speaker prefix.>
 
 If the audio is not spoken words (e.g. ambient noise, music, or silence), write TITLE: Audio Capture and describe what you hear in NOTES.
 """
@@ -151,7 +151,7 @@ Respond with exactly these three lines, no preamble, no markdown:
 
 TITLE: <a descriptive title for the video based on its content, maximum 60 characters>
 NOTES: <natural prose, three to six sentences describing the visual subject and context of the video>
-TRANSCRIPT: <the verbatim transcript of every word spoken in the video, preserving natural speech flow and line breaks where they're meaningful. If no words are spoken, write NONE.>
+TRANSCRIPT: <the verbatim transcript of every word spoken in the video, preserving natural speech flow and line breaks where they're meaningful. If no words are spoken, write NONE. Do NOT use speaker designations (like SPEAKER 1:, SPEAKER 2:) unless there are actually multiple distinct speakers engaged in a conversation; if there is only one speaker, output the transcript directly without any speaker prefix.>
 
 If the video is silent and has no clear subject, write TITLE: Video Capture and describe what you see in NOTES.
 """
@@ -314,19 +314,32 @@ enum AIResponseParser {
         }
         
         let summaryLines = extractMultilineValue(lines, markers: summaryMarkers)
-        summary = summaryLines?.joined(separator: "\n")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .cleanInlineMarkers()
-            .flatMap { $0.isEmpty ? nil : $0 }
+        summary = summaryLines.map { lines in
+            lines.joined(separator: "\n")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .cleanInlineMarkers()
+        }.flatMap { s in
+            s.isEmpty ? nil : s
+        }
             
         let actionItemsLines = extractMultilineValue(lines, markers: actionItemsMarkers)
-        actionItems = actionItemsLines?.joined(separator: "\n")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .cleanInlineMarkers()
-            .flatMap { s in
-                if s.isEmpty || s.caseInsensitiveCompare("NONE") == .orderedSame { return nil }
-                return s
-            }
+        actionItems = actionItemsLines.map { lines in
+            lines.joined(separator: "\n")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .cleanInlineMarkers()
+        }.flatMap { s in
+            if s.isEmpty || s.caseInsensitiveCompare("NONE") == .orderedSame { return nil }
+            return s
+        }
+
+        let notesLines = extractMultilineValue(lines, markers: notesMarkers)
+        let parsedNotes: String? = notesLines.map { lines in
+            lines.joined(separator: "\n")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .cleanInlineMarkers()
+        }.flatMap { s in
+            s.isEmpty ? nil : s
+        }
 
         let notesText: String
         if summary != nil || actionItems != nil {
@@ -336,15 +349,20 @@ enum AIResponseParser {
                 parts.append("#### ACTION ITEMS\n\(a)")
             }
             notesText = parts.joined(separator: "\n\n")
+        } else if let pNotes = parsedNotes {
+            notesText = pNotes
         } else {
             // Fallback: use lines that aren't markers or transcript
             let transcriptLineSet = Set(transcriptLines ?? [])
+            let notesLineSet = Set(notesLines ?? [])
             let filtered = lines.filter { line in
                 extractValue(line, markers: titleMarkers) == nil &&
                 extractValue(line, markers: summaryMarkers) == nil &&
                 extractValue(line, markers: actionItemsMarkers) == nil &&
                 extractValue(line, markers: transcriptMarkers) == nil &&
-                !transcriptLineSet.contains(line)
+                extractValue(line, markers: notesMarkers) == nil &&
+                !transcriptLineSet.contains(line) &&
+                !notesLineSet.contains(line)
             }
             let joined = filtered.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
             notesText = joined.isEmpty ? raw : joined

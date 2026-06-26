@@ -17,6 +17,7 @@ struct InboxDetailView: View {
                 FeedCandidatePreview(candidate: candidate)
             } else if let item = store.inboxSelectedResurfaceItem {
                 ItemDetailView(item: item, showEditSheet: $showEditSheet)
+                    .id(item.id)
             } else {
                 ContentUnavailableView(
                     "Nothing to preview",
@@ -103,6 +104,13 @@ private struct FeedCandidatePreview: View {
                         Label("Stash", systemImage: "tray.and.arrow.down.fill")
                     }
                     .buttonStyle(.borderedProminent)
+                    
+                    let isVideo = URL(string: candidate.url).map { MediaResolver.isVideoURL($0) } ?? false
+                    Button {
+                        store.stashCandidate(candidate, extraTags: [isVideo ? "watch-later" : "read-later"])
+                    } label: {
+                        Label(isVideo ? "Watch later" : "Read later", systemImage: isVideo ? "play.rectangle" : "book")
+                    }
                     Button {
                         store.snoozeCandidate(candidate, duration: "24h")
                     } label: {

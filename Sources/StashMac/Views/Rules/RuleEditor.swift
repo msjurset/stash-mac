@@ -72,6 +72,11 @@ struct ActionRow: Identifiable, Hashable {
             }
             rows.append(r)
         }
+        if let v = action.exec, !v.isEmpty {
+            var r = ActionRow(type: .exec)
+            r.stringValue = v
+            rows.append(r)
+        }
         return rows
     }
 
@@ -121,9 +126,14 @@ struct ActionRow: Identifiable, Hashable {
                 guard !v.isEmpty else { return nil }
                 a.linkTo = RuleLinkSpec(tag: nil, id: v)
             }
+        case .exec:
+            let v = stringValue.trimmingCharacters(in: .whitespaces)
+            guard !v.isEmpty else { return nil }
+            a.exec = v
         }
         return a
     }
+
 }
 
 enum LinkMode: String, Hashable {
@@ -140,6 +150,7 @@ enum ActionType: String, CaseIterable, Identifiable, Hashable {
     case notify
     case skip
     case linkTo
+    case exec
 
     var id: String { rawValue }
 
@@ -153,6 +164,7 @@ enum ActionType: String, CaseIterable, Identifiable, Hashable {
         case .notify:        return "Notify"
         case .skip:          return "Skip"
         case .linkTo:        return "Link To"
+        case .exec:          return "Execute Script"
         }
     }
 
@@ -166,6 +178,7 @@ enum ActionType: String, CaseIterable, Identifiable, Hashable {
         case .notify:        return "bell"
         case .skip:          return "xmark.octagon"
         case .linkTo:        return "link"
+        case .exec:          return "terminal"
         }
     }
 }
@@ -193,6 +206,7 @@ struct MatchCondition: Identifiable, Hashable {
         if let v = match.pathGlob, !v.isEmpty { out.append(.init(key: .pathGlob, value: v)) }
         if let v = match.content, !v.isEmpty { out.append(.init(key: .content, value: v)) }
         if let v = match.contentRegex, !v.isEmpty { out.append(.init(key: .contentRegex, value: v)) }
+        if let v = match.hasTag, !v.isEmpty { out.append(.init(key: .hasTag, value: v)) }
         return out
     }
 }
@@ -208,21 +222,23 @@ enum MatchKey: String, CaseIterable, Identifiable {
     case pathGlob
     case content
     case contentRegex
+    case hasTag
 
     var id: String { rawValue }
 
     var label: String {
         switch self {
-        case .type:           return "type"
-        case .domain:         return "domain"
-        case .urlRegex:       return "url_regex"
-        case .mimeType:       return "mime_type"
-        case .mimeTypePrefix: return "mime_type_prefix"
-        case .sender:         return "sender"
-        case .senderDomain:   return "sender_domain"
-        case .pathGlob:       return "path_glob"
-        case .content:        return "content"
-        case .contentRegex:   return "content_regex"
+        case .type:           return "Item Type"
+        case .domain:         return "Domain"
+        case .urlRegex:       return "URL Regex"
+        case .mimeType:       return "MIME Type"
+        case .mimeTypePrefix: return "MIME Prefix"
+        case .sender:         return "Sender Contains"
+        case .senderDomain:   return "Sender Domain"
+        case .pathGlob:       return "Path Glob"
+        case .content:        return "Content Contains"
+        case .contentRegex:   return "Content Regex"
+        case .hasTag:         return "Has Tag"
         }
     }
 
@@ -233,11 +249,12 @@ enum MatchKey: String, CaseIterable, Identifiable {
         case .urlRegex:       return "/watch\\?v="
         case .mimeType:       return "application/pdf"
         case .mimeTypePrefix: return "image/"
-        case .sender:         return "alice"
+        case .sender:         return "alice@example.com"
         case .senderDomain:   return "example.com"
-        case .pathGlob:       return "*.tax"
-        case .content:        return "invoice"
-        case .contentRegex:   return "(?i)\\binvoice\\b"
+        case .pathGlob:       return "*.pdf or /Users/..."
+        case .content:        return "receipt"
+        case .contentRegex:   return "(?i)invoice"
+        case .hasTag:         return "journal"
         }
     }
 }

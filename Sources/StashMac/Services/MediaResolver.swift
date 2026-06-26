@@ -61,6 +61,14 @@ enum MediaResolver {
         return .none
     }
 
+    /// True if the URL points to a known direct video extension or embed host.
+    static func isVideoURL(_ url: URL) -> Bool {
+        let ext = url.pathExtension.lowercased()
+        if videoExtensions.contains(ext) { return true }
+        if embedURL(for: url) != nil { return true }
+        return false
+    }
+
     private static func resolveURL(_ item: StashItem) -> Kind {
         guard let urlString = item.url, !urlString.isEmpty,
               let url = URL(string: urlString) else { return .none }

@@ -105,6 +105,7 @@ struct AIPrefsView: View {
             // gemini-rate numbers.
             if prefs.activeID == .gemini {
                 GeminiUsageSection()
+                GeminiDaemonConfigSection()
             }
         }
         .formStyle(.grouped)
@@ -381,5 +382,465 @@ private func formatTokens(_ t: Int64) -> String {
     case 0..<1_000: return "\(t)"
     case 0..<1_000_000: return String(format: "%.1fk", Double(t) / 1_000)
     default: return String(format: "%.2fM", Double(t) / 1_000_000)
+    }
+}
+
+private struct GeminiDaemonConfigSection: View {
+    @Environment(AIPrefsStore.self) private var prefs
+    @State private var loadedConfig: StashCLI.DaemonConfig? = nil
+    @State private var isLoading = false
+    @State private var saveStatus: SaveStatus = .idle
+
+    @State private var globalPrimaryModelInput: String = ""
+    @State private var modelsInput: String = ""
+    @State private var selectedOp: String = "identify"
+    @State private var opPrimaryModelInputs: [String: String] = [:]
+    @State private var opFallbackModelsInputs: [String: String] = [:]
+
+    @State private var dailyBudgetInput: String = ""
+    @State private var monthlyBudgetInput: String = ""
+    @State private var paidTierEnabled: Bool = false
+    @State private var paidKeyInput: String = ""
+    @State private var paidKeyRevealed: Bool = false
+    @State private var paidApprovalDurationInput: String = ""
+    @State private var maxVideoDurationInput: String = ""
+
+    private enum SaveStatus: Equatable {
+        case idle
+        case saving
+        case success
+        case failed(String)
+    }
+
+    private func operationDisplayName(_ op: String) -> String {
+        switch op {
+        case "identify": return "Identify"
+        case "search": return "Search"
+        case "chat": return "Chat"
+        case "ask": return "Ask"
+        case "transform": return "Transform"
+        default: return op.capitalized
+        }
+    }
+
+    private func operationDescription(_ op: String) -> String {
+        switch op {
+        case "identify":
+            return "Identify analyzes captured images, generates descriptive titles/notes, and transcribes text/handwriting."
+        case "search":
+            return "Search processes text embedding queries to enable semantic and conceptual library searches."
+        case "chat":
+            return "Chat drives conversational Q&A sessions across your entire library in the chat view."
+        case "ask":
+            return "Ask handles specific questions and details extraction targeting a single item."
+        case "transform":
+            return "Transform runs prompt templates to rewrite, summarize, or extract structured fields from item content."
+        default:
+            return ""
+        }
+    }
+
+    private var isDirty: Bool {
+        guard let config = loadedConfig else { return false }
+        
+        let loadedPrimary = config.primaryModel ?? ""
+        if globalPrimaryModelInput.trimmingCharacters(in: .whitespacesAndNewlines) != loadedPrimary {
+            return true
+        }
+
+        let loadedModels = config.aiModels?.joined(separator: ", ") ?? ""
+        if modelsInput.trimmingCharacters(in: .whitespacesAndNewlines) != loadedModels {
+            return true
+        }
+        
+        let ops = ["identify", "search", "chat", "ask", "transform"]
+        for op in ops {
+            let loadedOpPrimary = config.operations?[op]?.primaryModel ?? ""
+            let currentOpPrimary = opPrimaryModelInputs[op] ?? ""
+            if currentOpPrimary.trimmingCharacters(in: .whitespacesAndNewlines) != loadedOpPrimary {
+                return true
+            }
+            
+            let loadedOpFallbacks = config.operations?[op]?.aiModels?.joined(separator: ", ") ?? ""
+            let currentOpFallbacks = opFallbackModelsInputs[op] ?? ""
+            if currentOpFallbacks.trimmingCharacters(in: .whitespacesAndNewlines) != loadedOpFallbacks {
+                return true
+            }
+        }
+
+        let loadedDaily = String(format: "%.2f", config.maxDailyBudgetUsd ?? 0.0)
+        let inputDaily = Double(dailyBudgetInput) ?? 0.0
+        let currentDailyStr = String(format: "%.2f", inputDaily)
+        if currentDailyStr != loadedDaily && !dailyBudgetInput.isEmpty {
+            return true
+        }
+
+        let loadedMonthly = String(format: "%.2f", config.maxMonthlyBudgetUsd ?? 0.0)
+        let inputMonthly = Double(monthlyBudgetInput) ?? 0.0
+        let currentMonthlyStr = String(format: "%.2f", inputMonthly)
+        if currentMonthlyStr != loadedMonthly && !monthlyBudgetInput.isEmpty {
+            return true
+        }
+
+        let loadedMaxVideo = String(config.maxVideoDurationMinutes ?? 30)
+        if maxVideoDurationInput != loadedMaxVideo && !maxVideoDurationInput.isEmpty {
+            return true
+        }
+
+        let loadedApproval = String(config.paidApprovalDurationHours ?? 24)
+        if paidApprovalDurationInput != loadedApproval && !paidApprovalDurationInput.isEmpty {
+            return true
+        }
+
+        if paidTierEnabled != (config.paidTierEnabled ?? false) {
+            return true
+        }
+
+        if !paidKeyInput.isEmpty {
+            return true
+        }
+
+        return false
+    }
+
+    var body: some View {
+        Section {
+            if isLoading {
+                HStack {
+                    Spacer()
+                    ProgressView().controlSize(.small)
+                    Spacer()
+                }
+            } else {
+                // Primary Model Field
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Global Primary Model").font(.caption).foregroundStyle(.secondary)
+                    ModelAutocompleteField(
+                        placeholder: "e.g. gemini-2.5-flash",
+                        text: $globalPrimaryModelInput,
+                        isMultiValue: false,
+                        providerID: prefs.activeID
+                    )
+                }
+
+                // Fallback Models Field
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Global Fallback Models").font(.caption).foregroundStyle(.secondary)
+                    ModelAutocompleteField(
+                        placeholder: "e.g. gemini-2.5-flash, gemini-3.1-flash, gemini-2.5-flash-lite, gemini-3.5-flash",
+                        text: $modelsInput,
+                        isMultiValue: true,
+                        providerID: prefs.activeID
+                    )
+                }
+
+                // Operation overrides picker
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Operation-Specific Overrides").font(.caption).foregroundStyle(.secondary)
+                    Picker("", selection: $selectedOp) {
+                        ForEach(["identify", "search", "chat", "ask", "transform"], id: \.self) { op in
+                            Text(operationDisplayName(op))
+                                .tag(op)
+                                .help(operationDescription(op))
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+
+                    Text(operationDescription(selectedOp))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                // Inputs for selected operation
+                VStack(alignment: .leading, spacing: 8) {
+                    let op = selectedOp
+                    
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("\(operationDisplayName(op)) Primary Model Override").font(.caption).foregroundStyle(.secondary)
+                        ModelAutocompleteField(
+                            placeholder: "Use Global Default (\(globalPrimaryModelInput.isEmpty ? "gemini-2.5-flash" : globalPrimaryModelInput))",
+                            text: Binding(
+                                get: { opPrimaryModelInputs[op] ?? "" },
+                                set: { opPrimaryModelInputs[op] = $0 }
+                            ),
+                            isMultiValue: false,
+                            providerID: prefs.activeID
+                        )
+                    }
+                    
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("\(operationDisplayName(op)) Fallback Models Override").font(.caption).foregroundStyle(.secondary)
+                        ModelAutocompleteField(
+                            placeholder: "Use Global Default (\(modelsInput.isEmpty ? "None" : modelsInput))",
+                            text: Binding(
+                                get: { opFallbackModelsInputs[op] ?? "" },
+                                set: { opFallbackModelsInputs[op] = $0 }
+                            ),
+                            isMultiValue: true,
+                            providerID: prefs.activeID
+                        )
+                    }
+                }
+                .padding(8)
+                .background(Color.secondary.opacity(0.05))
+                .cornerRadius(6)
+
+                // Budgets
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Daily Budget ($ USD)").font(.caption).foregroundStyle(.secondary)
+                        FilterField(
+                            placeholder: "0.00",
+                            text: $dailyBudgetInput,
+                            isBordered: true,
+                            backgroundColor: .textBackgroundColor
+                        )
+                        .frame(height: 22)
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Monthly Budget ($ USD)").font(.caption).foregroundStyle(.secondary)
+                        FilterField(
+                            placeholder: "0.00",
+                            text: $monthlyBudgetInput,
+                            isBordered: true,
+                            backgroundColor: .textBackgroundColor
+                        )
+                        .frame(height: 22)
+                    }
+                }
+
+                // Max Video Duration / Paid Approval Duration
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Max Video Duration (mins)").font(.caption).foregroundStyle(.secondary)
+                        FilterField(
+                            placeholder: "30",
+                            text: $maxVideoDurationInput,
+                            isBordered: true,
+                            backgroundColor: .textBackgroundColor
+                        )
+                        .frame(height: 22)
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Paid Approval Duration (hours)").font(.caption).foregroundStyle(.secondary)
+                        FilterField(
+                            placeholder: "24",
+                            text: $paidApprovalDurationInput,
+                            isBordered: true,
+                            backgroundColor: .textBackgroundColor
+                        )
+                        .frame(height: 22)
+                    }
+                }
+
+                // Paid Tier Toggle
+                Toggle("Enable Paid API Key Tier", isOn: $paidTierEnabled)
+                    .padding(.vertical, 4)
+
+                // Paid API Key
+                if paidTierEnabled {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Paid API Key or 1Password Reference").font(.caption).foregroundStyle(.secondary)
+                        HStack(spacing: 6) {
+                            if paidKeyRevealed {
+                                FilterField(
+                                    placeholder: loadedConfig?.paidCredentialSet == true ? "•••••••• (Saved)" : "op://vault/item/field or AI key...",
+                                    text: $paidKeyInput,
+                                    isBordered: true,
+                                    backgroundColor: .textBackgroundColor
+                                )
+                                .frame(height: 22)
+                            } else {
+                                SecureField(
+                                    "",
+                                    text: $paidKeyInput,
+                                    prompt: Text(loadedConfig?.paidCredentialSet == true ? "•••••••• (Saved)" : "op://vault/item/field or AI key...")
+                                )
+                                .textFieldStyle(.roundedBorder)
+                                .labelsHidden()
+                            }
+                            Button {
+                                paidKeyRevealed.toggle()
+                            } label: {
+                                Image(systemName: paidKeyRevealed ? "eye.slash" : "eye")
+                            }
+                            .buttonStyle(.borderless)
+                            .help(paidKeyRevealed ? "Hide" : "Show")
+                        }
+                    }
+                }
+
+                // Status and Action buttons
+                HStack(spacing: 8) {
+                    Button("Save Daemon Settings") {
+                        Task { await saveConfig() }
+                    }
+                    .disabled(saveStatus == .saving || !isDirty)
+
+                    switch saveStatus {
+                    case .idle:
+                        EmptyView()
+                    case .saving:
+                        HStack(spacing: 6) {
+                            ProgressView().controlSize(.small)
+                            Text("Saving…").font(.caption).foregroundStyle(.secondary)
+                        }
+                    case .success:
+                        Text("Saved successfully ✓")
+                            .font(.caption)
+                            .foregroundStyle(.green)
+                    case .failed(let msg):
+                        Text(msg)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                }
+                .padding(.top, 4)
+            }
+        } header: {
+            Text("Daemon Primary, Fallback & Budget Settings")
+        } footer: {
+            Text("These settings configure the background daemon (`stash serve`) used for automated media transcription, ingestion, and mobile access.\n\nGlobal primary and fallback models apply to all operations unless overridden. Per-operation overrides configure paths specifically for Identify, Search, Chat, Ask, or Transform.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .onAppear {
+            Task { await loadConfig() }
+        }
+    }
+
+    private func loadConfig() async {
+        isLoading = true
+        do {
+            let config = try await StashCLI.shared.getDaemonConfig()
+            self.loadedConfig = config
+            
+            self.globalPrimaryModelInput = config.primaryModel ?? ""
+            self.modelsInput = config.aiModels?.joined(separator: ", ") ?? ""
+            
+            let ops = ["identify", "search", "chat", "ask", "transform"]
+            var opPrimaries: [String: String] = [:]
+            var opFallbacks: [String: String] = [:]
+            for op in ops {
+                opPrimaries[op] = config.operations?[op]?.primaryModel ?? ""
+                opFallbacks[op] = config.operations?[op]?.aiModels?.joined(separator: ", ") ?? ""
+            }
+            self.opPrimaryModelInputs = opPrimaries
+            self.opFallbackModelsInputs = opFallbacks
+
+            self.dailyBudgetInput = String(format: "%.2f", config.maxDailyBudgetUsd ?? 0.0)
+            self.monthlyBudgetInput = String(format: "%.2f", config.maxMonthlyBudgetUsd ?? 0.0)
+            self.maxVideoDurationInput = String(config.maxVideoDurationMinutes ?? 30)
+            self.paidApprovalDurationInput = String(config.paidApprovalDurationHours ?? 24)
+            self.paidTierEnabled = config.paidTierEnabled ?? false
+            self.paidKeyInput = ""
+            
+            self.saveStatus = .idle
+        } catch {
+            self.saveStatus = .failed("Failed to load daemon config: \(error.localizedDescription)")
+        }
+        isLoading = false
+    }
+
+    private func saveConfig() async {
+        saveStatus = .saving
+        do {
+            let cli = StashCLI.shared
+            
+            if let config = loadedConfig {
+                let loadedPrimary = config.primaryModel ?? ""
+                if globalPrimaryModelInput.trimmingCharacters(in: .whitespacesAndNewlines) != loadedPrimary {
+                    try await cli.setDaemonConfig(key: "primary_model", value: globalPrimaryModelInput)
+                }
+
+                let loadedModels = config.aiModels?.joined(separator: ", ") ?? ""
+                if modelsInput.trimmingCharacters(in: .whitespacesAndNewlines) != loadedModels {
+                    try await cli.setDaemonConfig(key: "ai_models", value: modelsInput)
+                }
+                
+                let ops = ["identify", "search", "chat", "ask", "transform"]
+                for op in ops {
+                    let loadedOpPrimary = config.operations?[op]?.primaryModel ?? ""
+                    let currentOpPrimary = opPrimaryModelInputs[op] ?? ""
+                    if currentOpPrimary.trimmingCharacters(in: .whitespacesAndNewlines) != loadedOpPrimary {
+                        try await cli.setDaemonConfig(key: "operations.\(op).primary_model", value: currentOpPrimary)
+                    }
+                    
+                    let loadedOpFallbacks = config.operations?[op]?.aiModels?.joined(separator: ", ") ?? ""
+                    let currentOpFallbacks = opFallbackModelsInputs[op] ?? ""
+                    if currentOpFallbacks.trimmingCharacters(in: .whitespacesAndNewlines) != loadedOpFallbacks {
+                        try await cli.setDaemonConfig(key: "operations.\(op).ai_models", value: currentOpFallbacks)
+                    }
+                }
+
+                let loadedDaily = String(format: "%.2f", config.maxDailyBudgetUsd ?? 0.0)
+                let inputDaily = Double(dailyBudgetInput) ?? 0.0
+                let currentDailyStr = String(format: "%.2f", inputDaily)
+                if currentDailyStr != loadedDaily {
+                    try await cli.setDaemonConfig(key: "max_daily_budget_usd", value: currentDailyStr)
+                }
+
+                let loadedMonthly = String(format: "%.2f", config.maxMonthlyBudgetUsd ?? 0.0)
+                let inputMonthly = Double(monthlyBudgetInput) ?? 0.0
+                let currentMonthlyStr = String(format: "%.2f", inputMonthly)
+                if currentMonthlyStr != loadedMonthly {
+                    try await cli.setDaemonConfig(key: "max_monthly_budget_usd", value: currentMonthlyStr)
+                }
+
+                let loadedMaxVideo = String(config.maxVideoDurationMinutes ?? 30)
+                if maxVideoDurationInput != loadedMaxVideo {
+                    try await cli.setDaemonConfig(key: "max_video_duration_minutes", value: maxVideoDurationInput)
+                }
+
+                let loadedApproval = String(config.paidApprovalDurationHours ?? 24)
+                if paidApprovalDurationInput != loadedApproval {
+                    try await cli.setDaemonConfig(key: "paid_approval_duration_hours", value: paidApprovalDurationInput)
+                }
+
+                if paidTierEnabled != (config.paidTierEnabled ?? false) {
+                    try await cli.setDaemonConfig(key: "paid_tier_enabled", value: paidTierEnabled ? "true" : "false")
+                }
+
+                if !paidKeyInput.isEmpty {
+                    try await cli.setDaemonConfig(key: "paid_credential", value: paidKeyInput)
+                }
+            }
+            
+            let config = try await cli.getDaemonConfig()
+            self.loadedConfig = config
+            
+            self.globalPrimaryModelInput = config.primaryModel ?? ""
+            self.modelsInput = config.aiModels?.joined(separator: ", ") ?? ""
+            
+            let ops = ["identify", "search", "chat", "ask", "transform"]
+            var opPrimaries: [String: String] = [:]
+            var opFallbacks: [String: String] = [:]
+            for op in ops {
+                opPrimaries[op] = config.operations?[op]?.primaryModel ?? ""
+                opFallbacks[op] = config.operations?[op]?.aiModels?.joined(separator: ", ") ?? ""
+            }
+            self.opPrimaryModelInputs = opPrimaries
+            self.opFallbackModelsInputs = opFallbacks
+
+            self.dailyBudgetInput = String(format: "%.2f", config.maxDailyBudgetUsd ?? 0.0)
+            self.monthlyBudgetInput = String(format: "%.2f", config.maxMonthlyBudgetUsd ?? 0.0)
+            self.maxVideoDurationInput = String(config.maxVideoDurationMinutes ?? 30)
+            self.paidApprovalDurationInput = String(config.paidApprovalDurationHours ?? 24)
+            self.paidTierEnabled = config.paidTierEnabled ?? false
+            self.paidKeyInput = ""
+            
+            saveStatus = .success
+            
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                if case .success = self.saveStatus {
+                    self.saveStatus = .idle
+                }
+            }
+        } catch {
+            saveStatus = .failed("Failed to save: \(error.localizedDescription)")
+        }
     }
 }

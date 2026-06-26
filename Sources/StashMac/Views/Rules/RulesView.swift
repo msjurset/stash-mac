@@ -278,6 +278,9 @@ private struct RuleRow: View {
                         Chip("link → \(id.prefix(8))", icon: "link", color: .teal)
                     }
                 }
+                if let e = action.exec, !e.isEmpty {
+                    Chip("exec", icon: "terminal", color: .green)
+                }
             }
         }
     }

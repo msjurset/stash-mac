@@ -84,6 +84,7 @@ enum ImagePreviewPresenter {
         }
         current?.orderOut(nil)
         current = nil
+        NotificationCenter.default.post(name: .imagePreviewDismissed, object: nil)
     }
 }
 
@@ -122,6 +123,7 @@ final class KeyableBorderlessPanel: NSPanel {
 
 extension Notification.Name {
     static let imagePreviewArrowKey = Notification.Name("stash.imagePreviewArrowKey")
+    static let imagePreviewDismissed = Notification.Name("stash.imagePreviewDismissed")
 }
 
 /// Full-window image viewer rendered inside `ImagePreviewPresenter`'s

@@ -135,8 +135,12 @@ struct ContentView: View {
     @ViewBuilder
     private var detailContent: some View {
         switch store.navigation {
-        case .tagGraph, .stats, .rules, .ruleActivity:
+        case .tagGraph, .stats:
             EmptyView()
+        case .rules:
+            RuleDetailView()
+        case .ruleActivity:
+            RuleActivityDetailView()
         case .inbox:
             InboxDetailView()
         case .moments:

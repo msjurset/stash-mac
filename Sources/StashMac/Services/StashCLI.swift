@@ -178,7 +178,8 @@ actor StashCLI {
         removeTags: [String] = [],
         collection: String? = nil,
         location: ItemLocation? = nil,
-        clearLocation: Bool = false
+        clearLocation: Bool = false,
+        speakerMap: [String: String]? = nil
     ) async throws -> StashItem {
         var args = ["edit", "--json", id]
         if let title { args += ["-t", title] }
@@ -192,6 +193,12 @@ actor StashCLI {
             args += ["--location", "\(location.lat),\(location.lon)"]
         } else if clearLocation {
             args += ["--clear-location"]
+        }
+        if let speakerMap {
+            let data = try JSONEncoder().encode(speakerMap)
+            if let jsonString = String(data: data, encoding: .utf8) {
+                args += ["--speaker-map", jsonString]
+            }
         }
         return try await captureJSON(args: args)
     }
@@ -677,6 +684,35 @@ actor StashCLI {
     func removeURLExclusion(pattern: String) async throws {
         _ = try await captureOutput(args: [
             "config", "exclusions", "remove", pattern, "--json",
+        ])
+    }
+
+    // MARK: - Daemon Config
+
+    struct OperationConfig: Codable, Equatable {
+        let primaryModel: String?
+        let aiModels: [String]?
+    }
+
+    struct DaemonConfig: Codable {
+        let primaryModel: String?
+        let aiModels: [String]?
+        let operations: [String: OperationConfig]?
+        let maxDailyBudgetUsd: Double?
+        let maxMonthlyBudgetUsd: Double?
+        let paidTierEnabled: Bool?
+        let paidApprovalDurationHours: Int?
+        let maxVideoDurationMinutes: Int?
+        let paidCredentialSet: Bool?
+    }
+
+    func getDaemonConfig() async throws -> DaemonConfig {
+        return try await captureJSON(args: ["config", "show", "--json"])
+    }
+
+    func setDaemonConfig(key: String, value: String) async throws {
+        _ = try await captureOutput(args: [
+            "config", "set", key, value, "--json",
         ])
     }
 

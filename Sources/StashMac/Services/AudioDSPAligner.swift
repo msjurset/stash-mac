@@ -79,16 +79,25 @@ enum AudioDSPAligner {
         }.value
     }
     
+    struct TrackMixInfo: Sendable {
+        let url: URL
+        let isSelected: Bool
+        let volume: Double
+    }
+    
     /// Combines all source URLs, aligns them relative to the masterURL, mixes them offline,
     /// and writes the output as an AAC (.m4a) file to `outputURL`.
     static func alignAndMixTracks(
-        masterURL: URL,
-        sourceURLs: [URL],
+        masterTrack: TrackMixInfo,
+        sourceTracks: [TrackMixInfo],
         outputURL: URL,
         enhanceSpeech: Bool,
         progress: @escaping @Sendable (Double) -> Void
     ) async throws {
         print("[DSP] Starting align and mix process...")
+        
+        let masterURL = masterTrack.url
+        let sourceURLs = sourceTracks.map { $0.url }
         
         try await Task.detached(priority: .userInitiated) {
             // 1. Calculate alignment delays for all source tracks
@@ -121,12 +130,12 @@ enum AudioDSPAligner {
             // Connect nodes
             var playerNodes: [AVAudioPlayerNode] = []
             var maxDuration: Double = 0.0
-            let allURLs = [masterURL] + sourceURLs
+            let allTracks = [masterTrack] + sourceTracks
             
-            for url in allURLs {
-                let file = try AVAudioFile(forReading: url)
+            for track in allTracks {
+                let file = try AVAudioFile(forReading: track.url)
                 
-                let delay = delays[url] ?? 0.0
+                let delay = delays[track.url] ?? 0.0
                 let offset = delay - minDelay
                 let fileDuration = Double(file.length) / file.processingFormat.sampleRate
                 maxDuration = max(maxDuration, offset + fileDuration)
@@ -162,6 +171,9 @@ enum AudioDSPAligner {
                     // Connect directly to main mixer. Let AVAudioEngine handle format conversions automatically.
                     audioEngine.connect(playerNode, to: audioEngine.mainMixerNode, format: file.processingFormat)
                 }
+                
+                // Set the volume based on track selection and volume level
+                playerNode.volume = track.isSelected ? Float(track.volume) : 0.0
                 
                 playerNodes.append(playerNode)
                 

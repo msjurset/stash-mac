@@ -2,6 +2,11 @@ import SwiftUI
 import UniformTypeIdentifiers
 import CoreLocation
 
+@MainActor
+private final class ScrollOffsetTracker {
+    var value: CGFloat = 0
+}
+
 struct ItemDetailView: View {
     @Environment(StashStore.self) private var store
     @Environment(AIPrefsStore.self) private var aiPrefs
@@ -11,13 +16,14 @@ struct ItemDetailView: View {
     @State private var showLinkSheet = false
     @State private var isFetchingContent = false
     @State private var showLocationMapPopover = false
+    @State private var restoreMapPopoverOnPreviewDismiss = false
     @State private var isAddingTag = false
     @State private var newTagText = ""
     @State private var isAddingCollection = false
     @State private var newCollectionText = ""
     /// Tracks if the user has manually scrolled since pinning, to break the pin.
     @State private var hasScrolledSincePin = false
-    @State private var lastScrollOffset: CGFloat = 0
+    @State private var lastScrollOffset = ScrollOffsetTracker()
     /// Inline-edit mode for the title. Double-click on the title
     /// flips this; commit / cancel routes through InlineEditField
     /// (X-inside-the-field + click-off saves, per the project's
@@ -170,6 +176,8 @@ struct ItemDetailView: View {
                             locationRow(loc: loc)
                         }
                     }
+
+                    SpeakerSection(item: item)
 
                     tagsSection(proxy: proxy)
 
@@ -347,16 +355,27 @@ struct ItemDetailView: View {
                     proxy.frame(in: .named("scroll")).minY
                 } action: { newValue in
                     if (isAddingTag || isAddingCollection) && !hasScrolledSincePin {
-                        let delta = abs(newValue - lastScrollOffset)
+                        let delta = abs(newValue - lastScrollOffset.value)
                         if delta > 1.0 {
                             hasScrolledSincePin = true
                         }
                     }
-                    lastScrollOffset = newValue
+                    lastScrollOffset.value = newValue
                 }
             }
             .coordinateSpace(name: "scroll")
             .helpAnchor(.itemDetail)
+            .onReceive(NotificationCenter.default.publisher(for: .stashOpenFetchURL)) { note in
+                if let url = note.userInfo?["url"] as? String, url == item.url {
+                    refetchContent()
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .imagePreviewDismissed)) { _ in
+                if restoreMapPopoverOnPreviewDismiss {
+                    restoreMapPopoverOnPreviewDismiss = false
+                    showLocationMapPopover = true
+                }
+            }
         }
         .onAppear { store.markSeen(item.id) }
         .toolbar {
@@ -590,7 +609,10 @@ struct ItemDetailView: View {
             }
             .buttonStyle(.borderless)
             .popover(isPresented: $showLocationMapPopover, arrowEdge: .top) {
-                LocationMapPopover(lat: loc.lat, lon: loc.lon)
+                let primaryURL = item.storePath.flatMap { FilePathResolver.resolve(storePath: $0) }
+                LocationMapPopover(lat: loc.lat, lon: loc.lon, primaryURL: primaryURL, additionalPoints: getAdditionalLocations(fallbackLat: loc.lat, fallbackLon: loc.lon)) {
+                    restoreMapPopoverOnPreviewDismiss = true
+                }
             }
             if let url = item.mapsURL {
                 Link("Open in Maps", destination: url)
@@ -606,6 +628,19 @@ struct ItemDetailView: View {
             }
             Spacer()
         }
+    }
+
+    private func getAdditionalLocations(fallbackLat: Double, fallbackLon: Double) -> [LocationPoint] {
+        var points: [LocationPoint] = []
+        if let files = item.files {
+            for f in files {
+                if let url = FilePathResolver.resolve(storePath: f.storePath) {
+                    let coord = ImageProcessor.extractLocation(from: url) ?? CLLocationCoordinate2D(latitude: fallbackLat, longitude: fallbackLon)
+                    points.append(LocationPoint(id: f.caption ?? "File \(f.position)", coord: coord, url: url))
+                }
+            }
+        }
+        return points
     }
 
     private func attachDroppedFiles(providers: [NSItemProvider]) -> Bool {

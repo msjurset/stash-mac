@@ -10,6 +10,8 @@ struct NotesView: View {
     @State private var isExpanded = false
     @State private var showEditor = false
     @State private var editedText = ""
+    @State private var originalText = ""
+    @State private var editingItemID: String? = nil
     @State private var isShowingAIChat = false
     @State private var aiQuestion = ""
     @FocusState private var isAIChatFocused: Bool
@@ -228,6 +230,9 @@ struct NotesView: View {
                 // Task was cancelled, do nothing
             }
         }
+        .onChange(of: itemID) { _, _ in
+            showEditor = false
+        }
     }
 
     private func estimatedCost(_ seconds: Double) -> String {
@@ -240,7 +245,9 @@ struct NotesView: View {
     }
 
     private func openEditor() {
+        originalText = text
         editedText = text
+        editingItemID = itemID
         showEditor = true
     }
 
@@ -268,9 +275,9 @@ struct NotesView: View {
         .frame(width: 780, height: 520)
         .background(Color(nsColor: .textBackgroundColor))
         .onDisappear {
-            if editedText != text {
+            if let editID = editingItemID, editedText != originalText {
                 store.editItem(
-                    id: itemID,
+                    id: editID,
                     title: nil,
                     note: editedText,
                     extractedText: nil,
@@ -279,6 +286,8 @@ struct NotesView: View {
                     collection: nil
                 )
             }
+            editingItemID = nil
+            originalText = ""
         }
     }
 }

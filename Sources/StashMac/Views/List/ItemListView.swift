@@ -880,14 +880,14 @@ struct ItemListView: View {
             }
             Divider()
             let isArchivedSection = store.navigation == .archive
-            Button(isArchivedSection ? "Unarchive All" : "Archive All") {
+            Button(isArchivedSection ? "Unarchive \(selected.count) Items" : "Archive \(selected.count) Items") {
                 if isArchivedSection {
                     store.unarchiveItems(ids: Array(selected))
                 } else {
                     store.archiveItems(ids: Array(selected))
                 }
             }
-            Button("Delete All…", role: .destructive) {
+            Button("Delete \(selected.count) Items…", role: .destructive) {
                 store.deleteItems(ids: Array(selected))
             }
         } else {

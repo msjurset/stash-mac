@@ -34,6 +34,8 @@ struct RuleMatch: Codable, Hashable {
     var pathGlob: String?
     var content: String?
     var contentRegex: String?
+    var hasTag: String?
+    var isDuplicate: Bool?
 
     /// One-line, human-readable summary for the rules list. Mirrors the
     /// shape used by `stash rules list` text output so the Mac UI and CLI
@@ -50,6 +52,8 @@ struct RuleMatch: Codable, Hashable {
         if let p = pathGlob, !p.isEmpty { parts.append("path_glob=\(p)") }
         if let c = content, !c.isEmpty { parts.append("content~=\(c)") }
         if let c = contentRegex, !c.isEmpty { parts.append("content_regex=\(c)") }
+        if let h = hasTag, !h.isEmpty { parts.append("has_tag=\(h)") }
+        if let d = isDuplicate { parts.append("is_duplicate=\(d)") }
         return parts.joined(separator: ", ")
     }
 }
@@ -67,6 +71,7 @@ struct RuleAction: Codable, Hashable {
     var skip: Bool?
     var notify: String?
     var linkTo: RuleLinkSpec?
+    var exec: String?
 
     /// Concise badge-summary used by the rules list. Returns one short
     /// phrase per populated effect.
@@ -99,6 +104,9 @@ struct RuleAction: Codable, Hashable {
             } else if let id = l.id, !id.isEmpty {
                 out.append("link→\(id.prefix(8))")
             }
+        }
+        if let e = exec, !e.isEmpty {
+            out.append("exec")
         }
         return out
     }

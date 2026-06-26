@@ -18,6 +18,8 @@ struct ExtractedTextView: View {
     @State private var isExpanded = false
     @State private var showEditor = false
     @State private var editedText = ""
+    @State private var originalText = ""
+    @State private var editingItemID: String? = nil
     /// Vim controller for the editor popover. Lifted from the
     /// editor's default internal one so the badge / activate
     /// button can render in the popover header instead of
@@ -84,7 +86,7 @@ struct ExtractedTextView: View {
         let sample = text.prefix(200)
         let nonPrintableCount = sample.filter {
             guard let scalar = $0.unicodeScalars.first else { return false }
-            return !scalar.isASCII && !CharacterSet.alphanumerics.contains(scalar) && !CharacterSet.punctuationCharacters.contains(scalar) && !CharacterSet.whitespacesAndNewlines.contains(scalar)
+            return !scalar.isASCII && !CharacterSet.whitespacesAndNewlines.contains(scalar) && !CharacterSet.punctuationCharacters.contains(scalar) && !CharacterSet.alphanumerics.contains(scalar)
         }.count
         return nonPrintableCount > 20
     }
@@ -156,10 +158,15 @@ struct ExtractedTextView: View {
                 }
             }
         }
+        .onChange(of: itemID) { _, _ in
+            showEditor = false
+        }
     }
 
     private func openEditor() {
+        originalText = text
         editedText = text
+        editingItemID = itemID
         showEditor = true
     }
 
@@ -205,9 +212,9 @@ struct ExtractedTextView: View {
         .frame(width: 780, height: 520)
         .background(Color(nsColor: .textBackgroundColor))
         .onDisappear {
-            if editedText != text {
+            if let editID = editingItemID, editedText != originalText {
                 store.editItem(
-                    id: itemID,
+                    id: editID,
                     title: nil,
                     note: nil,
                     extractedText: editedText,
@@ -216,6 +223,8 @@ struct ExtractedTextView: View {
                     collection: nil
                 )
             }
+            editingItemID = nil
+            originalText = ""
         }
     }
 }

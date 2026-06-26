@@ -323,6 +323,8 @@ enum GeminiPricing {
             "gemini-2.5-pro":        Rate(inputPerMillion: 1.25,  outputPerMillion: 10.00),
             "gemini-3-flash":        Rate(inputPerMillion: 0.50,  outputPerMillion: 3.00),
             "gemini-3-pro":          Rate(inputPerMillion: 2.00,  outputPerMillion: 12.00),
+            "gemini-3.1-flash":      Rate(inputPerMillion: 0.30,  outputPerMillion: 2.50),
+            "gemini-3.1-pro":        Rate(inputPerMillion: 1.25,  outputPerMillion: 10.00),
         ],
         defaultModel: "gemini-2.5-flash"
     )

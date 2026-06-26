@@ -59,6 +59,10 @@ struct XRayAudioView: View {
     // Optimize Mix state
     @State private var isOptimizing = false
     @State private var optimizingProgress: Double = 0.0
+    
+    // Caption Editing State
+    @State private var editingTrackID: UUID? = nil
+    @State private var draftCaption: String = ""
     @State private var enhanceSpeech = false
 
     struct LogEntry: Identifiable {
@@ -179,6 +183,9 @@ struct XRayAudioView: View {
                                             currentTimeRange: currentTimeRange,
                                             dragStart: $dragStart,
                                             dragCurrent: $dragCurrent,
+                                            editingTrackID: $editingTrackID,
+                                            draftCaption: $draftCaption,
+                                            commitCaptionEdit: commitCaptionEdit,
                                             onSeekPercent: { seekToPercent($0) },
                                             onZoomEnded: { startPct, endPct in
                                                 handleZoomToSelection(startPct: startPct, endPct: endPct)
@@ -360,49 +367,30 @@ struct XRayAudioView: View {
                                         .zIndex(90)
                                 }
                                 
-                                // Selection Highlight
-                                if let start = dragStart, let current = dragCurrent {
-                                    let x1 = start.x
-                                    let x2 = current.x
-                                    Rectangle()
-                                        .fill(Color.blue.opacity(0.3))
-                                        .frame(width: abs(x2 - x1))
-                                        .offset(x: Swift.min(x1, x2))
-                                        .allowsHitTesting(false) // click-through
-                                }
+                                SelectionHighlightOverlay(
+                                    dragStart: $dragStart,
+                                    dragCurrent: $dragCurrent
+                                )
                                 
-                                // Vertical Cursor Line (Hover)
-                                if isHovering && dragStart == nil {
-                                    let time = cursorTimeToSeconds()
-                                    Rectangle()
-                                        .fill(Color.accentColor)
-                                        .frame(width: 1.5)
-                                        .overlay(
-                                            Text(formatTime(time))
-                                                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                                                .padding(.horizontal, 6)
-                                                .padding(.vertical, 3)
-                                                .background(Color.accentColor)
-                                                .foregroundStyle(.white)
-                                                .clipShape(Capsule())
-                                                .shadow(radius: 3)
-                                                .fixedSize()
-                                                .offset(y: -12),
-                                            alignment: .bottom
-                                        )
-                                        .offset(x: cursorPosition)
-                                        .allowsHitTesting(false) // click-through
-                                        .zIndex(500)
-                                }
+                                HoverCursorOverlay(
+                                    cursorPosition: $cursorPosition,
+                                    isHovering: $isHovering,
+                                    dragStart: $dragStart,
+                                    contentWidth: contentWidth,
+                                    tracks: tracks,
+                                    currentTimeRange: currentTimeRange
+                                )
                             }
                             .contentShape(Rectangle())
                             .onContinuousHover { phase in
-                                switch phase {
-                                case .active(let location):
-                                    cursorPosition = location.x
-                                    isHovering = true
-                                case .ended:
-                                    isHovering = false
+                                DispatchQueue.main.async {
+                                    switch phase {
+                                    case .active(let location):
+                                        cursorPosition = location.x
+                                        isHovering = true
+                                    case .ended:
+                                        isHovering = false
+                                    }
                                 }
                             }
                         }
@@ -858,6 +846,12 @@ struct XRayAudioView: View {
         
         isPlaying = false
     }
+    private func commitCaptionEdit(trackID: UUID) {
+        if let idx = tracks.firstIndex(where: { $0.id == trackID }) {
+            tracks[idx].label = draftCaption
+        }
+        editingTrackID = nil
+    }
     
     private func setupPlayers() {
         log("Setting up AVAudioEngine...")
@@ -1168,13 +1162,26 @@ struct XRayAudioView: View {
                     throw NSError(domain: "XRayAudioView", code: 20, userInfo: [NSLocalizedDescriptionKey: "Master track is missing or not resolved"])
                 }
                 
-                let sourceURLs = tracks.filter { $0.role == .source && !$0.isMissing }.compactMap { $0.url }
+                let masterMixInfo = AudioDSPAligner.TrackMixInfo(
+                    url: masterURL,
+                    isSelected: masterTrack.isSelected,
+                    volume: masterTrack.volume
+                )
                 
-                guard !sourceURLs.isEmpty else {
+                let sourceTracks = tracks.filter { $0.role == .source && !$0.isMissing && $0.url != nil }
+                let sourceMixInfos = sourceTracks.map {
+                    AudioDSPAligner.TrackMixInfo(
+                        url: $0.url!,
+                        isSelected: $0.isSelected,
+                        volume: $0.volume
+                    )
+                }
+                
+                guard !sourceMixInfos.isEmpty else {
                     throw NSError(domain: "XRayAudioView", code: 21, userInfo: [NSLocalizedDescriptionKey: "No attached source tracks to align"])
                 }
                 
-                log("Optimizing mix: \(sourceURLs.count) source tracks relative to master")
+                log("Optimizing mix: \(sourceMixInfos.count) source tracks relative to master")
                 
                 // 2. Create a temporary output file path
                 let tempDir = FileManager.default.temporaryDirectory
@@ -1182,8 +1189,8 @@ struct XRayAudioView: View {
                 
                 // 3. Call AudioDSPAligner to align and mix
                 try await AudioDSPAligner.alignAndMixTracks(
-                    masterURL: masterURL,
-                    sourceURLs: sourceURLs,
+                    masterTrack: masterMixInfo,
+                    sourceTracks: sourceMixInfos,
                     outputURL: tempOutputURL,
                     enhanceSpeech: enhanceSpeech,
                     progress: { progressValue in
@@ -1245,6 +1252,9 @@ private struct CompositeWaveformView: View {
     
     @Binding var dragStart: CGPoint?
     @Binding var dragCurrent: CGPoint?
+    @Binding var editingTrackID: UUID?
+    @Binding var draftCaption: String
+    let commitCaptionEdit: (UUID) -> Void
     let onSeekPercent: (Double) -> Void
     let onZoomEnded: (Double, Double) -> Void
     
@@ -1255,17 +1265,17 @@ private struct CompositeWaveformView: View {
                     .font(.system(size: 11, weight: .black))
                     .foregroundStyle(Color.purple)
                 Spacer()
-                
-                HStack(spacing: 12) {
-                    ForEach($tracks) { $track in
-                        legendItem(label: track.label, color: $track.color, trackID: track.id, isMaster: track.role == .master, isMissing: track.isMissing)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach($tracks) { $track in
+                            legendItem(label: track.label, color: $track.color, trackID: track.id, isMaster: track.role == .master, isMissing: track.isMissing)
+                        }
                     }
+                    .padding(.horizontal, 4)
                 }
-                .font(.system(size: 9, weight: .bold))
             }
             .padding(.horizontal, 8)
             .padding(.top, 4)
-            
             let currentCursorPosition = cursorPosition
             let currentIsHovering = isHovering
             Canvas { context, size in
@@ -1384,6 +1394,8 @@ private struct CompositeWaveformView: View {
 
     @ViewBuilder
     private func legendItem(label: String, color: Binding<Color>, trackID: UUID, isMaster: Bool, isMissing: Bool) -> some View {
+        let colors: [Color] = [.white, .red, .orange, .yellow, .green, .mint, .teal, .cyan, .blue, .indigo, .purple, .pink, .brown]
+        
         HStack(spacing: 4) {
             if isMissing {
                 Image(systemName: "exclamationmark.circle.fill")
@@ -1398,7 +1410,6 @@ private struct CompositeWaveformView: View {
                         get: { showingColorPopoverFor == trackID },
                         set: { if !$0 && showingColorPopoverFor == trackID { showingColorPopoverFor = nil } }
                     )) {
-                        let colors: [Color] = [.white, .red, .orange, .yellow, .green, .mint, .teal, .cyan, .blue, .indigo, .purple, .pink, .brown]
                         LazyVGrid(columns: Array(repeating: GridItem(.fixed(20), spacing: 8), count: 4), spacing: 8) {
                             ForEach(colors, id: \.self) { c in
                                 Circle()
@@ -1415,8 +1426,15 @@ private struct CompositeWaveformView: View {
                     }
             }
             Text(label.uppercased())
+                .font(.system(size: 9, weight: .bold))
                 .foregroundStyle(isMissing ? .secondary : color.wrappedValue)
                 .strikethrough(isMissing)
+                .onTapGesture(count: 2) {
+                    if !isMaster {
+                        draftCaption = label
+                        editingTrackID = trackID
+                    }
+                }
         }
         .padding(.vertical, 2)
         .padding(.horizontal, 6)
@@ -1496,9 +1514,9 @@ private struct WaveformTrackView: View {
             } else {
                 let currentCursorPosition = cursorPosition
                 let currentIsHovering = isHovering
-                Canvas { context, size in
-                    let W = size.width
-                    let H = size.height
+                Canvas(rendersAsynchronously: true) { context, size in
+                    let W = size.width.isFinite ? Swift.min(size.width, 10000) : 10000
+                    let H = size.height.isFinite ? Swift.min(size.height, 10000) : 10000
                     if W <= 0 || H <= 0 { return }
                     let midY = H / 2
                     let xc = currentCursorPosition
@@ -1522,6 +1540,8 @@ private struct WaveformTrackView: View {
                     
                     let samples = track.samples
                     guard !samples.isEmpty else { return }
+                    var insideRects: [CGRect] = []
+                    var outsideRects: [CGRect] = []
                     for x in stride(from: 0, to: W, by: 1) {
                         let tNorm = xToTNorm(x)
                         let currentSec = startOffset + (tNorm * displayDuration)
@@ -1530,8 +1550,19 @@ private struct WaveformTrackView: View {
                         let barHeight = CGFloat(sample) * H * 0.7
                         let rect = CGRect(x: x, y: midY - (barHeight / 2), width: 1, height: max(1, barHeight))
                         let isInLens = currentIsHovering && abs(x - xc) < wl/2
-                        context.fill(Path(rect), with: .color(isInLens ? track.color : track.color.opacity(0.4)))
+                        if isInLens {
+                            insideRects.append(rect)
+                        } else {
+                            outsideRects.append(rect)
+                        }
                     }
+                    var insidePath = Path()
+                    insidePath.addRects(insideRects)
+                    context.fill(insidePath, with: .color(track.color))
+                    
+                    var outsidePath = Path()
+                    outsidePath.addRects(outsideRects)
+                    context.fill(outsidePath, with: .color(track.color.opacity(0.4)))
                 }
                 .background(Color.black.opacity(0.3))
                 .clipShape(RoundedRectangle(cornerRadius: 4))
@@ -1576,9 +1607,9 @@ private struct TimelineRulerView: View {
     
     var body: some View {
         let rulerWidth = contentWidth - 16
-        Canvas { context, size in
-            let W = size.width
-            let H = size.height
+        Canvas(rendersAsynchronously: true) { context, size in
+            let W = size.width.isFinite ? Swift.min(size.width, 10000) : 10000
+            let H = size.height.isFinite ? Swift.min(size.height, 10000) : 10000
             if W <= 0 || H <= 0 { return }
             
             let startOffset = currentTimeRange?.start.seconds ?? 0
@@ -1608,8 +1639,9 @@ private struct TimelineRulerView: View {
             
             let firstTick = ceil(startOffset / tickInterval) * tickInterval
             var currentTick = firstTick
+            var tickCount = 0
             
-            while currentTick <= startOffset + displayDuration {
+            while currentTick <= startOffset + displayDuration && tickCount < 1000 {
                 let percent = (currentTick - startOffset) / displayDuration
                 let x = CGFloat(percent) * W
                 
@@ -1638,6 +1670,7 @@ private struct TimelineRulerView: View {
                 context.draw(resolved, at: CGPoint(x: x, y: H - 12), anchor: .bottom)
                 
                 currentTick += tickInterval
+                tickCount += 1
             }
         }
         .frame(height: 28)
@@ -1654,5 +1687,70 @@ extension Array {
     subscript(clamped index: Int) -> Element {
         guard !isEmpty else { fatalError("Array is empty") }
         return self[Swift.min(Swift.max(0, index), count - 1)]
+    }
+}
+
+private struct SelectionHighlightOverlay: View {
+    @Binding var dragStart: CGPoint?
+    @Binding var dragCurrent: CGPoint?
+    
+    var body: some View {
+        let hlStart = dragStart?.x ?? 0
+        let hlCurrent = dragCurrent?.x ?? 0
+        let isHighlighting = dragStart != nil && dragCurrent != nil
+        Rectangle()
+            .fill(Color.blue.opacity(0.3))
+            .frame(width: isHighlighting ? abs(hlCurrent - hlStart) : 0)
+            .offset(x: Swift.min(hlStart, hlCurrent))
+            .allowsHitTesting(false)
+    }
+}
+
+private struct HoverCursorOverlay: View {
+    @Binding var cursorPosition: CGFloat
+    @Binding var isHovering: Bool
+    @Binding var dragStart: CGPoint?
+    let contentWidth: CGFloat
+    let tracks: [XRayTrack]
+    let currentTimeRange: CMTimeRange?
+    
+    private func cursorTimeToSeconds() -> Double {
+        guard !tracks.isEmpty, contentWidth > 0 else { return 0 }
+        let totalDur = tracks.map(\.duration).max() ?? 1.0
+        let percent = Double(cursorPosition / contentWidth)
+        let startOffset = currentTimeRange?.start.seconds ?? 0
+        let displayDuration = currentTimeRange?.duration.seconds ?? totalDur
+        return startOffset + (percent * displayDuration)
+    }
+    
+    private func formatTime(_ seconds: Double) -> String {
+        let m = Int(seconds) / 60
+        let s = Int(seconds) % 60
+        return String(format: "%d:%02d", m, s)
+    }
+    
+    var body: some View {
+        let time = cursorTimeToSeconds()
+        let showCursor = isHovering && dragStart == nil
+        Rectangle()
+            .fill(Color.accentColor)
+            .frame(width: 1.5)
+            .overlay(
+                Text(formatTime(time))
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(Color.accentColor)
+                    .foregroundStyle(.white)
+                    .clipShape(Capsule())
+                    .shadow(radius: 3)
+                    .frame(width: 60)
+                    .offset(y: -12),
+                alignment: .bottom
+            )
+            .offset(x: cursorPosition)
+            .allowsHitTesting(false)
+            .zIndex(500)
+            .opacity(showCursor ? 1 : 0)
     }
 }

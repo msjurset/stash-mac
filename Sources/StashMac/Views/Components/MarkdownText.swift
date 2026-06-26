@@ -22,28 +22,31 @@ struct MarkdownText: View {
     }
 
     var body: some View {
-        if lineLimit != nil {
-            // Preview mode: inline markdown only, with line limit
-            let cleaned = preprocessInline(content)
-            if let attributed = try? AttributedString(markdown: cleaned, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) {
-                Text(attributed)
-                    .lineLimit(lineLimit)
-                    .textSelectionEnabled(isSelectable)
+        Group {
+            if lineLimit != nil {
+                // Preview mode: inline markdown only, with line limit
+                let cleaned = preprocessInline(content)
+                if let attributed = try? AttributedString(markdown: cleaned, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) {
+                    Text(attributed)
+                        .lineLimit(lineLimit)
+                        .textSelectionEnabled(isSelectable)
+                } else {
+                    Text(content)
+                        .lineLimit(lineLimit)
+                        .textSelectionEnabled(isSelectable)
+                }
             } else {
-                Text(content)
-                    .lineLimit(lineLimit)
-                    .textSelectionEnabled(isSelectable)
-            }
-        } else {
-            VStack(alignment: .leading, spacing: 4) {
-                ForEach(Array(parseBlocks(content).enumerated()), id: \.offset) { _, block in
-                    renderBlock(block)
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(Array(parseBlocks(content).enumerated()), id: \.offset) { _, block in
+                        renderBlock(block)
+                    }
                 }
             }
         }
     }
 
     // MARK: - Block parsing
+
 
     private enum Block {
         case heading(String, Int)
@@ -53,6 +56,7 @@ struct MarkdownText: View {
         case table(headers: [String], rows: [[String]])
         case rule
         case blank
+        case code(String, language: String?)
     }
 
     private func parseBlocks(_ text: String) -> [Block] {
@@ -60,6 +64,9 @@ struct MarkdownText: View {
         var blocks: [Block] = []
         var currentText: [String] = []
         var i = 0
+        var inCodeBlock = false
+        var codeBlockContent: [String] = []
+        var codeBlockLang: String? = nil
 
         func flushText() {
             if !currentText.isEmpty {
@@ -71,6 +78,29 @@ struct MarkdownText: View {
         while i < lines.count {
             let line = lines[i]
             let trimmed = line.trimmingCharacters(in: .whitespaces)
+
+            if inCodeBlock {
+                if trimmed.hasPrefix("```") {
+                    blocks.append(.code(codeBlockContent.joined(separator: "\n"), language: codeBlockLang))
+                    codeBlockContent = []
+                    codeBlockLang = nil
+                    inCodeBlock = false
+                } else {
+                    codeBlockContent.append(line)
+                }
+                i += 1
+                continue
+            }
+
+            if trimmed.hasPrefix("```") {
+                flushText()
+                let lang = trimmed.dropFirst(3).trimmingCharacters(in: .whitespaces)
+                codeBlockLang = lang.isEmpty ? nil : String(lang)
+                codeBlockContent = []
+                inCodeBlock = true
+                i += 1
+                continue
+            }
 
             if trimmed.isEmpty {
                 flushText()
@@ -142,7 +172,11 @@ struct MarkdownText: View {
             i += 1
         }
 
-        flushText()
+        if inCodeBlock {
+            blocks.append(.code(codeBlockContent.joined(separator: "\n"), language: codeBlockLang))
+        } else {
+            flushText()
+        }
         return blocks
     }
 
@@ -221,6 +255,26 @@ struct MarkdownText: View {
 
         case .blank:
             Spacer().frame(height: 4)
+
+        case .code(let code, let language):
+            VStack(alignment: .leading, spacing: 4) {
+                if let language, !language.isEmpty {
+                    Text(language.uppercased())
+                        .font(.caption2)
+                        .fontWeight(.bold)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(.quaternary.opacity(0.8), in: RoundedRectangle(cornerRadius: 3))
+                }
+                Text(code)
+                    .font(.system(.body, design: .monospaced))
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 6))
+                    .textSelectionEnabled(isSelectable)
+            }
+            .padding(.vertical, 2)
         }
     }
 
@@ -232,7 +286,10 @@ struct MarkdownText: View {
     }
 
     private func preprocessInline(_ text: String) -> String {
-        text.split(separator: "\n", omittingEmptySubsequences: false).map { line in
+        text.split(separator: "\n", omittingEmptySubsequences: false).filter { line in
+            let trimmed = line.drop(while: { $0 == " " })
+            return !trimmed.hasPrefix("```")
+        }.map { line in
             let trimmed = line.drop(while: { $0 == " " })
             if let m = trimmed.wholeMatch(of: /^(#{1,6})\s+(.+)/) {
                 return "**\(m.output.2)**"
