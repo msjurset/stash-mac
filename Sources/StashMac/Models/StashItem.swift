@@ -98,8 +98,13 @@ struct StashItem: Codable, Identifiable, Hashable {
     /// Dynamic icon based on the item type and content characteristics.
     /// Audio files get a musical note icon.
     var iconName: String {
-        if type == .file, let mime = mimeType, isAudioMIME(mime) {
-            return "music.note"
+        if type == .file {
+            if let mime = mimeType, isAudioMIME(mime) {
+                return "music.note"
+            }
+            if isMultiSourceAudio {
+                return "music.note"
+            }
         }
         return type.icon
     }
@@ -107,8 +112,18 @@ struct StashItem: Codable, Identifiable, Hashable {
     /// True if this item represents a multi-source audio capture 
     /// (containing a master track plus one or more raw tracks).
     var isMultiSourceAudio: Bool {
-        guard type == .file, let mime = mimeType, isAudioMIME(mime) else { return false }
-        return (files?.count ?? 0) > 0
+        guard type == .file else { return false }
+        if let mime = mimeType, isAudioMIME(mime), (files?.count ?? 0) > 0 {
+            return true
+        }
+        // Fallback for cases where primary MIME got sniffed as video/mp4 but we have audio files in the attachments
+        if let files = files, !files.isEmpty {
+            return files.contains { file in
+                if let mime = file.mimeType, isAudioMIME(mime) { return true }
+                return false
+            }
+        }
+        return false
     }
 }
 

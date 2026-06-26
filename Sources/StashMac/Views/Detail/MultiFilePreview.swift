@@ -263,11 +263,19 @@ struct MultiFilePreview: View {
     private func isAudioSlot(_ slot: Slot) -> Bool {
         if let mime = slot.mimeType, isAudioMIME(mime) { return true }
         if let url = slot.url, url.pathExtension.lowercased() == "m4a" { return true }
+        // If it's the primary slot of an item that has at least one audio attachment, it is the master mix.
+        if slot.isPrimary, let attachments = item.files, attachments.contains(where: {
+            if let mime = $0.mimeType, isAudioMIME(mime) { return true }
+            return false
+        }) {
+            return true
+        }
         // Fallback for blobs: if the item itself is an audio type or the filename/caption
         // implies audio, treat it as such.
         if item.type == .file && (item.mimeType?.hasPrefix("audio/") == true) { return true }
         if let caption = slot.caption?.lowercased(),
-           (caption.contains("raw") || caption.contains("track") || caption.contains("phone") || caption.contains("watch")) {
+           (caption.contains("raw") || caption.contains("track") || caption.contains("phone") ||
+            caption.contains("watch") || caption.contains("remix") || caption.contains("master")) {
             return true
         }
         return false
