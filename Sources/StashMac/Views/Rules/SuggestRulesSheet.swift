@@ -317,7 +317,7 @@ private struct SuggestionCard: View {
                                 store.selectItemByID(id)
                             } label: {
                                 HStack(spacing: 6) {
-                                    Image(systemName: item.type.icon)
+                                    Image(systemName: item.iconName)
                                         .foregroundStyle(.secondary)
                                         .font(.caption)
                                     Text(item.title)

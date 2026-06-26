@@ -38,14 +38,6 @@ struct InlineEditField: View {
     /// Called when the user presses Escape.
     var onCancel: () -> Void
 
-    /// Reference-typed holder for our SwiftUI bounds in window
-    /// coordinates. The frame reader writes here synchronously from
-    /// `viewDidMoveToWindow` / `layout()`, so the click-outside monitor
-    /// always reads the latest value at click time — no async lag, no
-    /// race with fast click-offs that didn't make an edit.
-    @State private var frameHolder = FieldFrameHolder()
-    @State private var clickOutsideMonitor: Any?
-
     var body: some View {
         ZStack(alignment: .trailing) {
             FilterField(
@@ -90,100 +82,62 @@ struct InlineEditField: View {
                 .help("Clear")
             }
         }
-        .background(WindowFrameReader(holder: frameHolder))
-        .onAppear { installClickOutsideMonitor() }
-        .onDisappear { removeClickOutsideMonitor() }
-    }
-
-    private func installClickOutsideMonitor() {
-        guard clickOutsideMonitor == nil else { return }
-        // Capture the holder reference once; the closure reads its
-        // mutable `frame` property at click time, so layout updates that
-        // happen between install and click are picked up.
-        let holder = frameHolder
-        clickOutsideMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { event in
-            guard event.clickCount == 1 else { return event }
-            guard let window = event.window else { return event }
-            let frame = holder.frame
-            // Frame not yet known (probe view hasn't laid out). The
-            // ProbeView's viewDidMoveToWindow runs synchronously when
-            // the view enters the window, so this should already be
-            // populated by the time any click reaches us. If somehow
-            // it's still zero, skip — better than dismissing on the
-            // user's first click into the field.
-            guard frame != .zero else { return event }
-
-            if !frame.contains(event.locationInWindow) {
-                // Defer to the next tick so the click reaches its real
-                // target (button, row selection, …) first. Resigning
-                // first responder fires the field editor's
-                // textDidEndEditing → onEndEditing → onCommit.
-                DispatchQueue.main.async {
-                    window.makeFirstResponder(nil)
-                }
-            }
-            return event
-        }
-    }
-
-    private func removeClickOutsideMonitor() {
-        if let m = clickOutsideMonitor {
-            NSEvent.removeMonitor(m)
-            clickOutsideMonitor = nil
-        }
+        .background(ClickOutsideMonitorView())
     }
 }
 
-/// Reference-type frame holder. Keeping the frame in a class instead of
-/// `@State<NSRect>` lets `WindowFrameReader.ProbeView` write to it
-/// synchronously from layout callbacks (no SwiftUI state mutation), and
-/// lets the click-outside monitor read the live value via the captured
-/// reference.
-private final class FieldFrameHolder {
-    var frame: NSRect = .zero
-}
-
-/// NSViewRepresentable that writes its frame (in window coordinates) to
-/// a holder synchronously from layout callbacks. The holder is a class,
-/// so we can mutate it from layout without violating SwiftUI's "no state
-/// updates during view update" invariant — we're updating a class
-/// property, not a SwiftUI @State.
-private struct WindowFrameReader: NSViewRepresentable {
-    let holder: FieldFrameHolder
-
-    func makeNSView(context: Context) -> ProbeView {
-        let v = ProbeView()
-        v.holder = holder
-        return v
+/// A background view that installs a local NSEvent mouse-down monitor.
+/// If a click happens outside the view's bounds, it resigns the first responder.
+private struct ClickOutsideMonitorView: NSViewRepresentable {
+    func makeNSView(context: Context) -> MonitorView {
+        return MonitorView()
     }
 
-    func updateNSView(_ nsView: ProbeView, context: Context) {
-        nsView.holder = holder
-    }
+    func updateNSView(_ nsView: MonitorView, context: Context) {}
 
-    final class ProbeView: NSView {
-        weak var holder: FieldFrameHolder?
-
-        override func layout() {
-            super.layout()
-            reportFrame()
-        }
+    final class MonitorView: NSView {
+        private var clickOutsideMonitor: Any?
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
-            reportFrame()
+            if self.window != nil {
+                setupMonitor()
+            } else {
+                teardownMonitor()
+            }
         }
 
-        override var frame: NSRect {
-            didSet { reportFrame() }
+        private func setupMonitor() {
+            guard let window = self.window, clickOutsideMonitor == nil else { return }
+            clickOutsideMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+                guard let self = self else { return event }
+                guard event.clickCount == 1 else { return event }
+                // Convert self.bounds to window coordinates:
+                let frameInWindow = self.convert(self.bounds, to: nil)
+                if !frameInWindow.contains(event.locationInWindow) {
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self = self, let w = self.window else { return }
+                        w.makeFirstResponder(nil)
+                    }
+                }
+                return event
+            }
         }
 
-        private func reportFrame() {
-            // Convert from superview coords (where self.frame lives) to
-            // window coords (`to: nil`). The click-outside monitor reads
-            // this and compares against NSEvent.locationInWindow.
-            guard let inWindow = superview?.convert(self.frame, to: nil) else { return }
-            holder?.frame = inWindow
+        private func teardownMonitor() {
+            if let monitor = clickOutsideMonitor {
+                NSEvent.removeMonitor(monitor)
+                clickOutsideMonitor = nil
+            }
+        }
+
+        override func removeFromSuperview() {
+            teardownMonitor()
+            super.removeFromSuperview()
+        }
+
+        deinit {
+            teardownMonitor()
         }
     }
 }

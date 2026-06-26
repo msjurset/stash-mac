@@ -95,6 +95,15 @@ struct StashItem: Codable, Identifiable, Hashable {
         return String(format: "%.1f %@", value, units[unitIndex])
     }
 
+    /// Dynamic icon based on the item type and content characteristics.
+    /// Audio files get a musical note icon.
+    var iconName: String {
+        if type == .file, let mime = mimeType, isAudioMIME(mime) {
+            return "music.note"
+        }
+        return type.icon
+    }
+
     /// True if this item represents a multi-source audio capture 
     /// (containing a master track plus one or more raw tracks).
     var isMultiSourceAudio: Bool {

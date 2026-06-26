@@ -443,7 +443,7 @@ struct InboxView: View {
         let extended = extendedSelection.contains(sel)
         let active = cursor || extended
         HStack(alignment: .top, spacing: 10) {
-            Image(systemName: item.type.icon)
+            Image(systemName: item.iconName)
                 .frame(width: 44, height: 44)
                 .foregroundStyle(active ? .white : .secondary)
             VStack(alignment: .leading, spacing: 2) {

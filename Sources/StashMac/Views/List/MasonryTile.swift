@@ -75,7 +75,7 @@ struct MasonryTile: View {
     }
 
     private var typeBadge: some View {
-        Image(systemName: item.type.icon)
+        Image(systemName: item.iconName)
             .font(.caption2)
             .foregroundStyle(.white)
             .padding(4)

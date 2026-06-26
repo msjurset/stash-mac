@@ -132,7 +132,7 @@ struct ItemRow: View {
     /// exists so the affordance is obvious.
     @ViewBuilder
     private var leading: some View {
-        Image(systemName: item.type.icon)
+        Image(systemName: item.iconName)
             .foregroundStyle(isUnseen ? .primary : .secondary)
             .frame(width: 20)
             .contentShape(Rectangle())

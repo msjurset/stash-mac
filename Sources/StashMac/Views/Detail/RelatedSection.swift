@@ -69,7 +69,7 @@ struct RelatedSection: View {
                 store.selectItemByID(item.id, revealInList: true)
             } label: {
                 HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: item.type.icon)
+                    Image(systemName: item.iconName)
                         .frame(width: 18)
                         .foregroundStyle(.secondary)
                     VStack(alignment: .leading, spacing: 1) {

@@ -23,7 +23,7 @@ struct LinkItemSheet: View {
             if targetItemID != nil, let target = selectedTarget {
                 // Fixed-target mode (from multi-select context menu)
                 HStack {
-                    Image(systemName: target.type.icon)
+                    Image(systemName: target.iconName)
                         .foregroundStyle(.secondary)
                     VStack(alignment: .leading) {
                         Text(target.title)
@@ -53,7 +53,7 @@ struct LinkItemSheet: View {
                         set: { id in selectedTarget = searchResults.first { $0.id == id } }
                     )) { item in
                         HStack {
-                            Image(systemName: item.type.icon)
+                            Image(systemName: item.iconName)
                                 .foregroundStyle(.secondary)
                             VStack(alignment: .leading) {
                                 Text(item.title)

@@ -46,7 +46,7 @@ struct ItemDetailView: View {
                     // Header
                     VStack(alignment: .leading, spacing: 16) {
                         HStack {
-                            Image(systemName: item.type.icon)
+                            Image(systemName: item.iconName)
                                 .font(.title2)
                                 .foregroundStyle(.secondary)
                             VStack(alignment: .leading) {

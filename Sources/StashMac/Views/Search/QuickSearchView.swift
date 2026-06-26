@@ -459,7 +459,7 @@ struct QuickSearchView: View {
             commitResult(item)
         } label: {
             HStack {
-                Image(systemName: item.type.icon)
+                Image(systemName: item.iconName)
                     .foregroundStyle(secondary)
                     .frame(width: 20)
                 VStack(alignment: .leading) {
