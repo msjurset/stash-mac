@@ -1316,17 +1316,40 @@ struct RemixSettingsView: View {
     
     var body: some View {
         VStack(spacing: 16) {
-            Text("Remix Options")
-                .font(.headline)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack {
+                Text("Remix Options")
+                    .font(.headline)
+                Spacer()
+                ContextualHelpButton(topic: .audioXRay)
+            }
+            .frame(maxWidth: .infinity)
             
             Form {
-                Picker("Mix Mode", selection: $mixMode) {
-                    Text("Adaptive Switcher").tag(AudioDSPAligner.MixMode.adaptive)
-                    Text("Simple Linear Mix").tag(AudioDSPAligner.MixMode.linear)
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Picker("Mix Mode", selection: $mixMode) {
+                            Text("Adaptive Switcher").tag(AudioDSPAligner.MixMode.adaptive)
+                            Text("Simple Linear Mix").tag(AudioDSPAligner.MixMode.linear)
+                        }
+                        .pickerStyle(.segmented)
+                        .disabled(selectedTrackCount != 2)
+                        
+                        ContextualHelpButton(topic: .audioXRay)
+                    }
+                    
+                    if selectedTrackCount == 2 {
+                        if mixMode == .adaptive {
+                            Text("Adaptive Switcher: Dynamically shifts focus between speakers in 20ms windows and gates silent channels.")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text("Simple Linear Mix: Combines all selected tracks concurrently at constant relative volume levels.")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 }
-                .pickerStyle(.segmented)
-                .disabled(selectedTrackCount != 2)
+                .padding(.bottom, 4)
                 
                 if selectedTrackCount != 2 {
                     Text("Adaptive Switcher requires exactly 2 selected tracks. Using simple linear mix.")
@@ -1338,9 +1361,10 @@ struct RemixSettingsView: View {
                 if mixMode == .adaptive {
                     Section {
                         VStack(alignment: .leading, spacing: 4) {
-                            HStack {
+                            HStack(spacing: 4) {
                                 Text("Noise Floor Gate:")
                                     .font(.caption.bold())
+                                ContextualHelpButton(topic: .audioXRay)
                                 Spacer()
                                 Text(String(format: "%.3f", noiseFloorGate))
                                     .font(.system(.caption, design: .monospaced))
@@ -1354,9 +1378,10 @@ struct RemixSettingsView: View {
                         .padding(.vertical, 4)
                         
                         VStack(alignment: .leading, spacing: 4) {
-                            HStack {
+                            HStack(spacing: 4) {
                                 Text("Voice Threshold:")
                                     .font(.caption.bold())
+                                ContextualHelpButton(topic: .audioXRay)
                                 Spacer()
                                 Text(String(format: "%.3f", voiceThreshold))
                                     .font(.system(.caption, design: .monospaced))
@@ -1370,9 +1395,10 @@ struct RemixSettingsView: View {
                         .padding(.vertical, 4)
                         
                         VStack(alignment: .leading, spacing: 4) {
-                            HStack {
+                            HStack(spacing: 4) {
                                 Text("Gate Hold Time:")
                                     .font(.caption.bold())
+                                ContextualHelpButton(topic: .audioXRay)
                                 Spacer()
                                 Text("\(Int(gateHoldTimeMs)) ms")
                                     .font(.system(.caption, design: .monospaced))
@@ -1387,13 +1413,19 @@ struct RemixSettingsView: View {
                     }
                 }
                 
-                Toggle("Speech Enhancement (EQ)", isOn: $enhanceSpeech)
-                    .toggleStyle(.checkbox)
-                    .font(.caption.bold())
-                    .help("High-pass filtering and vocal range boost")
+                HStack {
+                    Toggle("Speech Enhancement (EQ)", isOn: $enhanceSpeech)
+                        .toggleStyle(.checkbox)
+                        .font(.caption.bold())
+                        .help("High-pass filtering and vocal range boost")
+                    
+                    Spacer()
+                    
+                    ContextualHelpButton(topic: .audioXRay)
+                }
             }
             .formStyle(.grouped)
-            .frame(height: mixMode == .adaptive ? 330 : 120)
+            .frame(height: mixMode == .adaptive ? 395 : 155)
             
             HStack {
                 Spacer()
@@ -1404,7 +1436,7 @@ struct RemixSettingsView: View {
             }
         }
         .padding()
-        .frame(width: 320)
+        .frame(width: 340)
     }
 }
 

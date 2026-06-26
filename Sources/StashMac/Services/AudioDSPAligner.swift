@@ -573,12 +573,25 @@ enum AudioDSPAligner {
         let file = try AVAudioFile(forReading: url)
         let format = file.processingFormat
         let nativeRate = format.sampleRate
-        // Cap frame capacity to avoid loading massive files into RAM
-        let fileLengthDouble = Double(file.length)
-        let durationFrames = maxDuration * nativeRate
-        let minFrames = min(fileLengthDouble, durationFrames)
-        let safeFrames = min(minFrames, Double(UInt32.max))
-        let frameCount = AVAudioFrameCount(safeFrames)
+        // Cap frame capacity to avoid loading massive files into RAM and ensure safe UInt32 conversions
+        let fileLength = file.length
+        let maxSupportedFrames = Int64(Int32.max) // Cap at ~2.1B frames to avoid OOM
+        
+        let limitFrames: Int64
+        if maxDuration.isFinite && maxDuration > 0 {
+            let durationFramesDouble = maxDuration * nativeRate
+            if durationFramesDouble >= Double(maxSupportedFrames) {
+                limitFrames = maxSupportedFrames
+            } else if durationFramesDouble <= 0 || durationFramesDouble.isNaN {
+                limitFrames = 0
+            } else {
+                limitFrames = Int64(durationFramesDouble)
+            }
+        } else {
+            limitFrames = maxSupportedFrames
+        }
+        
+        let frameCount = AVAudioFrameCount(max(0, min(fileLength, limitFrames)))
         guard frameCount > 0 else {
             return AudioPCMData(samples: [], sampleRate: nativeRate)
         }

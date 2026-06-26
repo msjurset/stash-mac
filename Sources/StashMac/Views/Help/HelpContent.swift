@@ -30,6 +30,7 @@ enum HelpTopic: String, CaseIterable, Identifiable, Codable, Hashable {
     case moments = "Moments"
     case vimMode = "Vim & Slash Commands"
     case keyboard = "Keyboard Shortcuts"
+    case audioXRay = "Audio X-Ray & Remixing"
 
     var id: String { rawValue }
 
@@ -54,6 +55,7 @@ enum HelpTopic: String, CaseIterable, Identifiable, Codable, Hashable {
         case .moments: return "calendar.badge.clock"
         case .vimMode: return "keyboard.fill"
         case .keyboard: return "keyboard"
+        case .audioXRay: return "waveform.path.ecg"
         }
     }
 
@@ -630,6 +632,24 @@ enum HelpTopic: String, CaseIterable, Identifiable, Codable, Hashable {
                     ["Return", "Submit / confirm"],
                     ["Escape", "Cancel / close"],
                 ]),
+            ]
+            
+        case .audioXRay:
+            return [
+                .paragraph("The Audio X-Ray screen is a specialized view for browsing, aligning, and remixing multi-track audio recordings (such as synchronized phone and watch mic captures)."),
+                .heading("Mix Modes"),
+                .subheading("Adaptive Switcher"),
+                .paragraph("Optimized for 2-track audio captures. It dynamically analyzes signal energy in short 20-millisecond windows and automatically cross-fades focus to whichever microphone is receiving active speech. This suppresses microphone bleed, ambient noise, and room echo on the inactive channel."),
+                .subheading("Simple Linear Mix"),
+                .paragraph("Combines all selected tracks concurrently at constant relative volume levels. This behaves like a traditional audio mixer console and does not gate or drop any channel, making it ideal for more than 2 tracks or standard multi-track sums."),
+                .heading("Remix Parameters"),
+                .bullet([
+                    "Noise Floor Gate — Gating threshold. Any audio energy below this level is attenuated to filter out background hum.",
+                    "Voice Threshold — Speech activation threshold. Volume levels above this trigger the switcher's focus to that track.",
+                    "Gate Hold Time — Delay buffer. The minimum duration to keep a channel open after speech ends, avoiding word-chopping during natural pauses.",
+                ]),
+                .heading("Speech Enhancement (EQ)"),
+                .paragraph("When enabled, Stash applies high-pass filtering (120 Hz) to eliminate low-frequency rumble, and a parametric band boost (+4 dB at 2.5 kHz) to enhance vocal range clarity and dialogue intelligibility."),
             ]
         }
     }
