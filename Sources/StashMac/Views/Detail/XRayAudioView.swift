@@ -403,12 +403,16 @@ struct XRayAudioView: View {
                             }
                             .contentShape(Rectangle())
                             .onContinuousHover { phase in
-                                DispatchQueue.main.async {
-                                    switch phase {
-                                    case .active(let location):
+                                switch phase {
+                                case .active(let location):
+                                    if abs(hoverState.cursorPosition - location.x) > 0.5 {
                                         hoverState.cursorPosition = location.x
+                                    }
+                                    if !hoverState.isHovering {
                                         hoverState.isHovering = true
-                                    case .ended:
+                                    }
+                                case .ended:
+                                    if hoverState.isHovering {
                                         hoverState.isHovering = false
                                     }
                                 }
