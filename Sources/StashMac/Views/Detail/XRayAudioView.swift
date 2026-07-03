@@ -1580,8 +1580,18 @@ struct RemixSettingsView: View {
     }
 }
 
-struct XRayTrack: Identifiable {
-    enum Role { case master, source, composite }
+struct XRayTrack: Identifiable, Equatable {
+    static func == (lhs: XRayTrack, rhs: XRayTrack) -> Bool {
+        lhs.id == rhs.id &&
+        lhs.label == rhs.label &&
+        lhs.role == rhs.role &&
+        lhs.position == rhs.position &&
+        lhs.color == rhs.color &&
+        lhs.isMissing == rhs.isMissing &&
+        lhs.isSelected == rhs.isSelected &&
+        lhs.volume == rhs.volume
+    }
+    enum Role: Equatable { case master, source, composite }
     var id = UUID()
     var label: String
     let url: URL?
@@ -2055,7 +2065,7 @@ private struct WaveformTrackView: View {
             } else {
                 let currentCursorPosition = enableLens ? hoverState.cursorPosition : -1000
                 let currentIsHovering = enableLens ? hoverState.isHovering : false
-                Canvas(rendersAsynchronously: true) { context, size in
+                Canvas(rendersAsynchronously: false) { context, size in
                     let W = size.width.isFinite ? Swift.min(size.width, 10000) : 10000
                     let H = size.height.isFinite ? Swift.min(size.height, 10000) : 10000
                     if W <= 0 || H <= 0 { return }
@@ -2151,7 +2161,7 @@ private struct TimelineRulerView: View {
     
     var body: some View {
         let rulerWidth = contentWidth - 16
-        Canvas(rendersAsynchronously: true) { context, size in
+        Canvas(rendersAsynchronously: false) { context, size in
             let W = size.width.isFinite ? Swift.min(size.width, 10000) : 10000
             let H = size.height.isFinite ? Swift.min(size.height, 10000) : 10000
             if W <= 0 || H <= 0 { return }

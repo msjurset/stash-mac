@@ -96,9 +96,7 @@ struct ClickCatcher: NSViewRepresentable {
                 if event.clickCount == 2 && downInside && inBounds {
                     pendingSingle?.cancel()
                     pendingSingle = nil
-                    downInside = false
                     didDrag = false
-                    DispatchQueue.main.async { self.onDoubleClick() }
                     return nil
                 }
                 if event.clickCount == 1 && inBounds {
@@ -137,8 +135,11 @@ struct ClickCatcher: NSViewRepresentable {
 
             case .leftMouseUp:
                 if event.clickCount == 2 && downInside {
+                    downInside = false
+                    DispatchQueue.main.async { self.onDoubleClick() }
                     return nil
                 }
+                downInside = false
                 return event
 
             default:
