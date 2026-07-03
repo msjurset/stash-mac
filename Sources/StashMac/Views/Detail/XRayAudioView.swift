@@ -74,7 +74,7 @@ struct XRayAudioView: View {
     @State private var showRemixSettings = false
     
     // Caption Editing State
-    @State private var editingTrackID: UUID? = nil
+    @State private var editingTrackTarget: String? = nil
     @State private var draftCaption: String = ""
     @State private var enhanceSpeech = false
     @State private var showSpeakerMarkers = true
@@ -196,7 +196,7 @@ struct XRayAudioView: View {
                                             currentTimeRange: currentTimeRange,
                                             dragStart: $dragStart,
                                             dragCurrent: $dragCurrent,
-                                            editingTrackID: $editingTrackID,
+                                            editingTrackTarget: $editingTrackTarget,
                                             draftCaption: $draftCaption,
                                             commitCaptionEdit: commitCaptionEdit,
                                             onSeekPercent: { seekToPercent($0) },
@@ -226,7 +226,7 @@ struct XRayAudioView: View {
                                             currentTimeRange: currentTimeRange,
                                             dragStart: $dragStart,
                                             dragCurrent: $dragCurrent,
-                                            editingTrackID: $editingTrackID,
+                                            editingTrackTarget: $editingTrackTarget,
                                             draftCaption: $draftCaption,
                                             commitCaptionEdit: commitCaptionEdit,
                                             onSeekPercent: { seekToPercent($0) },
@@ -929,7 +929,7 @@ struct XRayAudioView: View {
                 }
             }
         }
-        editingTrackID = nil
+        editingTrackTarget = nil
     }
     
     private func setupPlayers() {
@@ -1607,7 +1607,7 @@ private struct CompositeWaveformView: View {
     
     @Binding var dragStart: CGPoint?
     @Binding var dragCurrent: CGPoint?
-    @Binding var editingTrackID: UUID?
+    @Binding var editingTrackTarget: String?
     @Binding var draftCaption: String
     let commitCaptionEdit: (UUID) -> Void
     let onSeekPercent: (Double) -> Void
@@ -1921,7 +1921,7 @@ private struct CompositeWaveformView: View {
             } else {
                 colorCircle(color: color, trackID: trackID)
             }
-            if editingTrackID == trackID {
+            if editingTrackTarget == "legend:\(trackID.uuidString)" {
                 InlineEditField(
                     text: $draftCaption,
                     placeholder: "track name…",
@@ -1931,7 +1931,7 @@ private struct CompositeWaveformView: View {
                         commitCaptionEdit(trackID)
                     },
                     onCancel: {
-                        editingTrackID = nil
+                        editingTrackTarget = nil
                     }
                 )
                 .frame(width: 120, height: 20)
@@ -1943,7 +1943,7 @@ private struct CompositeWaveformView: View {
                     .onTapGesture(count: 2) {
                         if !isMaster {
                             draftCaption = label
-                            editingTrackID = trackID
+                            editingTrackTarget = "legend:\(trackID.uuidString)"
                         }
                     }
             }
@@ -1965,7 +1965,7 @@ private struct WaveformTrackView: View {
     
     @Binding var dragStart: CGPoint?
     @Binding var dragCurrent: CGPoint?
-    @Binding var editingTrackID: UUID?
+    @Binding var editingTrackTarget: String?
     @Binding var draftCaption: String
     let commitCaptionEdit: (UUID) -> Void
     let onSeekPercent: (Double) -> Void
@@ -1981,7 +1981,7 @@ private struct WaveformTrackView: View {
                     .labelsHidden()
                     .controlSize(.small)
                 
-                if editingTrackID == track.id {
+                if editingTrackTarget == "waveform:\(track.id.uuidString)" {
                     InlineEditField(
                         text: $draftCaption,
                         placeholder: "track name…",
@@ -1991,7 +1991,7 @@ private struct WaveformTrackView: View {
                             commitCaptionEdit(track.id)
                         },
                         onCancel: {
-                            editingTrackID = nil
+                            editingTrackTarget = nil
                         }
                     )
                     .frame(width: 120, height: 20)
@@ -2002,7 +2002,7 @@ private struct WaveformTrackView: View {
                         .onTapGesture(count: 2) {
                             if track.role != .master {
                                 draftCaption = track.label
-                                editingTrackID = track.id
+                                editingTrackTarget = "waveform:\(track.id.uuidString)"
                             }
                         }
                 }
