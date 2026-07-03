@@ -95,6 +95,10 @@ private struct ClickOutsideMonitorView: NSViewRepresentable {
 
     func updateNSView(_ nsView: MonitorView, context: Context) {}
 
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: MonitorView, context: Context) -> CGSize? {
+        proposal.replacingUnspecifiedDimensions(by: CGSize(width: 10, height: 10))
+    }
+
     final class MonitorView: NSView {
         nonisolated(unsafe) private var clickOutsideMonitor: Any?
 

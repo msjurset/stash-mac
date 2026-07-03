@@ -402,21 +402,22 @@ struct XRayAudioView: View {
                                 )
                             }
                             .contentShape(Rectangle())
-                            .onContinuousHover { phase in
-                                switch phase {
-                                case .active(let location):
-                                    if abs(hoverState.cursorPosition - location.x) > 0.5 {
-                                        hoverState.cursorPosition = location.x
-                                    }
-                                    if !hoverState.isHovering {
-                                        hoverState.isHovering = true
-                                    }
-                                case .ended:
-                                    if hoverState.isHovering {
-                                        hoverState.isHovering = false
+                            .background(
+                                HoverTrackingView { location in
+                                    if let loc = location {
+                                        if abs(hoverState.cursorPosition - loc.x) > 0.5 {
+                                            hoverState.cursorPosition = loc.x
+                                        }
+                                        if !hoverState.isHovering {
+                                            hoverState.isHovering = true
+                                        }
+                                    } else {
+                                        if hoverState.isHovering {
+                                            hoverState.isHovering = false
+                                        }
                                     }
                                 }
-                            }
+                            )
                         }
                         .background(
                             GeometryReader { proxy in
@@ -1689,7 +1690,7 @@ private struct CompositeWaveformView: View {
                         var bottomPath = Path()
                         var firstPath = true
                         
-                        for x in stride(from: 0, to: W, by: 1.0) {
+                        for x in stride(from: 0, to: W, by: 3.0) {
                             let tNorm = xToTNorm(x)
                             let currentSec = startOffset + (tNorm * displayDuration)
                             let mIdx = safeSampleIndex(currentSec: currentSec, totalDur: totalDur, count: masterSamples.count)
@@ -1707,8 +1708,6 @@ private struct CompositeWaveformView: View {
                                 topPath.addLine(to: topPt)
                                 bottomPath.addLine(to: botPt)
                             }
-                            
-                            if mVal < 0.01 { continue }
                             
                             let normalizedMaster = mVal / masterMax
                             var bestMatchIndex = fallbackIndex
@@ -1729,7 +1728,7 @@ private struct CompositeWaveformView: View {
                                 }
                             }
                             
-                            let rect = CGRect(x: x, y: midY - (barH/2), width: 1, height: max(1, barH))
+                            let rect = CGRect(x: x, y: midY - (barH/2), width: 3, height: max(1, barH))
                             rectsByIndex[bestMatchIndex].append(rect)
                         }
                         
@@ -1940,12 +1939,12 @@ private struct CompositeWaveformView: View {
                     .font(.system(size: 9, weight: .bold))
                     .foregroundStyle(isMissing ? .secondary : color.wrappedValue)
                     .strikethrough(isMissing)
-                    .onTapGesture(count: 2) {
+                    .background(ClickCatcher(onDoubleClick: {
                         if !isMaster {
                             draftCaption = label
                             editingTrackTarget = "legend:\(trackID.uuidString)"
                         }
-                    }
+                    }))
             }
         }
         .padding(.vertical, 2)
@@ -1999,12 +1998,12 @@ private struct WaveformTrackView: View {
                     Text(track.label)
                         .font(.system(size: 10, weight: .black))
                         .foregroundStyle(track.isMissing ? .secondary : track.color)
-                        .onTapGesture(count: 2) {
+                        .background(ClickCatcher(onDoubleClick: {
                             if track.role != .master {
                                 draftCaption = track.label
                                 editingTrackTarget = "waveform:\(track.id.uuidString)"
                             }
-                        }
+                        }))
                 }
                 if !track.isMissing {
                     HStack(spacing: 4) {
@@ -2082,13 +2081,13 @@ private struct WaveformTrackView: View {
                     var outsideRects: [CGRect] = []
                     insideRects.reserveCapacity(Int(W))
                     outsideRects.reserveCapacity(Int(W))
-                    for x in stride(from: 0, to: W, by: 1.0) {
+                    for x in stride(from: 0, to: W, by: 3.0) {
                         let tNorm = xToTNorm(x)
                         let currentSec = startOffset + (tNorm * displayDuration)
                         let sampleIndex = safeSampleIndex(currentSec: currentSec, totalDur: totalDur, count: samples.count)
                         let sample = samples[sampleIndex]
                         let barHeight = CGFloat(sample) * H * 0.7
-                        let rect = CGRect(x: x, y: midY - (barHeight / 2), width: 1, height: max(1, barHeight))
+                        let rect = CGRect(x: x, y: midY - (barHeight / 2), width: 3, height: max(1, barHeight))
                         let isInLens = currentIsHovering && abs(x - xc) < wl/2
                         if isInLens {
                             insideRects.append(rect)
