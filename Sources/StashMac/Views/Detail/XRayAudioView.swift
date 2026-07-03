@@ -1,6 +1,12 @@
 import SwiftUI
 import AVFoundation
 
+@Observable
+final class XRayHoverState {
+    var cursorPosition: CGFloat = 0
+    var isHovering: Bool = false
+}
+
 struct SpeakerChangeEvent: Identifiable {
     var id: String { "\(speakerID)-\(time)" }
     let speakerID: String
@@ -17,8 +23,7 @@ struct XRayAudioView: View {
     @Environment(StashStore.self) private var store
 
     @State private var tracks: [XRayTrack] = []
-    @State private var cursorPosition: CGFloat = 0 
-    @State private var isHovering = false
+    @State private var hoverState = XRayHoverState()
     @State private var zoomLevel: Double = 0 
     @State private var containerWidth: CGFloat = 800
     @State private var loadingStatus: String = "Initializing analyzer..."
@@ -174,8 +179,7 @@ struct XRayAudioView: View {
                                         contentWidth: contentWidth,
                                         currentTimeRange: currentTimeRange,
                                         totalDuration: totalFileDuration,
-                                        cursorPosition: $cursorPosition,
-                                        isHovering: $isHovering,
+                                        hoverState: hoverState,
                                         onSeekPercent: { seekToPercent($0) }
                                     )
                                     .padding(.horizontal, 8)
@@ -185,10 +189,9 @@ struct XRayAudioView: View {
                                         CompositeWaveformView(
                                             composite: composite,
                                             tracks: $tracks,
-                                            cursorPosition: $cursorPosition,
+                                            hoverState: hoverState,
                                             lensWidth: CGFloat(lensWidth),
                                             magnification: CGFloat(magnification),
-                                            isHovering: $isHovering,
                                             contentWidth: contentWidth,
                                             currentTimeRange: currentTimeRange,
                                             dragStart: $dragStart,
@@ -216,10 +219,9 @@ struct XRayAudioView: View {
                                     ForEach($tracks) { $track in
                                         WaveformTrackView(
                                             track: $track,
-                                            cursorPosition: $cursorPosition,
+                                            hoverState: hoverState,
                                             lensWidth: CGFloat(lensWidth),
                                             magnification: CGFloat(magnification),
-                                            isHovering: $isHovering,
                                             contentWidth: contentWidth,
                                             currentTimeRange: currentTimeRange,
                                             dragStart: $dragStart,
@@ -392,8 +394,7 @@ struct XRayAudioView: View {
                                 )
                                 
                                 HoverCursorOverlay(
-                                    cursorPosition: $cursorPosition,
-                                    isHovering: $isHovering,
+                                    hoverState: hoverState,
                                     dragStart: $dragStart,
                                     contentWidth: contentWidth,
                                     tracks: tracks,
@@ -405,10 +406,10 @@ struct XRayAudioView: View {
                                 DispatchQueue.main.async {
                                     switch phase {
                                     case .active(let location):
-                                        cursorPosition = location.x
-                                        isHovering = true
+                                        hoverState.cursorPosition = location.x
+                                        hoverState.isHovering = true
                                     case .ended:
-                                        isHovering = false
+                                        hoverState.isHovering = false
                                     }
                                 }
                             }
@@ -1008,7 +1009,7 @@ struct XRayAudioView: View {
     private func cursorTimeToSeconds() -> Double {
         guard !tracks.isEmpty else { return 0 }
         let totalDur = tracks.map(\.duration).max() ?? 1.0
-        let percent = Double(cursorPosition / contentWidth)
+        let percent = Double(hoverState.cursorPosition / contentWidth)
         let startOffset = currentTimeRange?.start.seconds ?? 0
         let displayDuration = currentTimeRange?.duration.seconds ?? totalDur
         return startOffset + (percent * displayDuration)
@@ -1594,10 +1595,9 @@ struct XRayTrack: Identifiable {
 private struct CompositeWaveformView: View {
     let composite: XRayTrack
     @Binding var tracks: [XRayTrack] 
-    @Binding var cursorPosition: CGFloat
+    let hoverState: XRayHoverState
     let lensWidth: CGFloat
     let magnification: CGFloat
-    @Binding var isHovering: Bool
     let contentWidth: CGFloat
     let currentTimeRange: CMTimeRange?
     
@@ -1633,8 +1633,8 @@ private struct CompositeWaveformView: View {
             }
             .padding(.horizontal, 8)
             .padding(.top, 4)
-            let currentCursorPosition = cursorPosition
-            let currentIsHovering = enableLens ? isHovering : false
+            let currentCursorPosition = hoverState.cursorPosition
+            let currentIsHovering = enableLens ? hoverState.isHovering : false
             GeometryReader { geometry in
                 ZStack(alignment: .topLeading) {
                     Canvas { context, size in
@@ -1675,6 +1675,8 @@ private struct CompositeWaveformView: View {
                         // 2. Batch drawing by color to reduce draw calls from W (1000+) to ~3-4
                         var rectsByColor: [Color: [CGRect]] = [:]
                         
+                        let sourceSamples = sources.map { $0.samples }
+                        
                         for x in stride(from: 0, to: W, by: 1) {
                             let tNorm = xToTNorm(x)
                             let currentSec = startOffset + (tNorm * displayDuration)
@@ -1687,8 +1689,8 @@ private struct CompositeWaveformView: View {
                             var bestMatchColor: Color = master.color.opacity(0.3)
                             var minDiff: Float = 1.0
                             
-                            for (idx, source) in sources.enumerated() {
-                                let sSamples = source.samples
+                            for idx in 0..<sources.count {
+                                let sSamples = sourceSamples[idx]
                                 guard !sSamples.isEmpty else { continue }
                                 let sIdx = safeSampleIndex(currentSec: currentSec, totalDur: totalDur, count: sSamples.count)
                                 let normalizedSource = sSamples[sIdx] / sourceMaxes[idx]
@@ -1697,7 +1699,7 @@ private struct CompositeWaveformView: View {
                                 if diff < minDiff {
                                     minDiff = diff
                                     if diff < 0.3 { // More inclusive threshold with normalized values
-                                        bestMatchColor = source.color
+                                        bestMatchColor = sources[idx].color
                                     }
                                 }
                             }
@@ -1766,8 +1768,8 @@ private struct CompositeWaveformView: View {
     
     @ViewBuilder
     private func speakerMarkersOverlay(height: CGFloat) -> some View {
-        let currentCursorPosition = cursorPosition
-        let currentIsHovering = enableLens ? isHovering : false
+        let currentCursorPosition = hoverState.cursorPosition
+        let currentIsHovering = enableLens ? hoverState.isHovering : false
         let wl = lensWidth
         let M = magnification > 0.001 ? magnification : 1.0
         let totalDur = composite.duration
@@ -1936,10 +1938,9 @@ private struct CompositeWaveformView: View {
 
 private struct WaveformTrackView: View {
     @Binding var track: XRayTrack
-    @Binding var cursorPosition: CGFloat
+    let hoverState: XRayHoverState
     let lensWidth: CGFloat
     let magnification: CGFloat
-    @Binding var isHovering: Bool
     let contentWidth: CGFloat
     let currentTimeRange: CMTimeRange?
     
@@ -2030,8 +2031,8 @@ private struct WaveformTrackView: View {
                             .foregroundStyle(.secondary)
                     )
             } else {
-                let currentCursorPosition = cursorPosition
-                let currentIsHovering = enableLens ? isHovering : false
+                let currentCursorPosition = hoverState.cursorPosition
+                let currentIsHovering = enableLens ? hoverState.isHovering : false
                 Canvas(rendersAsynchronously: true) { context, size in
                     let W = size.width.isFinite ? Swift.min(size.width, 10000) : 10000
                     let H = size.height.isFinite ? Swift.min(size.height, 10000) : 10000
@@ -2119,8 +2120,7 @@ private struct TimelineRulerView: View {
     let contentWidth: CGFloat
     let currentTimeRange: CMTimeRange?
     let totalDuration: Double
-    @Binding var cursorPosition: CGFloat
-    @Binding var isHovering: Bool
+    let hoverState: XRayHoverState
     let onSeekPercent: (Double) -> Void
     
     var body: some View {
@@ -2225,8 +2225,7 @@ private struct SelectionHighlightOverlay: View {
 }
 
 private struct HoverCursorOverlay: View {
-    @Binding var cursorPosition: CGFloat
-    @Binding var isHovering: Bool
+    let hoverState: XRayHoverState
     @Binding var dragStart: CGPoint?
     let contentWidth: CGFloat
     let tracks: [XRayTrack]
@@ -2235,7 +2234,7 @@ private struct HoverCursorOverlay: View {
     private func cursorTimeToSeconds() -> Double {
         guard !tracks.isEmpty, contentWidth > 0 else { return 0 }
         let totalDur = tracks.map(\.duration).max() ?? 1.0
-        let percent = Double(cursorPosition / contentWidth)
+        let percent = Double(hoverState.cursorPosition / contentWidth)
         let startOffset = currentTimeRange?.start.seconds ?? 0
         let displayDuration = currentTimeRange?.duration.seconds ?? totalDur
         return startOffset + (percent * displayDuration)
@@ -2249,7 +2248,7 @@ private struct HoverCursorOverlay: View {
     
     var body: some View {
         let time = cursorTimeToSeconds()
-        let showCursor = isHovering && dragStart == nil
+        let showCursor = hoverState.isHovering && dragStart == nil
         Rectangle()
             .fill(Color.accentColor)
             .frame(width: 1.5)
@@ -2266,7 +2265,7 @@ private struct HoverCursorOverlay: View {
                     .offset(y: -12),
                 alignment: .bottom
             )
-            .offset(x: cursorPosition)
+            .offset(x: hoverState.cursorPosition)
             .allowsHitTesting(false)
             .zIndex(500)
             .opacity(showCursor ? 1 : 0)
