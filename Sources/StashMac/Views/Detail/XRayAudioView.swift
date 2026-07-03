@@ -1688,7 +1688,6 @@ private struct CompositeWaveformView: View {
                         
                         var topPath = Path()
                         var bottomPath = Path()
-                        var firstPath = true
                         
                         for x in stride(from: 0, to: W, by: 3.0) {
                             let tNorm = xToTNorm(x)
@@ -1700,7 +1699,7 @@ private struct CompositeWaveformView: View {
                             let topPt = CGPoint(x: x, y: midY - (barH/2))
                             let botPt = CGPoint(x: x, y: midY + (barH/2))
                             
-                            if firstPath {
+                            if x == 0 {
                                 topPath.move(to: topPt)
                                 bottomPath.move(to: botPt)
                                 firstPath = false
@@ -1708,6 +1707,8 @@ private struct CompositeWaveformView: View {
                                 topPath.addLine(to: topPt)
                                 bottomPath.addLine(to: botPt)
                             }
+                            
+                            if mVal < 0.01 { continue }
                             
                             let normalizedMaster = mVal / masterMax
                             var bestMatchIndex = fallbackIndex
@@ -2086,6 +2087,7 @@ private struct WaveformTrackView: View {
                         let currentSec = startOffset + (tNorm * displayDuration)
                         let sampleIndex = safeSampleIndex(currentSec: currentSec, totalDur: totalDur, count: samples.count)
                         let sample = samples[sampleIndex]
+                        if sample < 0.01 { continue }
                         let barHeight = CGFloat(sample) * H * 0.7
                         let rect = CGRect(x: x, y: midY - (barHeight / 2), width: 3, height: max(1, barHeight))
                         let isInLens = currentIsHovering && abs(x - xc) < wl/2
