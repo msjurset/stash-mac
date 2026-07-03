@@ -16,6 +16,7 @@ struct HoverTrackingView: NSViewRepresentable {
     class TrackingNSView: NSView {
         var onHover: ((CGPoint?) -> Void)?
         private var trackingArea: NSTrackingArea?
+        private var exitWorkItem: DispatchWorkItem?
 
         override func updateTrackingAreas() {
             super.updateTrackingAreas()
@@ -28,17 +29,28 @@ struct HoverTrackingView: NSViewRepresentable {
         }
 
         override func mouseMoved(with event: NSEvent) {
+            cancelExit()
             let loc = self.convert(event.locationInWindow, from: nil)
             onHover?(loc)
         }
 
         override func mouseEntered(with event: NSEvent) {
+            cancelExit()
             let loc = self.convert(event.locationInWindow, from: nil)
             onHover?(loc)
         }
 
         override func mouseExited(with event: NSEvent) {
-            onHover?(nil)
+            let item = DispatchWorkItem { [weak self] in
+                self?.onHover?(nil)
+            }
+            exitWorkItem = item
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: item)
+        }
+        
+        private func cancelExit() {
+            exitWorkItem?.cancel()
+            exitWorkItem = nil
         }
     }
 }
