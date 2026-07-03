@@ -1940,12 +1940,12 @@ private struct CompositeWaveformView: View {
                     .font(.system(size: 9, weight: .bold))
                     .foregroundStyle(isMissing ? .secondary : color.wrappedValue)
                     .strikethrough(isMissing)
-                    .background(ClickCatcher(onDoubleClick: {
+                    .onTapGesture(count: 2) {
                         if !isMaster {
                             draftCaption = label
                             editingTrackID = trackID
                         }
-                    }))
+                    }
             }
         }
         .padding(.vertical, 2)
@@ -1999,12 +1999,12 @@ private struct WaveformTrackView: View {
                     Text(track.label)
                         .font(.system(size: 10, weight: .black))
                         .foregroundStyle(track.isMissing ? .secondary : track.color)
-                        .background(ClickCatcher(onDoubleClick: {
+                        .onTapGesture(count: 2) {
                             if track.role != .master {
                                 draftCaption = track.label
                                 editingTrackID = track.id
                             }
-                        }))
+                        }
                 }
                 if !track.isMissing {
                     HStack(spacing: 4) {

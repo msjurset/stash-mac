@@ -56,3 +56,15 @@ When build targets, supported platforms, or release artifacts change:
 When exported or public functions/computed properties are added or modified:
 - Add or update corresponding unit tests to cover the new/changed behavior
 - Test edge cases, error paths, and boundary conditions
+
+## Performance Constraints & Safeguards
+
+When working with high-frequency rendering and layout inside SwiftUI (specifically complex `Canvas` draws inside ScrollViews like in `XRayAudioView`), strictly adhere to the following optimizations to prevent "beachballing" and main-thread starvation:
+
+1. **State Isolation for High-Frequency Events**: Never bind high-frequency events (like `.onContinuousHover` cursor coordinates) directly to a root view's `@State`. Always isolate them in a separate `@Observable` object (e.g., `XRayHoverState`). This prevents SwiftUI from regenerating massive view hierarchies (like `ScrollView`) every time the mouse moves.
+2. **Hover Coalescing**: Do NOT wrap `.onContinuousHover` state mutations in `DispatchQueue.main.async`. Doing so defeats SwiftUI's native run-loop coalescing and will flood the main thread with thousands of un-cancellable tasks during rapid scrolls. Let the updates run synchronously so SwiftUI can batch them per frame.
+3. **Threshold Guarding**: Always implement delta-thresholding for pointer tracking. For instance, if you only care about horizontal tracking, ensure `abs(current - new) > 0.5` before committing the state to avoid meaningless invalidations from vertical scrolling or floating-point drift.
+4. **Hardware Acceleration**: Always add `.drawingGroup()` to `Canvas` wrappers that generate thousands of paths (e.g., waveforms) to opt-in to Metal GPU acceleration. Relying on default CPU rendering will cause stutters on dense views.
+5. **Draw Loop Allocations**: When building large arrays (like `[CGRect]` for paths) inside a frame draw loop, ALWAYS use `.reserveCapacity()` before the loop to prevent Swift from stalling the thread with dynamic memory re-allocations mid-draw.
+6. **No Dictionary Hashing in Hot Loops**: Never use SwiftUI `Color` as a dictionary key inside a rendering loop (e.g., grouping rects by color). `Color` hashing is extremely expensive. Use an indexed `Array` instead.
+7. **Consolidate Path Generation**: If a view requires both a `.fill` pass and a `.stroke` pass over the same dataset, consolidate them into a single iteration block to halve the math overhead.
