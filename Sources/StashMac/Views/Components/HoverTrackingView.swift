@@ -19,13 +19,12 @@ struct HoverTrackingView: NSViewRepresentable {
 
         override func updateTrackingAreas() {
             super.updateTrackingAreas()
-            if let trackingArea = trackingArea {
-                removeTrackingArea(trackingArea)
+            if trackingArea == nil {
+                let options: NSTrackingArea.Options = [.mouseEnteredAndExited, .mouseMoved, .activeInKeyWindow, .inVisibleRect]
+                let newArea = NSTrackingArea(rect: .zero, options: options, owner: self, userInfo: nil)
+                addTrackingArea(newArea)
+                self.trackingArea = newArea
             }
-            let options: NSTrackingArea.Options = [.mouseEnteredAndExited, .mouseMoved, .activeInKeyWindow, .inVisibleRect]
-            let newArea = NSTrackingArea(rect: self.bounds, options: options, owner: self, userInfo: nil)
-            addTrackingArea(newArea)
-            self.trackingArea = newArea
         }
 
         override func mouseMoved(with event: NSEvent) {
