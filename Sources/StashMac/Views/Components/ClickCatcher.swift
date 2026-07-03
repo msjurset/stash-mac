@@ -136,6 +136,9 @@ struct ClickCatcher: NSViewRepresentable {
                 return event
 
             case .leftMouseUp:
+                if event.clickCount == 2 && downInside {
+                    return nil
+                }
                 return event
 
             default:

@@ -1688,6 +1688,7 @@ private struct CompositeWaveformView: View {
                         
                         var topPath = Path()
                         var bottomPath = Path()
+                        var firstPath = true
                         
                         for x in stride(from: 0, to: W, by: 3.0) {
                             let tNorm = xToTNorm(x)
@@ -1935,6 +1936,7 @@ private struct CompositeWaveformView: View {
                     }
                 )
                 .frame(width: 120, height: 20)
+                .id("legend:\(trackID.uuidString)")
             } else {
                 Text(label.uppercased())
                     .font(.system(size: 9, weight: .bold))
@@ -1995,6 +1997,7 @@ private struct WaveformTrackView: View {
                         }
                     )
                     .frame(width: 120, height: 20)
+                    .id("waveform:\(track.id.uuidString)")
                 } else {
                     Text(track.label)
                         .font(.system(size: 10, weight: .black))
