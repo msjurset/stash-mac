@@ -1633,7 +1633,7 @@ private struct CompositeWaveformView: View {
             }
             .padding(.horizontal, 8)
             .padding(.top, 4)
-            let currentCursorPosition = hoverState.cursorPosition
+            let currentCursorPosition = enableLens ? hoverState.cursorPosition : -1000
             let currentIsHovering = enableLens ? hoverState.isHovering : false
             GeometryReader { geometry in
                 ZStack(alignment: .topLeading) {
@@ -1731,6 +1731,7 @@ private struct CompositeWaveformView: View {
                         context.stroke(topPath, with: .color(master.color), lineWidth: 0.5)
                         context.stroke(bottomPath, with: .color(master.color), lineWidth: 0.5)
                     }
+                    .drawingGroup()
                     .background(Color.black.opacity(0.5))
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                     .overlay(
@@ -1768,7 +1769,7 @@ private struct CompositeWaveformView: View {
     
     @ViewBuilder
     private func speakerMarkersOverlay(height: CGFloat) -> some View {
-        let currentCursorPosition = hoverState.cursorPosition
+        let currentCursorPosition = enableLens ? hoverState.cursorPosition : -1000
         let currentIsHovering = enableLens ? hoverState.isHovering : false
         let wl = lensWidth
         let M = magnification > 0.001 ? magnification : 1.0
@@ -2031,7 +2032,7 @@ private struct WaveformTrackView: View {
                             .foregroundStyle(.secondary)
                     )
             } else {
-                let currentCursorPosition = hoverState.cursorPosition
+                let currentCursorPosition = enableLens ? hoverState.cursorPosition : -1000
                 let currentIsHovering = enableLens ? hoverState.isHovering : false
                 Canvas(rendersAsynchronously: true) { context, size in
                     let W = size.width.isFinite ? Swift.min(size.width, 10000) : 10000
@@ -2083,6 +2084,7 @@ private struct WaveformTrackView: View {
                     outsidePath.addRects(outsideRects)
                     context.fill(outsidePath, with: .color(track.color.opacity(0.4)))
                 }
+                .drawingGroup()
                 .background(Color.black.opacity(0.3))
                 .clipShape(RoundedRectangle(cornerRadius: 4))
                 .onTapGesture { location in
