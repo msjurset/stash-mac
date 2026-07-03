@@ -1,0 +1,170 @@
+--- Sources/StashMac/Views/Detail/XRayAudioView.swift
++++ Sources/StashMac/Views/Detail/XRayAudioView.swift
+@@ -443,40 +443,15 @@
+                                 }
+                                 
+-                                // Selection Highlight
+-                                if let start = dragStart, let current = dragCurrent {
+-                                    let x1 = start.x
+-                                    let x2 = current.x
+-                                    Rectangle()
+-                                        .fill(Color.blue.opacity(0.3))
+-                                        .frame(width: abs(x2 - x1))
+-                                        .offset(x: Swift.min(x1, x2))
+-                                        .allowsHitTesting(false) // click-through
+-                                }
++                                SelectionHighlightOverlay(
++                                    dragStart: $dragStart,
++                                    dragCurrent: $dragCurrent
++                                )
+                                 
+-                                // Vertical Cursor Line (Hover)
+-                                if isHovering && dragStart == nil {
+-                                    let time = cursorTimeToSeconds()
+-                                    Rectangle()
+-                                        .fill(Color.accentColor)
+-                                        .frame(width: 1.5)
+-                                        .overlay(
+-                                            Text(formatTime(time))
+-                                                .font(.system(size: 10, weight: .bold, design: .monospaced))
+-                                                .padding(.horizontal, 6)
+-                                                .padding(.vertical, 3)
+-                                                .background(Color.accentColor)
+-                                                .foregroundStyle(.white)
+-                                                .clipShape(Capsule())
+-                                                .shadow(radius: 3)
+-                                                .fixedSize()
+-                                                .offset(y: -12),
+-                                            alignment: .bottom
+-                                        )
+-                                        .offset(x: cursorPosition)
+-                                        .allowsHitTesting(false) // click-through
+-                                        .zIndex(500)
+-                                }
++                                HoverCursorOverlay(
++                                    cursorPosition: $cursorPosition,
++                                    isHovering: $isHovering,
++                                    dragStart: $dragStart,
++                                    contentWidth: contentWidth,
++                                    tracks: tracks,
++                                    currentTimeRange: currentTimeRange
++                                )
+                             }
+                             .contentShape(Rectangle())
+                             .onContinuousHover { phase in
+-                                switch phase {
+-                                case .active(let location):
+-                                    cursorPosition = location.x
+-                                    isHovering = true
+-                                case .ended:
+-                                    isHovering = false
++                                DispatchQueue.main.async {
++                                    switch phase {
++                                    case .active(let location):
++                                        cursorPosition = location.x
++                                        isHovering = true
++                                    case .ended:
++                                        isHovering = false
++                                    }
+                                 }
+                             }
+@@ -1417,10 +1392,10 @@
+             GeometryReader { geo in
+                 let currentCursorPosition = cursorPosition
+                 let currentIsHovering = isHovering
+-                Canvas { context, size in
++                Canvas(rendersAsynchronously: true) { context, size in
+                     let W = size.width
+                     let H = size.height
+                     if W <= 0 || H <= 0 { return }
+@@ -1450,11 +1425,11 @@
+                     
+                     let startOffset = currentTimeRange?.start.seconds ?? 0
+                     let displayDuration = currentTimeRange?.duration.seconds ?? totalDur
+-                    guard !displayDuration.isNaN && !startOffset.isNaN else { return }
++                    guard !displayDuration.isNaN && !startOffset.isNaN && displayDuration > 0 else { return }
+                     
+-                    for x in stride(from: 0, to: W, by: 1) {
++                    var colorRects: [Color: [CGRect]] = [:]
++                    
++                    for x in stride(from: 0, to: W, by: 1) {
+                         let tNorm = xToTNorm(x)
+                         let currentSec = startOffset + (tNorm * displayDuration)
+@@ -1481,7 +1456,12 @@
+                         
+                         let barH = CGFloat(mVal) * H * 0.8
+                         let rect = CGRect(x: x, y: midY - (barH/2), width: 1, height: max(1, barH))
+-                        context.fill(Path(rect), with: .color(bestMatchColor.opacity(0.8)))
++                        let colorKey = bestMatchColor.opacity(0.8)
++                        colorRects[colorKey, default: []].append(rect)
++                    }
++                    for (color, rects) in colorRects {
++                        var path = Path()
++                        path.addRects(rects)
++                        context.fill(path, with: .color(color))
+                     }
+@@ -1677,10 +1657,10 @@
+             } else {
+                 let currentCursorPosition = cursorPosition
+                 let currentIsHovering = isHovering
+-                Canvas { context, size in
+-                    let W = size.width
+-                    let H = size.height
++                Canvas(rendersAsynchronously: true) { context, size in
++                    let W = size.width.isFinite ? Swift.min(size.width, 10000) : 10000
++                    let H = size.height.isFinite ? Swift.min(size.height, 10000) : 10000
+                     if W <= 0 || H <= 0 { return }
+@@ -1703,16 +1683,21 @@
+                     
+                     let startOffset = currentTimeRange?.start.seconds ?? 0
+                     let displayDuration = currentTimeRange?.duration.seconds ?? totalDur
+-                    guard !displayDuration.isNaN && !startOffset.isNaN else { return }
++                    guard !displayDuration.isNaN && !startOffset.isNaN && displayDuration > 0 else { return }
+                     
+                     let samples = track.samples
+                     guard !samples.isEmpty else { return }
+-                    for x in stride(from: 0, to: W, by: 1) {
++                    var insideRects: [CGRect] = []
++                    var outsideRects: [CGRect] = []
++                    for x in stride(from: 0, to: W, by: 1) {
+                         let tNorm = xToTNorm(x)
+                         let currentSec = startOffset + (tNorm * displayDuration)
+-                        let sampleIndex = Int((currentSec / totalDur) * Double(samples.count - 1))
++                        let sampleIndex = ((currentSec / totalDur) * Double(samples.count - 1)).safeInt
+                         let sample = samples[Swift.min(Swift.max(0, sampleIndex), samples.count - 1)]
+                         let barHeight = CGFloat(sample) * H * 0.7
+                         let rect = CGRect(x: x, y: midY - (barHeight / 2), width: 1, height: max(1, barHeight))
+                         let isInLens = currentIsHovering && abs(x - xc) < wl/2
+-                        context.fill(Path(rect), with: .color(isInLens ? track.color : track.color.opacity(0.4)))
++                        if isInLens {
++                            insideRects.append(rect)
++                        } else {
++                            outsideRects.append(rect)
++                        }
+                     }
++                    var insidePath = Path()
++                    insidePath.addRects(insideRects)
++                    context.fill(insidePath, with: .color(track.color))
++                    
++                    var outsidePath = Path()
++                    outsidePath.addRects(outsideRects)
++                    context.fill(outsidePath, with: .color(track.color.opacity(0.4)))
+                 }
+@@ -1763,7 +1748,8 @@
+     
+     var body: some View {
+         let rulerWidth = contentWidth - 16
+-        Canvas { context, size in
+-            let W = size.width
+-            let H = size.height
++        Canvas(rendersAsynchronously: true) { context, size in
++            let W = size.width.isFinite ? Swift.min(size.width, 10000) : 10000
++            let H = size.height.isFinite ? Swift.min(size.height, 10000) : 10000
+             if W <= 0 || H <= 0 { return }
+@@ -1771,7 +1757,8 @@
+             
+             let startOffset = currentTimeRange?.start.seconds ?? 0
+             let displayDuration = currentTimeRange?.duration.seconds ?? totalDuration
++            guard !displayDuration.isNaN && !startOffset.isNaN && displayDuration > 0 else { return }
+             
+             // Draw horizontal baseline

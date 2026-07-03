@@ -25,26 +25,42 @@ enum AudioDSPAligner {
             let masterEnv = extractEnvelope(masterPCM.samples, sampleRate: masterPCM.sampleRate, targetRate: envelopeRate)
             let sourceEnv = extractEnvelope(sourcePCM.samples, sampleRate: sourcePCM.sampleRate, targetRate: envelopeRate)
             
+            // Zero-mean normalization of coarse envelopes to perform Zero-mean Normalized Cross-Correlation (ZNCC)
+            var meanMaster: Float = 0
+            vDSP_meanv(masterEnv, 1, &meanMaster, vDSP_Length(masterEnv.count))
+            var zeroMeanMaster = [Float](repeating: 0, count: masterEnv.count)
+            var negMeanMaster = -meanMaster
+            vDSP_vsadd(masterEnv, 1, &negMeanMaster, &zeroMeanMaster, 1, vDSP_Length(masterEnv.count))
+            
+            var meanSource: Float = 0
+            vDSP_meanv(sourceEnv, 1, &meanSource, vDSP_Length(sourceEnv.count))
+            var zeroMeanSource = [Float](repeating: 0, count: sourceEnv.count)
+            var negMeanSource = -meanSource
+            vDSP_vsadd(sourceEnv, 1, &negMeanSource, &zeroMeanSource, 1, vDSP_Length(sourceEnv.count))
+            
             // 3. Compute normalized cross-correlation
             let maxShift = Int(maxDelaySeconds * envelopeRate)
-            let N = masterEnv.count
-            let M = sourceEnv.count
+            let N = zeroMeanMaster.count
+            let M = zeroMeanSource.count
             
             // Perform tight loop operations using unsafe pointers to bypass bounds checks and let the compiler vectorize the loop
-            let bestShift = masterEnv.withUnsafeBufferPointer { masterBuf -> Int in
-                sourceEnv.withUnsafeBufferPointer { sourceBuf -> Int in
+            let bestShift = zeroMeanMaster.withUnsafeBufferPointer { masterBuf -> Int in
+                zeroMeanSource.withUnsafeBufferPointer { sourceBuf -> Int in
                     let masterPtr = masterBuf.baseAddress!
                     let sourcePtr = sourceBuf.baseAddress!
                     
                     var currentBestShift = 0
                     var maxCorrelation: Float = -1.0
                     
+                    // Increase overlap guard to 1250 samples (5.0s) or at least 40% of signal length to reject edge false positives
+                    let minOverlap = max(1250, Int(Double(min(N, M)) * 0.40))
+                    
                     for shift in -maxShift...maxShift {
                         let start = max(0, -shift)
                         let end = min(N, M - shift)
                         let count = end - start
                         
-                        guard count > 125 else { continue } // Ensure sufficient overlap (at least 0.5s at 250Hz)
+                        guard count > minOverlap else { continue }
                         
                         let len = vDSP_Length(count)
                         let masterStartPtr = masterPtr.advanced(by: start)
@@ -78,15 +94,28 @@ enum AudioDSPAligner {
             let masterFineEnv = extractEnvelope(masterPCM.samples, sampleRate: masterPCM.sampleRate, targetRate: fineEnvelopeRate)
             let sourceFineEnv = extractEnvelope(sourcePCM.samples, sampleRate: sourcePCM.sampleRate, targetRate: fineEnvelopeRate)
             
-            let NFine = masterFineEnv.count
-            let MFine = sourceFineEnv.count
+            // Zero-mean normalization of fine envelopes
+            var meanFineMaster: Float = 0
+            vDSP_meanv(masterFineEnv, 1, &meanFineMaster, vDSP_Length(masterFineEnv.count))
+            var zeroMeanFineMaster = [Float](repeating: 0, count: masterFineEnv.count)
+            var negMeanFineMaster = -meanFineMaster
+            vDSP_vsadd(masterFineEnv, 1, &negMeanFineMaster, &zeroMeanFineMaster, 1, vDSP_Length(masterFineEnv.count))
+            
+            var meanFineSource: Float = 0
+            vDSP_meanv(sourceFineEnv, 1, &meanFineSource, vDSP_Length(sourceFineEnv.count))
+            var zeroMeanFineSource = [Float](repeating: 0, count: sourceFineEnv.count)
+            var negMeanFineSource = -meanFineSource
+            vDSP_vsadd(sourceFineEnv, 1, &negMeanFineSource, &zeroMeanFineSource, 1, vDSP_Length(sourceFineEnv.count))
+            
+            let NFine = zeroMeanFineMaster.count
+            let MFine = zeroMeanFineSource.count
             
             let coarseFineShift = Int(coarseDelay * fineEnvelopeRate)
             // Search range of +/- 15ms (150 samples at 10000Hz) around the coarse delay
             let fineSearchWindow = 150
             
-            let bestFineShift = masterFineEnv.withUnsafeBufferPointer { masterBuf -> Int in
-                sourceFineEnv.withUnsafeBufferPointer { sourceBuf -> Int in
+            let bestFineShift = zeroMeanFineMaster.withUnsafeBufferPointer { masterBuf -> Int in
+                zeroMeanFineSource.withUnsafeBufferPointer { sourceBuf -> Int in
                     let masterPtr = masterBuf.baseAddress!
                     let sourcePtr = sourceBuf.baseAddress!
                     

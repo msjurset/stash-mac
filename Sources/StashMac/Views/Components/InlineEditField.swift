@@ -96,7 +96,7 @@ private struct ClickOutsideMonitorView: NSViewRepresentable {
     func updateNSView(_ nsView: MonitorView, context: Context) {}
 
     final class MonitorView: NSView {
-        private var clickOutsideMonitor: Any?
+        nonisolated(unsafe) private var clickOutsideMonitor: Any?
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
@@ -108,7 +108,7 @@ private struct ClickOutsideMonitorView: NSViewRepresentable {
         }
 
         private func setupMonitor() {
-            guard let window = self.window, clickOutsideMonitor == nil else { return }
+            guard self.window != nil, clickOutsideMonitor == nil else { return }
             clickOutsideMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
                 guard let self = self else { return event }
                 guard event.clickCount == 1 else { return event }
@@ -137,7 +137,9 @@ private struct ClickOutsideMonitorView: NSViewRepresentable {
         }
 
         deinit {
-            teardownMonitor()
+            if let monitor = clickOutsideMonitor {
+                NSEvent.removeMonitor(monitor)
+            }
         }
     }
 }

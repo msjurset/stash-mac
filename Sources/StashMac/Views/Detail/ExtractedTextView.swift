@@ -57,21 +57,17 @@ struct ExtractedTextView: View {
         
         for rep in replacements {
             if let regex = try? NSRegularExpression(pattern: rep.pattern, options: [.caseInsensitive]) {
-                var offset = 0
                 let nsRange = NSRange(processed.startIndex..<processed.endIndex, in: processed)
                 let matches = regex.matches(in: processed, options: [], range: nsRange)
                 
-                for match in matches {
+                for match in matches.reversed() {
                     if match.numberOfRanges > 1,
-                       let idRange = Range(match.range(at: 1), in: processed) {
+                       let idRange = Range(match.range(at: 1), in: processed),
+                       let fullRange = Range(match.range, in: processed) {
                         let id = String(processed[idRange])
                         if let name = map[id] {
                             let replacement = String(format: rep.template, name.uppercased())
-                            let fullNSRange = NSRange(location: match.range.location + offset, length: match.range.length)
-                            if let fullRange = Range(fullNSRange, in: processed) {
-                                processed.replaceSubrange(fullRange, with: replacement)
-                                offset += replacement.count - match.range.length
-                            }
+                            processed.replaceSubrange(fullRange, with: replacement)
                         }
                     }
                 }

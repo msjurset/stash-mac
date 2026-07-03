@@ -1,6 +1,13 @@
 import SwiftUI
 import AVFoundation
 
+struct SpeakerChangeEvent: Identifiable {
+    var id: String { "\(speakerID)-\(time)" }
+    let speakerID: String
+    let time: Double
+    let speakerIndex: Int
+}
+
 /// A multi-track waveform visualizer with dynamic "Lens" magnification,
 /// recursive zooming, and synchronized multi-track playback.
 struct XRayAudioView: View {
@@ -65,6 +72,7 @@ struct XRayAudioView: View {
     @State private var editingTrackID: UUID? = nil
     @State private var draftCaption: String = ""
     @State private var enhanceSpeech = false
+    @State private var showSpeakerMarkers = true
 
     struct LogEntry: Identifiable {
         let id = UUID()
@@ -77,6 +85,7 @@ struct XRayAudioView: View {
     
     @State private var lensWidth: Double = 200.0
     @State private var magnification: Double = 6.0
+    @State private var enableLens: Bool = true
     
     private func log(_ msg: String) {
         print("[X-RAY] \(msg)")
@@ -190,7 +199,12 @@ struct XRayAudioView: View {
                                             onSeekPercent: { seekToPercent($0) },
                                             onZoomEnded: { startPct, endPct in
                                                 handleZoomToSelection(startPct: startPct, endPct: endPct)
-                                            }
+                                            },
+                                            showSpeakerMarkers: showSpeakerMarkers,
+                                            speakerTimeline: speakerTimeline,
+                                            speakerName: { id in speakerName(for: id) },
+                                            colorForSpeakerIndex: { idx in colorForSpeakerIndex(idx) },
+                                            enableLens: enableLens
                                         )
                                         .frame(height: 180)
                                     }
@@ -216,7 +230,8 @@ struct XRayAudioView: View {
                                             onSeekPercent: { seekToPercent($0) },
                                             onZoomEnded: { startPct, endPct in
                                                 handleZoomToSelection(startPct: startPct, endPct: endPct)
-                                            }
+                                            },
+                                            enableLens: enableLens
                                         )
                                         .frame(height: 140)
                                         .onChange(of: track.isSelected) { _, newValue in
@@ -488,6 +503,14 @@ struct XRayAudioView: View {
                     .buttonStyle(.plain)
                     .help("Toggle Loop")
 
+                    Button(action: { showSpeakerMarkers.toggle() }) {
+                        Image(systemName: showSpeakerMarkers ? "person.bubble.fill" : "person.bubble")
+                            .font(.system(size: 11))
+                            .foregroundStyle(showSpeakerMarkers ? Color.accentColor : .secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Toggle Speaker Markers")
+
                     Divider()
                         .frame(height: 12)
                         .background(Color.white.opacity(0.2))
@@ -617,6 +640,17 @@ struct XRayAudioView: View {
                 
                 // Lens Size & Zoom (Magnification) Controls
                 HStack(spacing: 12) {
+                    Toggle(isOn: $enableLens) {
+                        Text("Lens")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(.secondary)
+                    }
+                    .toggleStyle(.checkbox)
+                    .controlSize(.small)
+                    
+                    Divider()
+                        .frame(height: 12)
+                        
                     HStack(spacing: 4) {
                         Image(systemName: "magnifyingglass")
                             .font(.system(size: 10))
@@ -696,7 +730,7 @@ struct XRayAudioView: View {
     
     private func createCompositeTrack() -> XRayTrack? {
         guard !tracks.isEmpty else { return nil }
-        return XRayTrack(
+        var track = XRayTrack(
             label: "COMPOSITE X-RAY",
             url: nil,
             mime: nil,
@@ -706,6 +740,8 @@ struct XRayAudioView: View {
             role: .composite,
             position: -1
         )
+        track.id = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
+        return track
     }
 
     private func detectCLIVersion() async {
@@ -995,6 +1031,104 @@ struct XRayAudioView: View {
         if relativeTime < -0.1 || relativeTime > displayDuration + 0.1 { return -1 }
         
         return (CGFloat(relativeTime) / CGFloat(displayDuration)) * contentWidth
+    }
+
+    // MARK: - Speaker Timeline Support
+    
+    private var currentItem: StashItem {
+        store.items.first(where: { $0.id == item.id }) ?? item
+    }
+    
+    private var speakerTimeline: [SpeakerChangeEvent] {
+        guard let notes = currentItem.notes else { return [] }
+        var rawEvents: [(speakerID: String, time: Double)] = []
+        
+        let pattern = "Speaker\\s+(\\d+):\\s*([0-9:.]+)"
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+            return []
+        }
+        
+        let nsRange = NSRange(notes.startIndex..<notes.endIndex, in: notes)
+        let matches = regex.matches(in: notes, options: [], range: nsRange)
+        
+        for match in matches {
+            if match.numberOfRanges > 2,
+               let idRange = Range(match.range(at: 1), in: notes),
+               let timeRange = Range(match.range(at: 2), in: notes) {
+                let id = String(notes[idRange])
+                let timeStr = String(notes[timeRange])
+                if let sec = parseTime(timeStr) {
+                    rawEvents.append((speakerID: id, time: sec))
+                }
+            }
+        }
+        
+        let sortedRaw = rawEvents.sorted(by: { $0.time < $1.time })
+        
+        var idToIdx: [String: Int] = [:]
+        var nextIdx = 1
+        var events: [SpeakerChangeEvent] = []
+        
+        for raw in sortedRaw {
+            if idToIdx[raw.speakerID] == nil {
+                idToIdx[raw.speakerID] = nextIdx
+                nextIdx += 1
+            }
+            let idx = idToIdx[raw.speakerID]!
+            events.append(SpeakerChangeEvent(speakerID: raw.speakerID, time: raw.time, speakerIndex: idx))
+        }
+        
+        return events
+    }
+    
+    private func parseTime(_ timeStr: String) -> Double? {
+        let parts = timeStr.split(separator: ":").map { String($0).trimmingCharacters(in: .whitespaces) }
+        guard !parts.isEmpty else { return nil }
+        
+        var seconds: Double = 0
+        let lastPart = parts.last!
+        if let dotIndex = lastPart.firstIndex(of: ".") {
+            let secStr = String(lastPart[..<dotIndex])
+            let fracStr = String(lastPart[dotIndex...])
+            if let secVal = Double(secStr), let fracVal = Double(fracStr) {
+                seconds = secVal + fracVal
+            } else if let val = Double(lastPart) {
+                seconds = val
+            }
+        } else {
+            if let val = Double(lastPart) {
+                seconds = val
+            }
+        }
+        
+        if parts.count == 1 {
+            return seconds
+        } else if parts.count == 2 {
+            guard let minutes = Double(parts[0]) else { return nil }
+            return minutes * 60 + seconds
+        } else if parts.count == 3 {
+            guard let hours = Double(parts[0]), let minutes = Double(parts[1]) else { return nil }
+            return hours * 3600 + minutes * 60 + seconds
+        }
+        return nil
+    }
+    
+    private func speakerName(for id: String) -> String {
+        return currentItem.speakerMap?[id] ?? "Speaker \(id)"
+    }
+    
+    private func colorForSpeakerID(_ id: String) -> Color {
+        let colors: [Color] = [.blue, .green, .orange, .purple, .pink, .teal, .indigo, .yellow]
+        if let idx = Int(id) {
+            return colors[(idx - 1) % colors.count]
+        }
+        return .gray
+    }
+
+    private func colorForSpeakerIndex(_ index: Int) -> Color {
+        let colors: [Color] = [.blue, .green, .orange, .purple, .pink, .teal, .indigo, .yellow]
+        if index <= 0 { return .gray }
+        return colors[(index - 1) % colors.count]
     }
 
     private func calculatePlayheadX() -> CGFloat {
@@ -1442,7 +1576,7 @@ struct RemixSettingsView: View {
 
 struct XRayTrack: Identifiable {
     enum Role { case master, source, composite }
-    let id = UUID()
+    var id = UUID()
     var label: String
     let url: URL?
     let mime: String?
@@ -1475,6 +1609,12 @@ private struct CompositeWaveformView: View {
     let onSeekPercent: (Double) -> Void
     let onZoomEnded: (Double, Double) -> Void
     
+    let showSpeakerMarkers: Bool
+    let speakerTimeline: [SpeakerChangeEvent]
+    let speakerName: (String) -> String
+    let colorForSpeakerIndex: (Int) -> Color
+    let enableLens: Bool
+    
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack {
@@ -1494,125 +1634,230 @@ private struct CompositeWaveformView: View {
             .padding(.horizontal, 8)
             .padding(.top, 4)
             let currentCursorPosition = cursorPosition
-            let currentIsHovering = isHovering
-            Canvas { context, size in
-                let W = size.width
-                let H = size.height
-                if W <= 0 || H <= 0 { return }
-                let midY = H / 2
-                let xc = currentCursorPosition
-                let wl = lensWidth
-                let M = magnification
-                let denominator = Double(W - wl) + (Double(wl) / Double(M))
-                let k1 = 1.0 / (denominator > 0 ? denominator : 1.0)
-                
-                func xToTNorm(_ x: CGFloat) -> Double {
-                    if !currentIsHovering || denominator <= 0 { return Double(Swift.max(0, Swift.min(W, x))) / Double(W) }
-                    let xStart = xc - wl/2
-                    let xEnd = xc + wl/2
-                    if x < xStart { return Double(Swift.max(0, x)) * k1 }
-                    else if x < xEnd { return Double(xStart) * k1 + Double(x - xStart) * (k1 / Double(M)) }
-                    else { return Double(xStart) * k1 + Double(wl) * (k1 / Double(M)) + Double(Swift.min(W, x) - xEnd) * k1 }
-                }
-                
-                let currentTracks = tracks
-                guard let master = currentTracks.first(where: { $0.role == .master }), !master.isMissing else { return }
-                let masterSamples = master.samples
-                guard !masterSamples.isEmpty else { return }
-                
-                let sources = currentTracks.filter { $0.role == .source && !$0.isMissing }
-                
-                // 1. Use precalculated max amplitudes for normalization (no linear scans in draw loop)
-                let masterMax = master.maxAmplitude
-                let sourceMaxes = sources.map { $0.maxAmplitude }
-                
-                let totalDur = master.duration
-                let startOffset = currentTimeRange?.start.seconds ?? 0
-                let displayDuration = currentTimeRange?.duration.seconds ?? totalDur
-                
-                // 2. Batch drawing by color to reduce draw calls from W (1000+) to ~3-4
-                var rectsByColor: [Color: [CGRect]] = [:]
-                
-                for x in stride(from: 0, to: W, by: 1) {
-                    let tNorm = xToTNorm(x)
-                    let currentSec = startOffset + (tNorm * displayDuration)
-                    let mIdx = Swift.min(Swift.max(0, Int((currentSec / totalDur) * Double(masterSamples.count - 1))), masterSamples.count - 1)
-                    let mVal = masterSamples[mIdx]
-                    
-                    if mVal < 0.01 { continue }
-                    
-                    let normalizedMaster = mVal / masterMax
-                    var bestMatchColor: Color = master.color.opacity(0.3)
-                    var minDiff: Float = 1.0
-                    
-                    for (idx, source) in sources.enumerated() {
-                        let sSamples = source.samples
-                        guard !sSamples.isEmpty else { continue }
-                        let sIdx = Swift.min(Swift.max(0, Int((currentSec / totalDur) * Double(sSamples.count - 1))), sSamples.count - 1)
-                        let normalizedSource = sSamples[sIdx] / sourceMaxes[idx]
+            let currentIsHovering = enableLens ? isHovering : false
+            GeometryReader { geometry in
+                ZStack(alignment: .topLeading) {
+                    Canvas { context, size in
+                        let W = size.width
+                        let H = size.height
+                        if W <= 0 || H <= 0 { return }
+                        let midY = H / 2
+                        let xc = currentCursorPosition
+                        let wl = lensWidth
+                        let M = magnification > 0.001 ? magnification : 1.0
+                        let denominator = Double(W - wl) + (Double(wl) / Double(M))
+                        let k1 = 1.0 / (denominator > 0 ? denominator : 1.0)
                         
-                        let diff = abs(normalizedSource - normalizedMaster)
-                        if diff < minDiff {
-                            minDiff = diff
-                            if diff < 0.3 { // More inclusive threshold with normalized values
-                                bestMatchColor = source.color
+                        func xToTNorm(_ x: CGFloat) -> Double {
+                            if !currentIsHovering || denominator <= 0 { return Double(Swift.max(0, Swift.min(W, x))) / Double(W) }
+                            let xStart = xc - wl/2
+                            let xEnd = xc + wl/2
+                            if x < xStart { return Double(Swift.max(0, x)) * k1 }
+                            else if x < xEnd { return Double(xStart) * k1 + Double(x - xStart) * (k1 / Double(M)) }
+                            else { return Double(xStart) * k1 + Double(wl) * (k1 / Double(M)) + Double(Swift.min(W, x) - xEnd) * k1 }
+                        }
+                        
+                        let currentTracks = tracks
+                        guard let master = currentTracks.first(where: { $0.role == .master }), !master.isMissing else { return }
+                        let masterSamples = master.samples
+                        guard !masterSamples.isEmpty else { return }
+                        
+                        let sources = currentTracks.filter { $0.role == .source && !$0.isMissing }
+                        
+                        // 1. Use precalculated max amplitudes for normalization (no linear scans in draw loop)
+                        let masterMax = master.maxAmplitude
+                        let sourceMaxes = sources.map { $0.maxAmplitude }
+                        
+                        let totalDur = master.duration
+                        let startOffset = currentTimeRange?.start.seconds ?? 0
+                        let displayDuration = currentTimeRange?.duration.seconds ?? totalDur
+                        
+                        // 2. Batch drawing by color to reduce draw calls from W (1000+) to ~3-4
+                        var rectsByColor: [Color: [CGRect]] = [:]
+                        
+                        for x in stride(from: 0, to: W, by: 1) {
+                            let tNorm = xToTNorm(x)
+                            let currentSec = startOffset + (tNorm * displayDuration)
+                            let mIdx = safeSampleIndex(currentSec: currentSec, totalDur: totalDur, count: masterSamples.count)
+                            let mVal = masterSamples[mIdx]
+                            
+                            if mVal < 0.01 { continue }
+                            
+                            let normalizedMaster = mVal / masterMax
+                            var bestMatchColor: Color = master.color.opacity(0.3)
+                            var minDiff: Float = 1.0
+                            
+                            for (idx, source) in sources.enumerated() {
+                                let sSamples = source.samples
+                                guard !sSamples.isEmpty else { continue }
+                                let sIdx = safeSampleIndex(currentSec: currentSec, totalDur: totalDur, count: sSamples.count)
+                                let normalizedSource = sSamples[sIdx] / sourceMaxes[idx]
+                                
+                                let diff = abs(normalizedSource - normalizedMaster)
+                                if diff < minDiff {
+                                    minDiff = diff
+                                    if diff < 0.3 { // More inclusive threshold with normalized values
+                                        bestMatchColor = source.color
+                                    }
+                                }
                             }
+                            
+                            let barH = CGFloat(mVal) * H * 0.8
+                            let rect = CGRect(x: x, y: midY - (barH/2), width: 1, height: max(1, barH))
+                            rectsByColor[bestMatchColor, default: []].append(rect)
+                        }
+                        
+                        for (color, rects) in rectsByColor {
+                            var path = Path()
+                            path.addRects(rects)
+                            context.fill(path, with: .color(color.opacity(0.8)))
+                        }
+                        
+                        var topPath = Path()
+                        var bottomPath = Path()
+                        var first = true
+                        for x in stride(from: 0, to: W, by: 1) {
+                            let tNorm = xToTNorm(x)
+                            let currentSec = startOffset + (tNorm * displayDuration)
+                            let val = masterSamples[safeSampleIndex(currentSec: currentSec, totalDur: totalDur, count: masterSamples.count)]
+                            let barH = CGFloat(val) * H * 0.8
+                            let topPt = CGPoint(x: x, y: midY - (barH/2))
+                            let botPt = CGPoint(x: x, y: midY + (barH/2))
+                            if first { topPath.move(to: topPt); bottomPath.move(to: botPt); first = false }
+                            else { topPath.addLine(to: topPt); bottomPath.addLine(to: botPt) }
+                        }
+                        context.stroke(topPath, with: .color(master.color), lineWidth: 0.5)
+                        context.stroke(bottomPath, with: .color(master.color), lineWidth: 0.5)
+                    }
+                    .background(Color.black.opacity(0.5))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(Color.purple.opacity(0.3), lineWidth: 1)
+                    )
+                    .onTapGesture { location in
+                        guard contentWidth > 0 else { return }
+                        let percent = Double(location.x / contentWidth)
+                        onSeekPercent(percent)
+                    }
+                    .gesture(
+                        DragGesture(minimumDistance: 10)
+                            .onChanged { value in
+                                if dragStart == nil { dragStart = value.startLocation }
+                                dragCurrent = value.location
+                            }
+                            .onEnded { value in
+                                guard contentWidth > 0 else { return }
+                                let startPct = Double(value.startLocation.x / contentWidth)
+                                let endPct = Double(value.location.x / contentWidth)
+                                onZoomEnded(startPct, endPct)
+                                dragStart = nil
+                                dragCurrent = nil
+                            }
+                    )
+                    
+                    if showSpeakerMarkers {
+                        speakerMarkersOverlay(height: geometry.size.height)
+                    }
+                }
+            }
+        }
+    }
+    
+    @ViewBuilder
+    private func speakerMarkersOverlay(height: CGFloat) -> some View {
+        let currentCursorPosition = cursorPosition
+        let currentIsHovering = enableLens ? isHovering : false
+        let wl = lensWidth
+        let M = magnification > 0.001 ? magnification : 1.0
+        let totalDur = composite.duration
+        
+        Group {
+            if totalDur > 0.01 {
+                ZStack(alignment: .topLeading) {
+                    ForEach(speakerTimeline) { event in
+                        let x = getX(
+                            for: event.time,
+                            totalDuration: totalDur,
+                            W: contentWidth,
+                            xc: currentCursorPosition,
+                            wl: wl,
+                            M: M,
+                            isHovering: currentIsHovering
+                        )
+                        if x >= 0 && x <= contentWidth {
+                            let speakerColor = colorForSpeakerIndex(event.speakerIndex)
+                            let name = speakerName(event.speakerID)
+                            let formattedT = formatTime(event.time)
+                            
+                            VStack(spacing: 0) {
+                                Text("\(event.speakerIndex)")
+                                    .font(.system(size: 8, weight: .bold))
+                                    .foregroundStyle(.white)
+                                    .frame(width: 12, height: 12)
+                                    .background(speakerColor, in: Circle())
+                                    .shadow(radius: 1)
+                                    .contentShape(Circle())
+                                    .onTapGesture {
+                                        onSeekPercent(event.time / totalDur)
+                                    }
+                                    .help("\(name) at \(formattedT)")
+                                
+                                Rectangle()
+                                    .fill(speakerColor.opacity(0.6))
+                                    .frame(width: 1, height: max(0, height - 12))
+                                    .allowsHitTesting(false)
+                            }
+                            .frame(width: 20, height: height)
+                            .position(x: x, y: height / 2)
                         }
                     }
-                    
-                    let barH = CGFloat(mVal) * H * 0.8
-                    let rect = CGRect(x: x, y: midY - (barH/2), width: 1, height: max(1, barH))
-                    rectsByColor[bestMatchColor, default: []].append(rect)
                 }
-                
-                for (color, rects) in rectsByColor {
-                    var path = Path()
-                    path.addRects(rects)
-                    context.fill(path, with: .color(color.opacity(0.8)))
-                }
-                
-                var topPath = Path()
-                var bottomPath = Path()
-                var first = true
-                for x in stride(from: 0, to: W, by: 1) {
-                    let tNorm = xToTNorm(x)
-                    let currentSec = startOffset + (tNorm * displayDuration)
-                    let val = masterSamples[Swift.min(Swift.max(0, Int((currentSec / totalDur) * Double(masterSamples.count - 1))), masterSamples.count - 1)]
-                    let barH = CGFloat(val) * H * 0.8
-                    let topPt = CGPoint(x: x, y: midY - (barH/2))
-                    let botPt = CGPoint(x: x, y: midY + (barH/2))
-                    if first { topPath.move(to: topPt); bottomPath.move(to: botPt); first = false }
-                    else { topPath.addLine(to: topPt); bottomPath.addLine(to: botPt) }
-                }
-                context.stroke(topPath, with: .color(master.color), lineWidth: 0.5)
-                context.stroke(bottomPath, with: .color(master.color), lineWidth: 0.5)
+                .allowsHitTesting(true)
+            } else {
+                EmptyView()
             }
-            .background(Color.black.opacity(0.5))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(Color.purple.opacity(0.3), lineWidth: 1)
-            )
-            .onTapGesture { location in
-                guard contentWidth > 0 else { return }
-                let percent = Double(location.x / contentWidth)
-                onSeekPercent(percent)
-            }
-            .gesture(
-                DragGesture(minimumDistance: 10)
-                    .onChanged { value in
-                        if dragStart == nil { dragStart = value.startLocation }
-                        dragCurrent = value.location
-                    }
-                    .onEnded { value in
-                        guard contentWidth > 0 else { return }
-                        let startPct = Double(value.startLocation.x / contentWidth)
-                        let endPct = Double(value.location.x / contentWidth)
-                        onZoomEnded(startPct, endPct)
-                        dragStart = nil
-                        dragCurrent = nil
-                    }
-            )
+        }
+    }
+
+    private func formatTime(_ seconds: Double) -> String {
+        let m = Int(seconds) / 60
+        let s = Int(seconds) % 60
+        let ms = Int((seconds.truncatingRemainder(dividingBy: 1)) * 100)
+        return String(format: "%d:%02d.%02d", m, s, ms)
+    }
+
+    private func getX(for time: Double, totalDuration: Double, W: CGFloat, xc: CGFloat, wl: CGFloat, M: CGFloat, isHovering: Bool) -> CGFloat {
+        guard W > 0, wl > 0, M > 0.001, totalDuration > 0.01 else { return -1 }
+        
+        let startOffset = currentTimeRange?.start.seconds ?? 0
+        let displayDuration = currentTimeRange?.duration.seconds ?? totalDuration
+        guard displayDuration > 0.01 else { return -1 }
+        
+        let relativeTime = time - startOffset
+        if relativeTime < 0 || relativeTime > displayDuration { return -1 }
+        
+        let tNorm = relativeTime / displayDuration
+        
+        if !isHovering {
+            return CGFloat(tNorm) * W
+        }
+        
+        let denominator = Double(W - wl) + (Double(wl) / Double(M))
+        guard denominator > 0.001 else { return CGFloat(tNorm) * W }
+        let k1 = 1.0 / denominator
+        
+        let xStart = xc - wl/2
+        let t1 = Double(xStart) * k1
+        let t2 = t1 + Double(wl) * (k1 / Double(M))
+        
+        if tNorm < t1 {
+            return CGFloat(tNorm / k1)
+        } else if tNorm <= t2 {
+            return xStart + CGFloat((tNorm - t1) / (k1 / Double(M)))
+        } else {
+            let xEnd = xc + wl/2
+            return xEnd + CGFloat((tNorm - t2) / k1)
         }
     }
     
@@ -1674,12 +1919,12 @@ private struct CompositeWaveformView: View {
                     .font(.system(size: 9, weight: .bold))
                     .foregroundStyle(isMissing ? .secondary : color.wrappedValue)
                     .strikethrough(isMissing)
-                    .onTapGesture(count: 2) {
+                    .background(ClickCatcher(onDoubleClick: {
                         if !isMaster {
                             draftCaption = label
                             editingTrackID = trackID
                         }
-                    }
+                    }))
             }
         }
         .padding(.vertical, 2)
@@ -1705,6 +1950,8 @@ private struct WaveformTrackView: View {
     let commitCaptionEdit: (UUID) -> Void
     let onSeekPercent: (Double) -> Void
     let onZoomEnded: (Double, Double) -> Void
+    
+    let enableLens: Bool
     
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -1732,12 +1979,12 @@ private struct WaveformTrackView: View {
                     Text(track.label)
                         .font(.system(size: 10, weight: .black))
                         .foregroundStyle(track.isMissing ? .secondary : track.color)
-                        .onTapGesture(count: 2) {
+                        .background(ClickCatcher(onDoubleClick: {
                             if track.role != .master {
                                 draftCaption = track.label
                                 editingTrackID = track.id
                             }
-                        }
+                        }))
                 }
                 if !track.isMissing {
                     HStack(spacing: 4) {
@@ -1784,7 +2031,7 @@ private struct WaveformTrackView: View {
                     )
             } else {
                 let currentCursorPosition = cursorPosition
-                let currentIsHovering = isHovering
+                let currentIsHovering = enableLens ? isHovering : false
                 Canvas(rendersAsynchronously: true) { context, size in
                     let W = size.width.isFinite ? Swift.min(size.width, 10000) : 10000
                     let H = size.height.isFinite ? Swift.min(size.height, 10000) : 10000
@@ -1792,7 +2039,7 @@ private struct WaveformTrackView: View {
                     let midY = H / 2
                     let xc = currentCursorPosition
                     let wl = lensWidth
-                    let M = magnification
+                    let M = magnification > 0.001 ? magnification : 1.0
                     let denominator = Double(W - wl) + (Double(wl) / Double(M))
                     let k1 = 1.0 / (denominator > 0 ? denominator : 1.0)
                     
@@ -1816,8 +2063,8 @@ private struct WaveformTrackView: View {
                     for x in stride(from: 0, to: W, by: 1) {
                         let tNorm = xToTNorm(x)
                         let currentSec = startOffset + (tNorm * displayDuration)
-                        let sampleIndex = Int((currentSec / totalDur) * Double(samples.count - 1))
-                        let sample = samples[Swift.min(Swift.max(0, sampleIndex), samples.count - 1)]
+                        let sampleIndex = safeSampleIndex(currentSec: currentSec, totalDur: totalDur, count: samples.count)
+                        let sample = samples[sampleIndex]
                         let barHeight = CGFloat(sample) * H * 0.7
                         let rect = CGRect(x: x, y: midY - (barHeight / 2), width: 1, height: max(1, barHeight))
                         let isInLens = currentIsHovering && abs(x - xc) < wl/2
@@ -2024,4 +2271,14 @@ private struct HoverCursorOverlay: View {
             .zIndex(500)
             .opacity(showCursor ? 1 : 0)
     }
+}
+
+private func safeSampleIndex(currentSec: Double, totalDur: Double, count: Int) -> Int {
+    guard count > 0 else { return 0 }
+    guard totalDur > 0 else { return 0 }
+    let ratio = currentSec / totalDur
+    guard ratio.isFinite else { return 0 }
+    let boundedRatio = Swift.max(0.0, Swift.min(1.0, ratio))
+    let index = Int(boundedRatio * Double(count - 1))
+    return Swift.max(0, Swift.min(count - 1, index))
 }
