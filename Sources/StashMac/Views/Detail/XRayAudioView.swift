@@ -1673,20 +1673,41 @@ private struct CompositeWaveformView: View {
                         let displayDuration = currentTimeRange?.duration.seconds ?? totalDur
                         
                         // 2. Batch drawing by color to reduce draw calls from W (1000+) to ~3-4
-                        var rectsByColor: [Color: [CGRect]] = [:]
+                        let fallbackIndex = sources.count
+                        var rectsByIndex: [[CGRect]] = Array(repeating: [], count: sources.count + 1)
+                        for i in 0..<rectsByIndex.count {
+                            rectsByIndex[i].reserveCapacity(Int(W))
+                        }
                         
                         let sourceSamples = sources.map { $0.samples }
                         
-                        for x in stride(from: 0, to: W, by: 1) {
+                        var topPath = Path()
+                        var bottomPath = Path()
+                        var firstPath = true
+                        
+                        for x in stride(from: 0, to: W, by: 1.0) {
                             let tNorm = xToTNorm(x)
                             let currentSec = startOffset + (tNorm * displayDuration)
                             let mIdx = safeSampleIndex(currentSec: currentSec, totalDur: totalDur, count: masterSamples.count)
                             let mVal = masterSamples[mIdx]
                             
+                            let barH = CGFloat(mVal) * H * 0.8
+                            let topPt = CGPoint(x: x, y: midY - (barH/2))
+                            let botPt = CGPoint(x: x, y: midY + (barH/2))
+                            
+                            if firstPath {
+                                topPath.move(to: topPt)
+                                bottomPath.move(to: botPt)
+                                firstPath = false
+                            } else {
+                                topPath.addLine(to: topPt)
+                                bottomPath.addLine(to: botPt)
+                            }
+                            
                             if mVal < 0.01 { continue }
                             
                             let normalizedMaster = mVal / masterMax
-                            var bestMatchColor: Color = master.color.opacity(0.3)
+                            var bestMatchIndex = fallbackIndex
                             var minDiff: Float = 1.0
                             
                             for idx in 0..<sources.count {
@@ -1698,36 +1719,29 @@ private struct CompositeWaveformView: View {
                                 let diff = abs(normalizedSource - normalizedMaster)
                                 if diff < minDiff {
                                     minDiff = diff
-                                    if diff < 0.3 { // More inclusive threshold with normalized values
-                                        bestMatchColor = sources[idx].color
+                                    if diff < 0.3 {
+                                        bestMatchIndex = idx
                                     }
                                 }
                             }
                             
-                            let barH = CGFloat(mVal) * H * 0.8
                             let rect = CGRect(x: x, y: midY - (barH/2), width: 1, height: max(1, barH))
-                            rectsByColor[bestMatchColor, default: []].append(rect)
+                            rectsByIndex[bestMatchIndex].append(rect)
                         }
                         
-                        for (color, rects) in rectsByColor {
+                        for idx in 0..<sources.count {
+                            if !rectsByIndex[idx].isEmpty {
+                                var path = Path()
+                                path.addRects(rectsByIndex[idx])
+                                context.fill(path, with: .color(sources[idx].color.opacity(0.8)))
+                            }
+                        }
+                        if !rectsByIndex[fallbackIndex].isEmpty {
                             var path = Path()
-                            path.addRects(rects)
-                            context.fill(path, with: .color(color.opacity(0.8)))
+                            path.addRects(rectsByIndex[fallbackIndex])
+                            context.fill(path, with: .color(master.color.opacity(0.3)))
                         }
                         
-                        var topPath = Path()
-                        var bottomPath = Path()
-                        var first = true
-                        for x in stride(from: 0, to: W, by: 1) {
-                            let tNorm = xToTNorm(x)
-                            let currentSec = startOffset + (tNorm * displayDuration)
-                            let val = masterSamples[safeSampleIndex(currentSec: currentSec, totalDur: totalDur, count: masterSamples.count)]
-                            let barH = CGFloat(val) * H * 0.8
-                            let topPt = CGPoint(x: x, y: midY - (barH/2))
-                            let botPt = CGPoint(x: x, y: midY + (barH/2))
-                            if first { topPath.move(to: topPt); bottomPath.move(to: botPt); first = false }
-                            else { topPath.addLine(to: topPt); bottomPath.addLine(to: botPt) }
-                        }
                         context.stroke(topPath, with: .color(master.color), lineWidth: 0.5)
                         context.stroke(bottomPath, with: .color(master.color), lineWidth: 0.5)
                     }
@@ -2062,7 +2076,9 @@ private struct WaveformTrackView: View {
                     guard !samples.isEmpty else { return }
                     var insideRects: [CGRect] = []
                     var outsideRects: [CGRect] = []
-                    for x in stride(from: 0, to: W, by: 1) {
+                    insideRects.reserveCapacity(Int(W))
+                    outsideRects.reserveCapacity(Int(W))
+                    for x in stride(from: 0, to: W, by: 1.0) {
                         let tNorm = xToTNorm(x)
                         let currentSec = startOffset + (tNorm * displayDuration)
                         let sampleIndex = safeSampleIndex(currentSec: currentSec, totalDur: totalDur, count: samples.count)
