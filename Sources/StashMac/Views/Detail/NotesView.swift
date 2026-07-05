@@ -223,8 +223,6 @@ struct NotesView: View {
         }
         .task(id: itemID) {
             do {
-                // Debounce selection: wait 150ms before loading media duration.
-                try await Task.sleep(nanoseconds: 150 * 1_000_000)
                 mediaDuration = await store.getMediaDuration(id: itemID)
             } catch {
                 // Task was cancelled, do nothing

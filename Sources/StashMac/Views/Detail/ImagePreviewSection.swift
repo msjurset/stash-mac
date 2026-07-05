@@ -62,8 +62,6 @@ struct ImagePreviewSection: View {
         .animation(.easeInOut(duration: 0.18), value: image)
         .task(id: fileURL.path) {
             do {
-                // Debounce selection: wait 100ms before loading full image.
-                try await Task.sleep(nanoseconds: 100 * 1_000_000)
                 await load()
             } catch {
                 // Task was cancelled, do nothing

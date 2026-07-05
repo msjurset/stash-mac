@@ -39,8 +39,6 @@ struct RelatedSection: View {
         }
         .task(id: itemID) {
             do {
-                // Debounce selection: wait 150ms before triggering heavy CLI calls.
-                try await Task.sleep(nanoseconds: 150 * 1_000_000)
                 
                 await withThrowingTaskGroup(of: Void.self) { group in
                     group.addTask { await reload() }

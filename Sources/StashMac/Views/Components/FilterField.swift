@@ -97,6 +97,9 @@ struct FilterField: NSViewRepresentable {
         if nsView.stringValue != text {
             nsView.stringValue = text
         }
+        if autoFocus && nsView.window != nil && nsView.window?.firstResponder != nsView {
+            DispatchQueue.main.async { nsView.window?.makeFirstResponder(nsView) }
+        }
         if nsView.placeholderString != placeholder {
             nsView.placeholderString = placeholder
         }

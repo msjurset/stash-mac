@@ -17,25 +17,33 @@ struct HoverTrackingView: NSViewRepresentable {
         var onHover: ((CGPoint?) -> Void)?
         private var trackingArea: NSTrackingArea?
         private var exitWorkItem: DispatchWorkItem?
+        private var lastHoverTime: TimeInterval = 0
 
         override func updateTrackingAreas() {
             super.updateTrackingAreas()
-            if trackingArea == nil {
-                let options: NSTrackingArea.Options = [.mouseEnteredAndExited, .mouseMoved, .activeInKeyWindow, .inVisibleRect]
-                let newArea = NSTrackingArea(rect: .zero, options: options, owner: self, userInfo: nil)
-                addTrackingArea(newArea)
-                self.trackingArea = newArea
+            if let existing = trackingArea {
+                removeTrackingArea(existing)
             }
+            let options: NSTrackingArea.Options = [.mouseEnteredAndExited, .mouseMoved, .activeInKeyWindow]
+            let newArea = NSTrackingArea(rect: self.bounds, options: options, owner: self, userInfo: nil)
+            addTrackingArea(newArea)
+            self.trackingArea = newArea
         }
 
         override func mouseMoved(with event: NSEvent) {
             cancelExit()
+            let now = CACurrentMediaTime()
+            if now - lastHoverTime < 0.016 { return }
+            lastHoverTime = now
             let loc = self.convert(event.locationInWindow, from: nil)
             onHover?(loc)
         }
 
         override func mouseEntered(with event: NSEvent) {
             cancelExit()
+            let now = CACurrentMediaTime()
+            if now - lastHoverTime < 0.016 { return }
+            lastHoverTime = now
             let loc = self.convert(event.locationInWindow, from: nil)
             onHover?(loc)
         }

@@ -75,6 +75,11 @@ enum WaveformGenerator {
         var samplesInCurrentChunk = 0
         
         while reader.status == .reading {
+            if Task.isCancelled {
+                reader.cancelReading()
+                print("[WAVE] Task Cancelled, stopping extraction.")
+                return []
+            }
             var shouldBreak = false
             autoreleasepool {
                 guard let buffer = output.copyNextSampleBuffer() else {
@@ -109,6 +114,7 @@ enum WaveformGenerator {
                 if points.count >= count { shouldBreak = true }
             }
             if shouldBreak { break }
+            await Task.yield()
         }
         
         if reader.status == .failed {

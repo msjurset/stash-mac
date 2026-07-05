@@ -93,7 +93,8 @@ struct ClickCatcher: NSViewRepresentable {
 
             switch event.type {
             case .leftMouseDown:
-                if event.clickCount == 2 && downInside && inBounds {
+                if event.clickCount == 2 && inBounds {
+                    downInside = true
                     pendingSingle?.cancel()
                     pendingSingle = nil
                     didDrag = false

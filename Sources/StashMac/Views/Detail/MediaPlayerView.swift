@@ -269,8 +269,6 @@ struct DirectMediaPlayer: View {
         .task(id: url) {
             do {
                 status = .checking
-                // Debounce selection: wait 150ms before checking playable status.
-                try await Task.sleep(nanoseconds: 150 * 1_000_000)
                 
                 let currentUrl = url
                 let currentMime = mimeHint
@@ -423,8 +421,6 @@ private struct CustomAudioPlayer: View {
         .padding(.horizontal, 4)
         .task(id: url) {
             do {
-                // Debounce selection: wait 150ms before loading and observing audio.
-                try await Task.sleep(nanoseconds: 150 * 1_000_000)
                 await loadAndObserve()
             } catch {
                 // Task was cancelled, do nothing

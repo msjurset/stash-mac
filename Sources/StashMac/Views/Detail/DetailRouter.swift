@@ -22,9 +22,9 @@ struct DetailRouter: View {
                     return
                 }
                 
-                // Debounce selection by 100ms: if arrowing down rapidly, 
+                // Debounce selection by 50ms: if arrowing down rapidly, 
                 // the intermediate detail views will never load or block rendering.
-                try await Task.sleep(nanoseconds: 100 * 1_000_000)
+                try await Task.sleep(nanoseconds: 50 * 1_000_000)
                 
                 debouncedItem = store.selectedItem
             } catch {
