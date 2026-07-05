@@ -561,47 +561,34 @@ struct ItemListView: View {
     private var typeFilterBar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
-                typeChip(label: "All", icon: "tray.full", value: nil)
+                TypeChipView(
+                    label: "All",
+                    icon: "tray.full",
+                    tooltip: "Show all item types",
+                    value: nil,
+                    selectedValue: store.filterType,
+                    onSelect: {
+                        store.filterType = nil
+                        store.debouncedRefresh()
+                    }
+                )
                 ForEach(ItemType.allCases) { t in
-                    typeChip(label: t.label, icon: t.icon, value: t)
+                    TypeChipView(
+                        label: t.label,
+                        icon: t.icon,
+                        tooltip: t.tooltip,
+                        value: t,
+                        selectedValue: store.filterType,
+                        onSelect: {
+                            store.filterType = t
+                            store.debouncedRefresh()
+                        }
+                    )
                 }
             }
         }
     }
 
-    private func typeChip(label: String, icon: String, value: ItemType?) -> some View {
-        let selected = store.filterType == value
-        return Button {
-            // Mirror the path the sidebar used to take: setting filterType
-            // and refreshing. We don't change `store.navigation` because
-            // the user is still in `.allItems`; the chip just narrows it.
-            store.filterType = value
-            store.debouncedRefresh()
-        } label: {
-            HStack(spacing: 4) {
-                Image(systemName: icon)
-                    .font(.caption2)
-                Text(label)
-                    .font(.caption.weight(selected ? .semibold : .regular))
-                    .lineLimit(1)
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(
-                Capsule()
-                    .fill(selected ? Color.accentColor.opacity(0.18) : Color.primary.opacity(0.05))
-            )
-            .overlay(
-                Capsule()
-                    .stroke(selected ? Color.accentColor.opacity(0.5) : Color.clear, lineWidth: 1)
-            )
-            .foregroundStyle(selected ? Color.accentColor : .primary)
-            // Each pill sized to its label; never compress / wrap the
-            // text. Overflow is handled by the parent ScrollView.
-            .fixedSize(horizontal: true, vertical: false)
-        }
-        .buttonStyle(.plain)
-    }
 
     // MARK: - Suggestion logic
 
@@ -1261,5 +1248,55 @@ private struct CollectionRowReorderModifier: ViewModifier {
         } else {
             content
         }
+    }
+}
+
+struct TypeChipView: View {
+    let label: String
+    let icon: String
+    let tooltip: String
+    let value: ItemType?
+    let selectedValue: ItemType?
+    let onSelect: () -> Void
+    
+    @State private var isHovering = false
+    
+    var body: some View {
+        let selected = selectedValue == value
+        Button {
+            onSelect()
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.caption2)
+                
+                if isHovering || selected {
+                    Text(label)
+                        .font(.caption.weight(selected ? .semibold : .regular))
+                        .lineLimit(1)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(
+                Capsule()
+                    .fill(selected ? Color.accentColor.opacity(0.18) : Color.primary.opacity(0.05))
+            )
+            .overlay(
+                Capsule()
+                    .stroke(selected ? Color.accentColor.opacity(0.5) : Color.clear, lineWidth: 1)
+            )
+            .foregroundStyle(selected ? Color.accentColor : .primary)
+            // Ensure the parent stretches nicely with the animation
+            .fixedSize(horizontal: true, vertical: false)
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            withAnimation(.snappy(duration: 0.2)) {
+                isHovering = hovering
+            }
+        }
+        .help(tooltip)
     }
 }
