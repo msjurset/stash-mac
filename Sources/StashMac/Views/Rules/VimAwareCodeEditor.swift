@@ -15,7 +15,7 @@ struct VimAwareCodeEditor: View {
     @State private var slashPrefix: String = ""
     @State private var slashSelectedIndex: Int = 0
 
-    private let registry = SlashCommandRegistry.shared
+    private let registry = SlashCommandRegistry.rules
 
     var body: some View {
         VStack(spacing: 0) {
@@ -102,6 +102,7 @@ struct VimAwareCodeEditor: View {
             }
         }
         
+        let capturedPrefix = slashPrefix
         slashPrefix = ""
         
         switch command {
@@ -124,6 +125,26 @@ struct VimAwareCodeEditor: View {
                 tv.replaceCharacters(in: range, with: newText)
                 tv.didChangeText()
                 tv.setSelectedRange(NSRange(location: 0, length: 0))
+            }
+        case .edit(let editCommand):
+            let cur = tv.selectedRange().location
+            var textWithPrefix = tv.string
+            // If the string doesn't have enough length for some reason, safeguard
+            if cur <= textWithPrefix.utf16.count {
+                let startIdx = String.Index(utf16Offset: cur, in: textWithPrefix)
+                textWithPrefix.insert(contentsOf: capturedPrefix, at: startIdx)
+                
+                let rangeStart = String.Index(utf16Offset: cur, in: textWithPrefix)
+                let rangeEnd = String.Index(utf16Offset: cur + capturedPrefix.utf16.count, in: textWithPrefix)
+                let swiftRange = rangeStart..<rangeEnd
+                
+                let result = editCommand.transform(textWithPrefix, swiftRange)
+                let range = NSRange(location: 0, length: (tv.string as NSString).length)
+                if tv.shouldChangeText(in: range, replacementString: result.newText) {
+                    tv.replaceCharacters(in: range, with: result.newText)
+                    tv.didChangeText()
+                    tv.setSelectedRange(NSRange(location: result.newCursor, length: 0))
+                }
             }
         case .action(let actionCommand):
             onAction?(actionCommand)

@@ -1428,12 +1428,8 @@ actor StashCLI {
 
     private func aiTransform(kind: String, text: String) async throws -> String {
         struct TransformResult: Decodable { let result: String }
-        // The backend expects a POST body, but our CLI captureJSON(args:)
-        // only supports GET with args. Let's add a proper POST handler
-        // or use captureJSONWithStdin if the backend supports it.
-        // Actually, the current captureJSON uses the HTTP client to the
-        // local server. I need a way to send a POST body.
-        return try await captureJSONWithStdin(args: ["ai-\(kind)", "--json"], input: text)
+        let res: TransformResult = try await captureJSONWithStdin(args: ["ai-\(kind)", "--json"], input: text)
+        return res.result
     }
 
     func createBackup(dbOnly: Bool = false) async throws {

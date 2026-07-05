@@ -1267,14 +1267,14 @@ struct TypeChipView: View {
             onSelect()
         } label: {
             HStack(spacing: 4) {
-                Image(systemName: icon)
-                    .font(.caption2)
-                
                 if isHovering || selected {
                     Text(label)
                         .font(.caption.weight(selected ? .semibold : .regular))
                         .lineLimit(1)
                 }
+                
+                Image(systemName: icon)
+                    .font(.caption2)
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 4)

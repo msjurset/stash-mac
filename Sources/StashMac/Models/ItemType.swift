@@ -34,12 +34,12 @@ enum ItemType: String, Codable, CaseIterable, Identifiable {
 
     var tooltip: String {
         switch self {
-        case .url: "Web pages, articles, and external links"
-        case .snippet: "Text snippets, code fragments, and notes"
-        case .file: "Documents, PDFs, and generic files"
-        case .image: "Photos, screenshots, and visual assets"
-        case .audio: "Voice memos, recordings, and audio files"
-        case .email: "Saved emails and correspondence"
+        case .url: "Web pages, articles, bookmarks, and external links"
+        case .snippet: "Text snippets, code fragments, notes, and quick thoughts"
+        case .file: "PDFs, spreadsheets, presentations, and generic documents"
+        case .image: "Photos, screenshots, diagrams, and other visual assets"
+        case .audio: "Voice memos, meetings, lectures, and other audio recordings"
+        case .email: "Saved emails, correspondence, and newsletters"
         }
     }
 }

@@ -12,6 +12,7 @@ public enum SlashCommand: Identifiable, Hashable, Sendable {
     case inline(TransformCommand)
     case field(TransformCommand)
     case action(ActionCommand)
+    case edit(EditCommand)
 
     public var name: String {
         switch self {
@@ -19,6 +20,7 @@ public enum SlashCommand: Identifiable, Hashable, Sendable {
         case .inline(let t): return t.name
         case .field(let t): return t.name
         case .action(let a): return a.name
+        case .edit(let e): return e.name
         }
     }
 
@@ -28,6 +30,7 @@ public enum SlashCommand: Identifiable, Hashable, Sendable {
         case .inline(let t): return t.description
         case .field(let t): return t.description
         case .action(let a): return a.description
+        case .edit(let e): return e.description
         }
     }
 
@@ -74,6 +77,31 @@ public struct TransformCommand: Identifiable, Hashable, Sendable {
     }
 }
 
+
+/// A command that performs a contextual edit, receiving the full text and
+/// the range of the slash command token, returning the new text and cursor offset.
+public struct EditCommand: Identifiable, Hashable, Sendable {
+    public let name: String
+    public let description: String
+    public let transform: @Sendable (_ text: String, _ tokenRange: Range<String.Index>) -> (newText: String, newCursor: Int)
+
+    public var id: String { name }
+
+    public init(name: String, description: String, transform: @Sendable @escaping (String, Range<String.Index>) -> (String, Int)) {
+        self.name = name
+        self.description = description
+        self.transform = transform
+    }
+
+    public static func == (lhs: EditCommand, rhs: EditCommand) -> Bool {
+        lhs.name == rhs.name
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(name)
+    }
+}
+
 /// A command that triggers a side-effect (e.g. archiving the item).
 public struct ActionCommand: Identifiable, Hashable, Sendable {
     public let name: String
@@ -95,6 +123,25 @@ public enum EditorMode: String, Hashable, Codable, Sendable {
 }
 
 /// Built-in slash commands available in every VimHostEditor.
+public enum SlashCommandContext: Hashable, Sendable {
+    case notes
+    case rules
+}
+
+public let notesSlashCommands: [SlashCommand] = builtInSlashCommands.filter { cmd in
+    switch cmd.name {
+    case "tags", "archive": return false // Don't show these in Notes editor
+    default: return true
+    }
+}
+
+public let rulesSlashCommands: [SlashCommand] = builtInSlashCommands.filter { cmd in
+    switch cmd.name {
+    case "fix", "sum", "tags", "archive": return false // No AI item actions in rules
+    default: return true
+    }
+}
+
 public let builtInSlashCommands: [SlashCommand] = [
     .mode(ModeCommand(name: "vim", description: "vim keybindings", mode: .vim)),
     .mode(ModeCommand(name: "uc", description: "uppercase mode", mode: .uppercase)),
@@ -106,11 +153,39 @@ public let builtInSlashCommands: [SlashCommand] = [
             .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
             .joined(separator: "\n")
     })),
-    .field(TransformCommand(name: "unique", description: "deduplicate lines", transform: { text in
+    .field(TransformCommand(name: "dedup", description: "deduplicate lines", transform: { text in
         var seen = Set<String>()
         return text.components(separatedBy: .newlines)
             .filter { seen.insert($0).inserted }
             .joined(separator: "\n")
+    })),
+    
+    // Contextual edits
+    .edit(EditCommand(name: "dup", description: "duplicate current line", transform: { text, range in
+        // Remove the /dup token first
+        var mutableText = text
+        mutableText.removeSubrange(range)
+        
+        // Find the line that the token was on
+        // range.lowerBound is now the position where the token used to be
+        let insertPos = range.lowerBound
+        let lineRange = mutableText.lineRange(for: insertPos..<insertPos)
+        let lineText = String(mutableText[lineRange])
+        
+        // If line doesn't have a newline at the end (e.g. last line), we need to add one
+        let hasNewline = lineText.hasSuffix("\n") || lineText.hasSuffix("\r\n")
+        let newlineStr = hasNewline ? "" : "\n"
+        
+        // Insert the duplicated line immediately after the current line
+        let insertionIndex = lineRange.upperBound
+        let textToInsert = newlineStr + lineText
+        mutableText.insert(contentsOf: textToInsert, at: insertionIndex)
+        
+        // Place cursor at the end of the newly duplicated line
+        let prefixEnd = mutableText.utf16.distance(from: mutableText.utf16.startIndex, to: insertionIndex.samePosition(in: mutableText.utf16) ?? mutableText.utf16.startIndex)
+        let newCursor = prefixEnd + textToInsert.utf16.count
+        
+        return (mutableText, newCursor)
     })),
     .field(TransformCommand(name: "reverse", description: "reverse text", transform: { String($0.reversed()) })),
 
@@ -134,7 +209,11 @@ public let builtInSlashCommands: [SlashCommand] = [
 /// filter over `builtInSlashCommands`. Lives as a singleton so the
 /// editor's textDidChange can hit it without dependency injection.
 public final class SlashCommandRegistry: Sendable {
+
     public static let shared = SlashCommandRegistry()
+    public static let notes = SlashCommandRegistry(commands: notesSlashCommands)
+    public static let rules = SlashCommandRegistry(commands: rulesSlashCommands)
+
 
     private let commands: [SlashCommand]
 

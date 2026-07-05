@@ -68,7 +68,11 @@ struct VimAwareEditor: View {
         externalController ?? internalController
     }
 
-    private let registry = SlashCommandRegistry.shared
+    var context: SlashCommandContext = .notes
+
+    private var registry: SlashCommandRegistry {
+        context == .rules ? .rules : .notes
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -195,6 +199,10 @@ struct VimAwareEditor: View {
             // Field transforms usually reset cursor to start or end;
             // let's stick to start or preserve approximate position.
             pendingCursor = 0
+        case .edit(let editCommand):
+            let result = editCommand.transform(text, range)
+            text = result.newText
+            pendingCursor = result.newCursor
         case .action(let actionCommand):
             text.replaceSubrange(range, with: "")
             pendingCursor = prefixStartUTF16
