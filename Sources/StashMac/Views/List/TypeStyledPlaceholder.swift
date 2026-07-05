@@ -26,7 +26,7 @@ struct TypeStyledPlaceholder: View {
         switch item.type {
         case .url:
             urlContent
-        case .file:
+        case .file, .audio:
             fileContent
         case .image:
             singleIcon("photo")
@@ -127,7 +127,7 @@ struct TypeStyledPlaceholder: View {
         case .url:
             return Palette(top: Color(red: 0.20, green: 0.40, blue: 0.85),
                            bottom: Color(red: 0.10, green: 0.20, blue: 0.55))
-        case .file:
+        case .file, .audio:
             return Palette(top: Color(red: 0.35, green: 0.40, blue: 0.50),
                            bottom: Color(red: 0.18, green: 0.22, blue: 0.32))
         case .image:

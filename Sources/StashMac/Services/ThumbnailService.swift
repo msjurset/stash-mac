@@ -150,7 +150,7 @@ final class ThumbnailService {
             return ThumbnailCache.loadOriented(from: url)
                 ?? PlaceholderGenerator.generatePlaceholder(for: item)
 
-        case .file:
+        case .file, .audio:
             guard let storePath = item.storePath,
                   let url = FilePathResolver.resolve(storePath: storePath) else { return nil }
 

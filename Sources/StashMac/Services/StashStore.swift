@@ -1099,7 +1099,7 @@ final class StashStore {
     private func shouldAutoThumbnail(_ item: StashItem) -> Bool {
         guard item.thumbnailPath == nil else { return false }
         switch item.type {
-        case .image, .file: return true
+        case .image, .file, .audio: return true
         case .url, .snippet, .email: return false
         }
     }

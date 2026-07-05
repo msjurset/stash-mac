@@ -33,7 +33,7 @@ enum ShareMenu {
             addURLActions(to: menu, item: item)
         case .snippet:
             addSnippetActions(to: menu, item: item)
-        case .file:
+        case .file, .audio:
             addFileActions(to: menu, item: item)
         case .email:
             addEmailActions(to: menu, item: item)

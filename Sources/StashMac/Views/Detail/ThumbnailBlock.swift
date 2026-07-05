@@ -148,7 +148,7 @@ struct ThumbnailTile: View {
 
     private var canGenerate: Bool {
         switch item.type {
-        case .image, .file: return true
+        case .image, .file, .audio: return true
         case .url, .snippet, .email: return false
         }
     }

@@ -5,6 +5,7 @@ enum ItemType: String, Codable, CaseIterable, Identifiable {
     case snippet
     case file
     case image
+    case audio
     case email
 
     var id: String { rawValue }
@@ -15,6 +16,7 @@ enum ItemType: String, Codable, CaseIterable, Identifiable {
         case .snippet: "Snippets"
         case .file: "Files"
         case .image: "Images"
+        case .audio: "Audio"
         case .email: "Emails"
         }
     }
@@ -25,6 +27,7 @@ enum ItemType: String, Codable, CaseIterable, Identifiable {
         case .snippet: "doc.text"
         case .file: "doc"
         case .image: "photo"
+        case .audio: "waveform"
         case .email: "envelope"
         }
     }

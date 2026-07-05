@@ -35,7 +35,7 @@ enum MediaResolver {
     /// matches. Pure — no IO.
     static func resolve(_ item: StashItem) -> Kind {
         switch item.type {
-        case .file:
+        case .file, .audio:
             return resolveFile(item)
         case .url:
             return resolveURL(item)

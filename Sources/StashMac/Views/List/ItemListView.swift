@@ -1016,7 +1016,7 @@ struct ItemListView: View {
             Button(item.thumbnailPath == nil ? "Import Thumbnail" : "Re-import Thumbnail") {
                 store.importThumbnail(itemID: item.id)
             }
-        case .image, .file:
+        case .image, .file, .audio:
             Divider()
             if store.generatingThumbnailIDs.contains(item.id) {
                 Text("Generating...")
@@ -1043,7 +1043,7 @@ struct ItemListView: View {
         ids.filter { id in
             guard let item = store.items.first(where: { $0.id == id }) else { return false }
             switch item.type {
-            case .url, .image, .file: return true
+            case .url, .image, .file, .audio: return true
             case .snippet, .email:    return false
             }
         }
@@ -1060,7 +1060,7 @@ struct ItemListView: View {
             store.items.first(where: { $0.id == id })
         }.filter { item in
             switch item.type {
-            case .url, .image, .file: return true
+            case .url, .image, .file, .audio: return true
             case .snippet, .email:    return false
             }
         }
@@ -1073,7 +1073,7 @@ struct ItemListView: View {
                     switch item.type {
                     case .url:
                         try await store.importThumbnailAwaitable(itemID: item.id)
-                    case .image, .file:
+                    case .image, .file, .audio:
                         try await store.generateThumbnailAwaitable(for: item)
                     case .snippet, .email:
                         continue
