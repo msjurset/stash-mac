@@ -206,15 +206,72 @@ class VimHostTextView: NSTextView {
         }
     }
 
+    var onFirstResponderChanged: ((Bool) -> Void)?
+
     override func becomeFirstResponder() -> Bool {
         let ok = super.becomeFirstResponder()
         if ok {
             disableAutoFeatures()
+            onFirstResponderChanged?(true)
         }
         return ok
     }
 
+    override func resignFirstResponder() -> Bool {
+        let ok = super.resignFirstResponder()
+        if ok {
+            onFirstResponderChanged?(false)
+        }
+        return ok
+    }
+
+    var focusOnWindowArrival = false
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil && focusOnWindowArrival {
+            focusOnWindowArrival = false
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self, let window = self.window else { return }
+                if !window.isKeyWindow {
+                    window.makeKeyAndOrderFront(nil)
+                }
+                if !window.makeFirstResponder(self) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        window.makeFirstResponder(self)
+                    }
+                }
+            }
+        }
+    }
+
     // MARK: - Cmd-shortcut passthrough
+
+    var onDoubleClickWhitespace: (() -> Void)?
+
+    private func isPointOnGlyph(_ point: NSPoint) -> Bool {
+        guard let layoutManager, let textContainer else { return false }
+        var fraction: CGFloat = 0
+        // Convert point to text container coordinates
+        let containerPoint = NSPoint(x: point.x - textContainerOrigin.x, y: point.y - textContainerOrigin.y)
+        let glyphIndex = layoutManager.glyphIndex(for: containerPoint, in: textContainer, fractionOfDistanceThroughGlyph: &fraction)
+        if fraction > 0 && fraction < 1 {
+            return true
+        }
+        let glyphRect = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyphIndex, length: 1), in: textContainer)
+        return glyphRect.contains(containerPoint)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if event.clickCount == 2 {
+            let point = convert(event.locationInWindow, from: nil)
+            if !isPointOnGlyph(point), let handler = onDoubleClickWhitespace {
+                handler()
+                return // Consume click so we don't also place cursor natively
+            }
+        }
+        super.mouseDown(with: event)
+    }
 
     /// Standard Cmd shortcuts still work while vim is active —
     /// they go through performKeyEquivalent before keyDown, so

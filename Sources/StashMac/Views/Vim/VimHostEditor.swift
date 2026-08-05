@@ -52,11 +52,15 @@ struct VimHostEditor: NSViewRepresentable {
     /// views.
     var onFocusChanged: ((Bool) -> Void)?
 
+    /// caller-supplied handler for double clicks on whitespace.
+    var onDoubleClickWhitespace: (() -> Void)?
+
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSScrollView()
+        let scrollView = VimEditorScrollView()
         scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
         scrollView.borderType = .noBorder
         scrollView.autohidesScrollers = true
         scrollView.drawsBackground = drawsBackground
@@ -66,7 +70,7 @@ struct VimHostEditor: NSViewRepresentable {
         let layoutManager = NSLayoutManager()
         textStorage.addLayoutManager(layoutManager)
 
-        let containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
+        let containerSize = NSSize(width: 100, height: CGFloat.greatestFiniteMagnitude)
         let textContainer = NSTextContainer(containerSize: containerSize)
         textContainer.widthTracksTextView = true
         layoutManager.addTextContainer(textContainer)
@@ -83,6 +87,8 @@ struct VimHostEditor: NSViewRepresentable {
             : font
         tv.font = resolvedFont
         tv.textColor = .textColor
+        tv.isEditable = true
+        tv.isSelectable = true
         tv.isRichText = false
         tv.allowsUndo = true
         tv.disableAutoFeatures()
@@ -99,6 +105,8 @@ struct VimHostEditor: NSViewRepresentable {
             coordinator.parent.onSlashKeyEvent?(event) ?? false
         }
         tv.submitHandler = { coordinator.parent.onSubmit?() }
+        tv.onDoubleClickWhitespace = { coordinator.parent.onDoubleClickWhitespace?() }
+        tv.onFirstResponderChanged = { focused in coordinator.parent.onFocusChanged?(focused) }
         context.coordinator.textView = tv
 
         tv.string = text
@@ -114,6 +122,16 @@ struct VimHostEditor: NSViewRepresentable {
 
         guard let tv = scrollView.documentView as? VimHostTextView else { return }
 
+        let contentWidth = scrollView.contentSize.width
+        if contentWidth > 0 {
+            if tv.frame.size.width != contentWidth {
+                tv.frame.size.width = contentWidth
+            }
+            if let tc = tv.textContainer, tc.containerSize.width != contentWidth {
+                tc.containerSize = NSSize(width: contentWidth, height: .greatestFiniteMagnitude)
+            }
+        }
+
         if tv.string != text {
             context.coordinator.updatingFromBinding = true
             tv.string = text
@@ -125,11 +143,21 @@ struct VimHostEditor: NSViewRepresentable {
         // doesn't re-apply it on every render. Async-clear so the
         // SetState fires outside this update cycle.
         if let cursor = pendingCursor {
+            DispatchQueue.main.async {
+                self.pendingCursor = nil
+            }
             let length = (tv.string as NSString).length
             let clamped = max(0, min(cursor, length))
             tv.setSelectedRange(NSRange(location: clamped, length: 0))
-            DispatchQueue.main.async {
-                self.pendingCursor = nil
+            if let window = tv.window {
+                DispatchQueue.main.async {
+                    if !window.isKeyWindow {
+                        window.makeKeyAndOrderFront(nil)
+                    }
+                    window.makeFirstResponder(tv)
+                }
+            } else {
+                tv.focusOnWindowArrival = true
             }
         }
 
@@ -188,13 +216,7 @@ struct VimHostEditor: NSViewRepresentable {
             parent.slashPrefix = Self.findSlashPrefix(in: tv)
         }
 
-        func textDidBeginEditing(_ notification: Notification) {
-            parent.onFocusChanged?(true)
-        }
 
-        func textDidEndEditing(_ notification: Notification) {
-            parent.onFocusChanged?(false)
-        }
 
         /// Walk back from the caret looking for the start of a
         /// slash-command token (`/<alphanum/-/_>*`). Returns the
@@ -202,14 +224,20 @@ struct VimHostEditor: NSViewRepresentable {
         /// slash context at the cursor.
         @MainActor
         static func findSlashPrefix(in tv: NSTextView) -> String {
-            let cursorLocation = tv.selectedRange().location
+            let selectedRange = tv.selectedRange()
+            guard selectedRange.location != NSNotFound else { return "" }
+            let cursorLocation = selectedRange.location
             let string = tv.string
-            guard cursorLocation > 0, cursorLocation <= string.count else { return "" }
-
             let nsString = string as NSString
+
+            guard cursorLocation > 0, cursorLocation <= nsString.length else { return "" }
+
             var i = cursorLocation - 1
             while i >= 0 {
                 let ch = nsString.character(at: i)
+                if ch >= 0xD800 && ch <= 0xDFFF {
+                    return ""
+                }
                 guard let scalar = Unicode.Scalar(ch) else { return "" }
                 if scalar == "/" {
                     // Only trigger slash commands if preceded by space or
@@ -217,6 +245,9 @@ struct VimHostEditor: NSViewRepresentable {
                     // `pollinators./` don't trigger accidentally.
                     if i > 0 {
                         let prev = nsString.character(at: i - 1)
+                        if prev >= 0xD800 && prev <= 0xDFFF {
+                            return ""
+                        }
                         if let prevScalar = Unicode.Scalar(prev),
                            !CharacterSet.whitespacesAndNewlines.contains(prevScalar) {
                             return ""
@@ -230,6 +261,24 @@ struct VimHostEditor: NSViewRepresentable {
                 }
             }
             return ""
+        }
+    }
+}
+
+private class VimEditorScrollView: NSScrollView {
+    override func tile() {
+        super.tile()
+        let contentWidth = contentSize.width
+        let contentHeight = contentSize.height
+        guard contentWidth > 0, let tv = documentView as? NSTextView else { return }
+        if tv.frame.size.width != contentWidth {
+            tv.frame.size.width = contentWidth
+        }
+        if tv.minSize.height != contentHeight {
+            tv.minSize = NSSize(width: 0, height: contentHeight)
+        }
+        if let container = tv.textContainer, container.containerSize.width != contentWidth {
+            container.containerSize = NSSize(width: contentWidth, height: .greatestFiniteMagnitude)
         }
     }
 }
