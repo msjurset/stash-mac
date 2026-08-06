@@ -12,18 +12,19 @@ struct ModelAutocompleteField: View {
 
     @State private var activeIndex = 0
     @State private var dropdownOpen = false
+    @State private var isProgrammaticEdit = false
 
     private var allModels: [String] {
         switch providerID {
         case .gemini:
             return [
+                "gemini-3.1-flash",
+                "gemini-3.5-flash",
+                "gemini-3.1-pro",
+                "gemini-3.1-flash-lite",
                 "gemini-2.5-flash",
                 "gemini-2.5-pro",
                 "gemini-2.5-flash-lite",
-                "gemini-3.1-flash",
-                "gemini-3.1-pro",
-                "gemini-3.1-flash-lite",
-                "gemini-3.5-flash",
                 "gemini-1.5-flash",
                 "gemini-1.5-pro"
             ]
@@ -110,6 +111,7 @@ struct ModelAutocompleteField: View {
             )
             .frame(height: 22)
             .onChange(of: text) { _, _ in
+                if isProgrammaticEdit { return }
                 let isFocused = NSApp.keyWindow?.firstResponder is NSTextView
                 if isFocused {
                     dropdownOpen = !filtered.isEmpty
@@ -152,17 +154,29 @@ struct ModelAutocompleteField: View {
 
     private func handleTab(reverse: Bool) -> Bool {
         if !dropdownOpen {
-            if filtered.isEmpty { return false }
-            dropdownOpen = true
-            activeIndex = reverse ? filtered.count - 1 : 0
-            return true
+            return false
         }
         if filtered.count == 1 {
             commitSelection(filtered[0])
             return true
         }
-        activeIndex = clamp(reverse ? activeIndex - 1 : activeIndex + 1, filtered.count)
-        return true
+        if reverse {
+            if activeIndex > 0 {
+                activeIndex -= 1
+                return true
+            } else {
+                dropdownOpen = false
+                return false
+            }
+        } else {
+            if activeIndex < filtered.count - 1 {
+                activeIndex += 1
+                return true
+            } else {
+                dropdownOpen = false
+                return false
+            }
+        }
     }
 
     private func handleArrow(reverse: Bool) -> Bool {
@@ -182,6 +196,7 @@ struct ModelAutocompleteField: View {
     }
 
     private func commitSelection(_ name: String) {
+        isProgrammaticEdit = true
         if isMultiValue {
             var parts = text.split(separator: ",", omittingEmptySubsequences: false)
                 .map { $0.trimmingCharacters(in: .whitespaces) }
@@ -196,5 +211,8 @@ struct ModelAutocompleteField: View {
         }
         dropdownOpen = false
         activeIndex = 0
+        DispatchQueue.main.async {
+            isProgrammaticEdit = false
+        }
     }
 }

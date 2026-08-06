@@ -42,7 +42,7 @@ struct ItemDetailView: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 16, pinnedViews: pinnedViews) {
+                VStack(alignment: .leading, spacing: 16) {
                     // Header
                     VStack(alignment: .leading, spacing: 16) {
                         HStack {

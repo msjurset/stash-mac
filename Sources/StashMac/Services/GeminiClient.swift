@@ -18,7 +18,7 @@ struct GeminiProvider: AIProvider {
     var keyURL: URL { URL(string: "https://aistudio.google.com/app/apikey")! }
     var defaultPrompt: String { AIPrompts.defaultIdentify }
 
-    var model: String = "gemini-2.5-flash"
+    var model: String = "gemini-3.1-flash"
     var timeout: TimeInterval { 30.0 }
     var urlSession: URLSession = .shared
 
@@ -136,8 +136,18 @@ struct GeminiProvider: AIProvider {
         guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw GeminiError.missingKey
         }
+        let effectiveModel: String
+        switch model {
+        case "gemini-3.1-flash":
+            effectiveModel = "gemini-3.1-flash-lite"
+        case "gemini-3.1-pro":
+            effectiveModel = "gemini-3.1-pro-preview"
+        default:
+            effectiveModel = model
+        }
+        let apiVersion = (effectiveModel.contains("3.") || effectiveModel.contains("2.")) ? "v1beta" : "v1"
         let urlString =
-            "https://generativelanguage.googleapis.com/v1/models/\(model):generateContent?key=\(apiKey)"
+            "https://generativelanguage.googleapis.com/\(apiVersion)/models/\(effectiveModel):generateContent?key=\(apiKey)"
 
         guard let url = URL(string: urlString) else {
             throw GeminiError.decode("bad URL")

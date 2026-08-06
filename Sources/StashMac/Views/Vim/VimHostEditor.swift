@@ -274,6 +274,11 @@ private class VimEditorScrollView: NSScrollView {
         if tv.frame.size.width != contentWidth {
             tv.frame.size.width = contentWidth
         }
+        let layoutHeight = tv.layoutManager?.usedRect(for: tv.textContainer!).height ?? 0
+        let targetHeight = max(contentHeight, layoutHeight + tv.textContainerInset.height * 2)
+        if tv.frame.size.height != targetHeight {
+            tv.frame.size.height = targetHeight
+        }
         if tv.minSize.height != contentHeight {
             tv.minSize = NSSize(width: 0, height: contentHeight)
         }

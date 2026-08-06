@@ -250,16 +250,29 @@ class VimHostTextView: NSTextView {
     var onDoubleClickWhitespace: (() -> Void)?
 
     private func isPointOnGlyph(_ point: NSPoint) -> Bool {
-        guard let layoutManager, let textContainer else { return false }
-        var fraction: CGFloat = 0
-        // Convert point to text container coordinates
+        let nsString = string as NSString
+        if nsString.length == 0 { return false }
+        guard let layoutManager = self.layoutManager, let textContainer = self.textContainer else { return false }
+        
         let containerPoint = NSPoint(x: point.x - textContainerOrigin.x, y: point.y - textContainerOrigin.y)
-        let glyphIndex = layoutManager.glyphIndex(for: containerPoint, in: textContainer, fractionOfDistanceThroughGlyph: &fraction)
-        if fraction > 0 && fraction < 1 {
-            return true
+        let charIndex = self.characterIndexForInsertion(at: point)
+        
+        guard charIndex < nsString.length else { return false }
+        
+        let glyphIndex = layoutManager.glyphIndexForCharacter(at: charIndex)
+        let boundingRect = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyphIndex, length: 1), in: textContainer)
+        
+        // Expand the hit target by a few pixels for comfort
+        let hitRect = boundingRect.insetBy(dx: -4, dy: -4)
+        return hitRect.contains(containerPoint)
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let localPoint = convert(point, from: superview)
+        if bounds.contains(localPoint) {
+            return self
         }
-        let glyphRect = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyphIndex, length: 1), in: textContainer)
-        return glyphRect.contains(containerPoint)
+        return super.hitTest(point)
     }
 
     override func mouseDown(with event: NSEvent) {

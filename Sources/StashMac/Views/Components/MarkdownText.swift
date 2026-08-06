@@ -9,16 +9,22 @@ import SwiftUI
 struct MarkdownText: View {
     let content: String
     var lineLimit: Int?
-    /// When `false`, the rendered text cannot be selected. Useful when the
-    /// text is a preview and the container wants to own click gestures (e.g.
-    /// double-click-to-edit) instead of letting AppKit steal them for word
-    /// selection.
     var isSelectable: Bool
+    var onSingleClick: ((Int?) -> Void)?
+    var onDoubleClick: (() -> Void)?
 
-    init(_ content: String, lineLimit: Int? = nil, isSelectable: Bool = true) {
+    init(
+        _ content: String,
+        lineLimit: Int? = nil,
+        isSelectable: Bool = true,
+        onSingleClick: ((Int?) -> Void)? = nil,
+        onDoubleClick: (() -> Void)? = nil
+    ) {
         self.content = content
         self.lineLimit = lineLimit
         self.isSelectable = isSelectable
+        self.onSingleClick = onSingleClick
+        self.onDoubleClick = onDoubleClick
     }
 
     var body: some View {
@@ -35,6 +41,12 @@ struct MarkdownText: View {
                         .lineLimit(lineLimit)
                         .textSelectionEnabled(isSelectable)
                 }
+            } else if isSelectable {
+                SelectableMarkdownView(
+                    content: content,
+                    onSingleClick: onSingleClick,
+                    onDoubleClick: onDoubleClick
+                )
             } else {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(Array(parseBlocks(content).enumerated()), id: \.offset) { _, block in
@@ -340,3 +352,195 @@ extension View {
         }
     }
 }
+
+private struct SelectableMarkdownView: NSViewRepresentable {
+    let content: String
+    var onSingleClick: ((Int?) -> Void)?
+    var onDoubleClick: (() -> Void)?
+
+    final class Coordinator {
+        var lastContent: String?
+        var cachedAttributedString: NSAttributedString?
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> ClickAwareTextView {
+        let tv = ClickAwareTextView()
+        tv.isEditable = false
+        tv.isSelectable = true
+        tv.drawsBackground = false
+        tv.disableAutoFeatures()
+        tv.textContainerInset = NSSize(width: 0, height: 0)
+        if let tc = tv.textContainer {
+            tc.lineFragmentPadding = 0
+            tc.widthTracksTextView = true
+        }
+        tv.autoresizingMask = [.width]
+        tv.onSingleClick = onSingleClick
+        tv.onDoubleClick = onDoubleClick
+        let attr = createAttributedString(from: content)
+        context.coordinator.lastContent = content
+        context.coordinator.cachedAttributedString = attr
+        tv.attributedText = attr
+        return tv
+    }
+
+    func updateNSView(_ tv: ClickAwareTextView, context: Context) {
+        tv.onSingleClick = onSingleClick
+        tv.onDoubleClick = onDoubleClick
+        if context.coordinator.lastContent != content {
+            context.coordinator.lastContent = content
+            let attr = createAttributedString(from: content)
+            context.coordinator.cachedAttributedString = attr
+            tv.attributedText = attr
+        }
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: ClickAwareTextView, context: Context) -> CGSize? {
+        let currentWidth = nsView.frame.width > 0 ? nsView.frame.width : (nsView.bounds.width > 0 ? nsView.bounds.width : nil)
+        let width = proposal.width ?? currentWidth ?? 600
+        let attr: NSAttributedString
+        if context.coordinator.lastContent == content, let cached = context.coordinator.cachedAttributedString {
+            attr = cached
+        } else {
+            attr = createAttributedString(from: content)
+        }
+        let rect = attr.boundingRect(
+            with: NSSize(width: width, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading]
+        )
+        let height = ceil(rect.height)
+        return CGSize(width: width, height: max(height, 20))
+    }
+
+    private func createAttributedString(from content: String) -> NSAttributedString {
+        let cleaned = preprocessInlineMarkdown(content)
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.lineSpacing = 4
+
+        var resultAttr: NSMutableAttributedString
+        if let attributed = try? AttributedString(markdown: cleaned, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) {
+            resultAttr = NSMutableAttributedString(attributed)
+        } else {
+            resultAttr = NSMutableAttributedString(string: content)
+        }
+
+        let fullRange = NSRange(location: 0, length: resultAttr.length)
+        resultAttr.addAttribute(.font, value: NSFont.systemFont(ofSize: 13), range: fullRange)
+        resultAttr.addAttribute(.foregroundColor, value: NSColor.textColor, range: fullRange)
+        resultAttr.addAttribute(.paragraphStyle, value: paragraphStyle, range: fullRange)
+        return resultAttr
+    }
+
+    private func preprocessInlineMarkdown(_ text: String) -> String {
+        text.split(separator: "\n", omittingEmptySubsequences: false).map { line in
+            let trimmed = line.drop(while: { $0 == " " })
+            if let m = trimmed.wholeMatch(of: /^(#{1,6})\s+(.+)/) {
+                return "**\(m.output.2)**"
+            }
+            if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") {
+                let bulletText = trimmed.dropFirst(2).trimmingCharacters(in: .whitespaces)
+                if bulletText.hasPrefix("[ ]") {
+                    return "☐ \(bulletText.dropFirst(3).trimmingCharacters(in: .whitespaces))"
+                } else if bulletText.hasPrefix("[x]") || bulletText.hasPrefix("[X]") {
+                    return "☑ \(bulletText.dropFirst(3).trimmingCharacters(in: .whitespaces))"
+                }
+                return "• \(trimmed.dropFirst(2))"
+            }
+            return String(line)
+        }.joined(separator: "\n")
+    }
+}
+
+private final class ClickAwareTextView: NSTextView {
+    var onSingleClick: ((Int?) -> Void)?
+    var onDoubleClick: (() -> Void)?
+    var attributedText: NSAttributedString = NSAttributedString() {
+        didSet {
+            textStorage?.setAttributedString(attributedText)
+        }
+    }
+    private var pendingSingleClick: DispatchWorkItem?
+    private var isDragging = false
+
+    private func isPointOnGlyph(_ point: NSPoint) -> Bool {
+        guard let layoutManager, let textContainer else { return false }
+        var fraction: CGFloat = 0
+        let containerPoint = NSPoint(x: point.x - textContainerOrigin.x, y: point.y - textContainerOrigin.y)
+        let glyphIndex = layoutManager.glyphIndex(for: containerPoint, in: textContainer, fractionOfDistanceThroughGlyph: &fraction)
+        if fraction > 0 && fraction < 1 {
+            return true
+        }
+        let glyphRect = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyphIndex, length: 1), in: textContainer)
+        return glyphRect.contains(containerPoint)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if event.clickCount == 2 {
+            pendingSingleClick?.cancel()
+            pendingSingleClick = nil
+            
+            let point = convert(event.locationInWindow, from: nil)
+            if !isPointOnGlyph(point), let onDoubleClick {
+                onDoubleClick()
+                return
+            } else {
+                super.mouseDown(with: event)
+                return
+            }
+        }
+
+        if event.clickCount > 2 {
+            pendingSingleClick?.cancel()
+            pendingSingleClick = nil
+            super.mouseDown(with: event)
+            return
+        }
+
+        if event.clickCount == 1 {
+            isDragging = false
+            
+            var clickedIndex: Int? = nil
+            if let layoutManager = self.layoutManager, let textContainer = self.textContainer {
+                let point = self.convert(event.locationInWindow, from: nil)
+                var fraction: CGFloat = 0.0
+                let index = layoutManager.characterIndex(for: point, in: textContainer, fractionOfDistanceBetweenInsertionPoints: &fraction)
+                if index < self.string.count {
+                    clickedIndex = index
+                }
+            }
+            
+            let work = DispatchWorkItem { [weak self] in
+                guard let self, !self.isDragging, self.selectedRange().length == 0 else { return }
+                self.onSingleClick?(clickedIndex)
+            }
+            pendingSingleClick?.cancel()
+            pendingSingleClick = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
+            super.mouseDown(with: event)
+            return
+        }
+
+        super.mouseDown(with: event)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        isDragging = true
+        pendingSingleClick?.cancel()
+        pendingSingleClick = nil
+        super.mouseDragged(with: event)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        if selectedRange().length > 0 {
+            pendingSingleClick?.cancel()
+            pendingSingleClick = nil
+        }
+        super.mouseUp(with: event)
+    }
+
+}
+

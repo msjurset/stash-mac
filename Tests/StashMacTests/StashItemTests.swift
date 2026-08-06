@@ -171,7 +171,7 @@ private func decodeItem(_ json: String) throws -> StashItem {
 }
 
 @Test func testItemTypeCount() {
-    #expect(ItemType.allCases.count == 5)
+    #expect(ItemType.allCases.count == 6)
 }
 
 // MARK: - Collection optional description

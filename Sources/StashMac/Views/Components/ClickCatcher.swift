@@ -93,12 +93,20 @@ struct ClickCatcher: NSViewRepresentable {
 
             switch event.type {
             case .leftMouseDown:
-                if event.clickCount == 2 && inBounds {
-                    downInside = true
-                    pendingSingle?.cancel()
-                    pendingSingle = nil
-                    didDrag = false
-                    return nil
+                if event.clickCount >= 2 && inBounds {
+                    if isPointOnCharacter(event) {
+                        downInside = false
+                        pendingSingle?.cancel()
+                        pendingSingle = nil
+                        didDrag = false
+                        return event
+                    } else if event.clickCount == 2 {
+                        downInside = true
+                        pendingSingle?.cancel()
+                        pendingSingle = nil
+                        didDrag = false
+                        return nil
+                    }
                 }
                 if event.clickCount == 1 && inBounds {
                     downInside = true
@@ -146,6 +154,42 @@ struct ClickCatcher: NSViewRepresentable {
             default:
                 return event
             }
+        }
+
+        private func isPointOnCharacter(_ event: NSEvent) -> Bool {
+            guard let hostView = self.superview else { return false }
+            return checkCharacterInViewTree(hostView, locationInWindow: event.locationInWindow)
+        }
+
+        private func checkCharacterInViewTree(_ view: NSView, locationInWindow: NSPoint) -> Bool {
+            if let tv = view as? NSTextView {
+                let pt = tv.convert(locationInWindow, from: nil)
+                if tv.bounds.contains(pt) {
+                    if isPointOnGlyph(in: tv, point: pt) {
+                        return true
+                    }
+                }
+            }
+            for sub in view.subviews {
+                if checkCharacterInViewTree(sub, locationInWindow: locationInWindow) {
+                    return true
+                }
+            }
+            return false
+        }
+
+        private func isPointOnGlyph(in tv: NSTextView, point: NSPoint) -> Bool {
+            guard let layoutManager = tv.layoutManager,
+                  let textContainer = tv.textContainer else { return false }
+
+            let origin = tv.textContainerOrigin
+            let ptInContainer = NSPoint(x: point.x - origin.x, y: point.y - origin.y)
+
+            let glyphIndex = layoutManager.glyphIndex(for: ptInContainer, in: textContainer)
+            guard glyphIndex < layoutManager.numberOfGlyphs else { return false }
+
+            let rect = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyphIndex, length: 1), in: textContainer)
+            return rect.insetBy(dx: -1, dy: -1).contains(ptInContainer)
         }
     }
 }

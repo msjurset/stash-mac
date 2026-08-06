@@ -58,11 +58,46 @@ struct VimAwareEditor: View {
     var drawsBackground: Bool = true
     var backgroundColor: NSColor = .textBackgroundColor
     var monospaced: Bool = false
+    var initialFocusCursor: Int? = nil
+    var onDoubleClickWhitespace: (() -> Void)?
 
     @State private var internalController = VimModeController()
     @State private var slashPrefix: String = ""
     @State private var slashSelectedIndex: Int = 0
     @State private var pendingCursor: Int? = nil
+
+    init(
+        itemID: String? = nil,
+        text: Binding<String>,
+        onSubmit: (() -> Void)? = nil,
+        onAction: ((ActionCommand) -> Void)? = nil,
+        onFocusChanged: ((Bool) -> Void)? = nil,
+        externalController: VimModeController? = nil,
+        badgePlacement: VimBadgePlacement = .topRightOverlay,
+        font: NSFont = .systemFont(ofSize: 13),
+        textContainerInset: NSSize = NSSize(width: 8, height: 8),
+        drawsBackground: Bool = true,
+        backgroundColor: NSColor = .textBackgroundColor,
+        monospaced: Bool = false,
+        initialFocusCursor: Int? = nil,
+        onDoubleClickWhitespace: (() -> Void)? = nil
+    ) {
+        self.itemID = itemID
+        self._text = text
+        self.onSubmit = onSubmit
+        self.onAction = onAction
+        self.onFocusChanged = onFocusChanged
+        self.externalController = externalController
+        self.badgePlacement = badgePlacement
+        self.font = font
+        self.textContainerInset = textContainerInset
+        self.drawsBackground = drawsBackground
+        self.backgroundColor = backgroundColor
+        self.monospaced = monospaced
+        self.initialFocusCursor = initialFocusCursor
+        self.onDoubleClickWhitespace = onDoubleClickWhitespace
+        self._pendingCursor = State(initialValue: initialFocusCursor)
+    }
 
     private var controller: VimModeController {
         externalController ?? internalController
@@ -90,7 +125,8 @@ struct VimAwareEditor: View {
                     monospaced: monospaced,
                     onSubmit: onSubmit,
                     onSlashKeyEvent: handleSlashKey,
-                    onFocusChanged: onFocusChanged
+                    onFocusChanged: onFocusChanged,
+                    onDoubleClickWhitespace: onDoubleClickWhitespace
                 )
                 if badgePlacement == .topRightOverlay {
                     VimModeBadge(controller: controller)

@@ -195,9 +195,12 @@ struct ThumbnailImportSheet: View {
             FilterField(
                 placeholder: "https://…",
                 text: $sourceURL,
+                isBordered: true,
+                backgroundColor: .textBackgroundColor,
                 autoFocus: true,
                 onSubmit: commit
             )
+            .frame(height: 24)
             .frame(width: 480)
             HStack {
                 Spacer()

@@ -43,6 +43,11 @@ extension NSTextView {
             self.writingToolsBehavior = .none
             self.allowedWritingToolsResultOptions = []
         }
+
+        self.isHorizontallyResizable = true
+        self.isVerticallyResizable = false
+        self.textContainer?.widthTracksTextView = false
+        self.textContainer?.containerSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
     }
 }
 
@@ -78,6 +83,11 @@ struct FilterField: NSViewRepresentable {
         field.drawsBackground = backgroundColor != .clear
         field.alignment = alignment
         field.focusRingType = .none
+        field.usesSingleLineMode = true
+        field.lineBreakMode = .byTruncatingTail
+        field.cell?.lineBreakMode = .byTruncatingTail
+        field.cell?.wraps = false
+        field.cell?.isScrollable = true
         field.delegate = context.coordinator
         field.stringValue = text
         // Route the field's "I just became first responder" event through

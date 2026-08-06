@@ -97,7 +97,16 @@ struct ExtractedTextView: View {
                         .padding(.bottom, 4)
                 }
 
-                MarkdownText(displayText, isSelectable: true)
+                MarkdownText(
+                    displayText,
+                    isSelectable: true,
+                    onSingleClick: { _ in
+                        if isTruncated {
+                            withAnimation { isExpanded.toggle() }
+                        }
+                    },
+                    onDoubleClick: openEditor
+                )
                     .padding(10)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(.quaternary)
@@ -120,18 +129,6 @@ struct ExtractedTextView: View {
                             )
                         }
                     }
-                    // NSEvent monitor handles both single- and double-click
-                    // *before* AppKit, so selectable text doesn't swallow
-                    // them for cursor-positioning or word-selection while
-                    // drag-to-select still works.
-                    .background(ClickCatcher(
-                        onSingleClick: {
-                            if isTruncated {
-                                withAnimation { isExpanded.toggle() }
-                            }
-                        },
-                        onDoubleClick: openEditor
-                    ))
                     .popover(isPresented: $showEditor, arrowEdge: .top) {
                         editorPopover
                     }
@@ -156,6 +153,30 @@ struct ExtractedTextView: View {
         }
         .onChange(of: itemID) { _, _ in
             showEditor = false
+        }
+        .onChange(of: showEditor) { oldValue, newValue in
+            if oldValue && !newValue {
+                let editID = editingItemID
+                let textToSave = editedText
+                let textChanged = editedText != originalText
+                editingItemID = nil
+                originalText = ""
+
+                if let editID, textChanged {
+                    Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 50_000_000)
+                        try? await store.editItem(
+                            id: editID,
+                            title: nil,
+                            note: nil,
+                            extractedText: textToSave,
+                            addTags: [],
+                            removeTags: [],
+                            collection: nil
+                        )
+                    }
+                }
+            }
         }
     }
 
@@ -197,7 +218,8 @@ struct ExtractedTextView: View {
             VimAwareEditor(
                 itemID: itemID,
                 text: $editedText,
-                externalController: popoverVimController,                badgePlacement: .external,
+                externalController: popoverVimController,
+                badgePlacement: .external,
                 font: .systemFont(ofSize: 13),
                 textContainerInset: NSSize(width: 12, height: 12),
                 drawsBackground: false,
@@ -207,21 +229,6 @@ struct ExtractedTextView: View {
         }
         .frame(width: 780, height: 520)
         .background(Color(nsColor: .textBackgroundColor))
-        .onDisappear {
-            if let editID = editingItemID, editedText != originalText {
-                store.editItem(
-                    id: editID,
-                    title: nil,
-                    note: nil,
-                    extractedText: editedText,
-                    addTags: [],
-                    removeTags: [],
-                    collection: nil
-                )
-            }
-            editingItemID = nil
-            originalText = ""
-        }
     }
 }
 

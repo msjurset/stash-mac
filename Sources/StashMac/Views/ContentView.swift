@@ -158,11 +158,13 @@ struct ContentView: View {
         .disabled(!store.canGoBack)
         .keyboardShortcut("[", modifiers: .command)
         .help("Back")
+        .focusable(false)
 
         Button { store.goForward() } label: { Image(systemName: "chevron.right") }
         .disabled(!store.canGoForward)
         .keyboardShortcut("]", modifiers: .command)
         .help("Forward")
+        .focusable(false)
     }
 
     @ViewBuilder

@@ -12,6 +12,7 @@ struct NotesView: View {
     @State private var editedText = ""
     @State private var originalText = ""
     @State private var editingItemID: String? = nil
+    @State private var isFocused = false
     @State private var isShowingAIChat = false
     @State private var aiQuestion = ""
     @FocusState private var isAIChatFocused: Bool
@@ -66,44 +67,38 @@ struct NotesView: View {
     var body: some View {
         DetailSection(title: "Notes", showIndicator: store.hasUpdate(itemID)) {
             VStack(alignment: .leading, spacing: 8) {
-                if !text.isEmpty {
-                    MarkdownText(displayText, isSelectable: true)
-                        .padding(10)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(.quaternary)
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                        .background(ClickCatcher(
-                            onSingleClick: {
-                                store.markSeen(itemID)
-                                if isTruncated {
-                                    withAnimation { isExpanded.toggle() }
-                                }
-                            },
-                            onDoubleClick: openEditor
-                        ))
-                        .popover(isPresented: $showEditor, arrowEdge: .top) {
-                            editorPopover
+                VimAwareEditor(
+                    itemID: itemID,
+                    text: $editedText,
+                    onFocusChanged: { focused in
+                        withAnimation(.easeInOut(duration: 0.18)) {
+                            isFocused = focused
                         }
-
-                    if isTruncated {
-                        Button(isExpanded ? "Show Less" : "Show More") {
-                            store.markSeen(itemID)
-                            withAnimation { isExpanded.toggle() }
+                        if !focused {
+                            saveInlineEdit()
                         }
-                        .font(.caption)
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.blue)
+                    },
+                    badgePlacement: .topRightOverlay,
+                    font: .systemFont(ofSize: 13),
+                    textContainerInset: NSSize(width: 10, height: 10),
+                    drawsBackground: false,
+                    monospaced: false,
+                    onDoubleClickWhitespace: openEditor
+                )
+                .frame(minHeight: isFocused ? 150 : 72, maxHeight: isFocused ? nil : 72)
+                .background(Color.primary.opacity(0.04))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(isFocused ? Color.accentColor.opacity(0.5) : Color.clear, lineWidth: 1)
+                )
+                .onClickOutside {
+                    if isFocused {
+                        NSApp.keyWindow?.makeFirstResponder(nil)
                     }
-                } else {
-                    // Empty state affordance — double-click the empty section
-                    // to add notes, or use the AI button below.
-                    Color.clear
-                        .frame(height: 1)
-                        .contentShape(Rectangle())
-                        .background(ClickCatcher(onSingleClick: {}, onDoubleClick: openEditor))
-                        .popover(isPresented: $showEditor, arrowEdge: .top) {
-                            editorPopover
-                        }
+                }
+                .popover(isPresented: $showEditor, arrowEdge: .top) {
+                    editorPopover
                 }
 
                 // AI Follow-up Chat
@@ -221,6 +216,16 @@ struct NotesView: View {
                 }
             }
         }
+        .onAppear {
+            editedText = text
+            originalText = text
+        }
+        .onChange(of: text) { _, newText in
+            if !isFocused {
+                editedText = newText
+                originalText = newText
+            }
+        }
         .task(id: itemID) {
             do {
                 mediaDuration = await store.getMediaDuration(id: itemID)
@@ -230,6 +235,10 @@ struct NotesView: View {
         }
         .onChange(of: itemID) { _, _ in
             showEditor = false
+            if !isFocused {
+                editedText = text
+                originalText = text
+            }
         }
     }
 
@@ -242,9 +251,30 @@ struct NotesView: View {
         return String(format: "$%.2f", cost)
     }
 
+    private func saveInlineEdit() {
+        let editID = itemID
+        let noteToSave = editedText
+        let textChanged = editedText != originalText
+
+        if textChanged {
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 50_000_000)
+                try? await store.editItem(
+                    id: editID,
+                    title: nil,
+                    note: noteToSave,
+                    extractedText: nil,
+                    addTags: [],
+                    removeTags: [],
+                    collection: nil
+                )
+                originalText = noteToSave
+            }
+        }
+    }
+
     private func openEditor() {
-        originalText = text
-        editedText = text
+        originalText = editedText
         editingItemID = itemID
         showEditor = true
     }
