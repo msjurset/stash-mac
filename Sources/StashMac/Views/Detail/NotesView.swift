@@ -67,38 +67,92 @@ struct NotesView: View {
     var body: some View {
         DetailSection(title: "Notes", showIndicator: store.hasUpdate(itemID)) {
             VStack(alignment: .leading, spacing: 8) {
-                VimAwareEditor(
-                    itemID: itemID,
-                    text: $editedText,
-                    onFocusChanged: { focused in
-                        withAnimation(.easeInOut(duration: 0.18)) {
-                            isFocused = focused
+                if !isFocused {
+                    if text.isEmpty {
+                        Color.clear
+                            .frame(height: 44)
+                            .contentShape(Rectangle())
+                            .background(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(Color.primary.opacity(0.04))
+                            )
+                            .overlay(
+                                Text("Click to add notes...")
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(.tertiary)
+                                    .padding(.leading, 10),
+                                alignment: .leading
+                            )
+                            .onTapGesture {
+                                withAnimation(.easeInOut(duration: 0.18)) {
+                                    isFocused = true
+                                }
+                            }
+                    } else {
+                        VStack(alignment: .leading, spacing: 4) {
+                            MarkdownText(
+                                displayText,
+                                isSelectable: true,
+                                onSingleClick: { _ in
+                                    store.markSeen(itemID)
+                                    withAnimation(.easeInOut(duration: 0.18)) {
+                                        isFocused = true
+                                    }
+                                },
+                                onDoubleClick: openEditor
+                            )
+                            .padding(10)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .frame(maxHeight: isExpanded ? nil : 250)
+                            .background(Color.primary.opacity(0.04))
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+
+                            if isTruncated {
+                                Button(isExpanded ? "Show Less" : "Show More") {
+                                    store.markSeen(itemID)
+                                    withAnimation { isExpanded.toggle() }
+                                }
+                                .font(.caption)
+                                .buttonStyle(.plain)
+                                .foregroundStyle(.blue)
+                            }
                         }
-                        if !focused {
-                            saveInlineEdit()
-                        }
-                    },
-                    badgePlacement: .topRightOverlay,
-                    font: .systemFont(ofSize: 13),
-                    textContainerInset: NSSize(width: 10, height: 10),
-                    drawsBackground: false,
-                    monospaced: false,
-                    onDoubleClickWhitespace: openEditor
-                )
-                .frame(minHeight: isFocused ? 150 : 72, maxHeight: isFocused ? nil : 72)
-                .background(Color.primary.opacity(0.04))
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(isFocused ? Color.accentColor.opacity(0.5) : Color.clear, lineWidth: 1)
-                )
-                .onClickOutside {
-                    if isFocused {
-                        NSApp.keyWindow?.makeFirstResponder(nil)
                     }
-                }
-                .popover(isPresented: $showEditor, arrowEdge: .top) {
-                    editorPopover
+                } else {
+                    VimAwareEditor(
+                        itemID: itemID,
+                        text: $editedText,
+                        onFocusChanged: { focused in
+                            withAnimation(.easeInOut(duration: 0.18)) {
+                                isFocused = focused
+                            }
+                            if !focused && !showEditor {
+                                saveInlineEdit()
+                            }
+                        },
+                        badgePlacement: .topRightOverlay,
+                        font: .systemFont(ofSize: 13),
+                        textContainerInset: NSSize(width: 10, height: 10),
+                        drawsBackground: false,
+                        monospaced: false,
+                        onDoubleClickWhitespace: openEditor
+                    )
+                    .frame(minHeight: isExpanded ? 350 : 150, maxHeight: isExpanded ? nil : 350)
+                    .background(isFocused ? Color.accentColor.opacity(0.08) : Color.primary.opacity(0.04))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(Color.accentColor, lineWidth: 1.5)
+                    )
+                    .onClickOutside {
+                        if isFocused && !showEditor {
+                            withAnimation(.easeInOut(duration: 0.18)) {
+                                isFocused = false
+                            }
+                            saveInlineEdit()
+                            NSApp.keyWindow?.makeFirstResponder(nil)
+                        }
+                    }
                 }
 
                 // AI Follow-up Chat
@@ -191,21 +245,24 @@ struct NotesView: View {
                         .disabled(store.identifyingItemIDs.contains(itemID))
 
                         if isShowingAIChat {
-                            FilterField(placeholder: "Ask a follow-up...", text: $aiQuestion)
-                                .focused($isAIChatFocused)
-                                .textFieldStyle(.plain)
-                                .font(.system(size: 13))
-                                .onSubmit {
+                            FilterField(
+                                placeholder: "Ask a follow-up...",
+                                text: $aiQuestion,
+                                onSubmit: {
                                     let q = aiQuestion.trimmingCharacters(in: .whitespaces)
                                     guard !q.isEmpty else { return }
                                     store.askAI(id: itemID, question: q)
                                     aiQuestion = ""
                                     isShowingAIChat = false
                                 }
-                                .transition(.asymmetric(
-                                    insertion: .move(edge: .leading).combined(with: .opacity),
-                                    removal: .opacity
-                                ))
+                            )
+                            .focused($isAIChatFocused)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 13))
+                            .transition(.asymmetric(
+                                insertion: .move(edge: .leading).combined(with: .opacity),
+                                removal: .opacity
+                            ))
                         }
                     }
                     .padding(.horizontal, 12)
@@ -214,6 +271,9 @@ struct NotesView: View {
                     .clipShape(Capsule())
                     .padding(.top, text.isEmpty ? 0 : 4)
                 }
+            }
+            .popover(isPresented: $showEditor, arrowEdge: .top) {
+                editorPopover
             }
         }
         .onAppear {

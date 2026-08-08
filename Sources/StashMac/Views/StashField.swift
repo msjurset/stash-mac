@@ -31,7 +31,7 @@ struct StashField: View {
             .clipShape(RoundedRectangle(cornerRadius: 6))
             .overlay(
                 RoundedRectangle(cornerRadius: 6)
-                    .stroke(isFocused ? Color.accentColor.opacity(0.5) : Color.primary.opacity(0.1), lineWidth: 1)
+                    .stroke(isFocused ? Color.accentColor : Color.primary.opacity(0.1), lineWidth: isFocused ? 1.5 : 1)
             )
             .animation(.easeInOut(duration: 0.15), value: isFocused)
         }
@@ -55,21 +55,6 @@ struct StashTextEditor: View {
 
     var body: some View {
         let activeHeight = isFocused ? (focusedHeight ?? idleHeight) : idleHeight
-        // Backed by VimAwareEditor so `/vim` activates vim
-        // keybindings in any place StashTextEditor renders —
-        // EditItemSheet Notes / Extracted Text, AddItemSheet snippet,
-        // RuleDetailView rule body. Visual chrome (background,
-        // accent overlay, focus ring) is layered on top of the
-        // host editor's transparent body. Focus tracking comes back
-        // through onFocusChanged since @FocusState doesn't see the
-        // underlying NSTextView.
-        //
-        // Badge placement: .bottomFooter renders a vim-style status
-        // line inside the field's rounded clip when vim is active.
-        // The line shows the mode badge (VIM:N / VIM:I / :q / /term)
-        // on the left and a cheatsheet + close button pair on the
-        // right. The previous top-right overlay collided with text
-        // in wider editors; the footer stays clear of the content.
         VimAwareEditor(
             itemID: itemID,
             text: $text,
@@ -90,7 +75,7 @@ struct StashTextEditor: View {
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .overlay(
             RoundedRectangle(cornerRadius: 6)
-                .stroke(isFocused ? Color.accentColor.opacity(0.5) : Color.primary.opacity(0.1), lineWidth: 1)
+                .stroke(isFocused ? Color.accentColor : Color.primary.opacity(0.1), lineWidth: isFocused ? 1.5 : 1)
         )
     }
 }

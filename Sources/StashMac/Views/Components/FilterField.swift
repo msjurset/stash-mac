@@ -104,11 +104,20 @@ struct FilterField: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NoAutoFillTextField, context: Context) {
-        if nsView.stringValue != text {
+        let isFocused = nsView.window?.firstResponder == nsView ||
+            (nsView.currentEditor() != nil && nsView.window?.firstResponder == nsView.currentEditor())
+
+        if !isFocused && nsView.stringValue != text {
             nsView.stringValue = text
         }
-        if autoFocus && nsView.window != nil && nsView.window?.firstResponder != nsView {
-            DispatchQueue.main.async { nsView.window?.makeFirstResponder(nsView) }
+        if autoFocus && !isFocused && nsView.window != nil {
+            DispatchQueue.main.async {
+                let nowFocused = nsView.window?.firstResponder == nsView ||
+                    (nsView.currentEditor() != nil && nsView.window?.firstResponder == nsView.currentEditor())
+                if !nowFocused {
+                    nsView.window?.makeFirstResponder(nsView)
+                }
+            }
         }
         if nsView.placeholderString != placeholder {
             nsView.placeholderString = placeholder

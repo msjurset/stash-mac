@@ -18,7 +18,7 @@ struct GeminiProvider: AIProvider {
     var keyURL: URL { URL(string: "https://aistudio.google.com/app/apikey")! }
     var defaultPrompt: String { AIPrompts.defaultIdentify }
 
-    var model: String = "gemini-3.1-flash"
+    var model: String = "gemini-3.5-flash"
     var timeout: TimeInterval { 30.0 }
     var urlSession: URLSession = .shared
 
@@ -139,7 +139,7 @@ struct GeminiProvider: AIProvider {
         let effectiveModel: String
         switch model {
         case "gemini-3.1-flash":
-            effectiveModel = "gemini-3.1-flash-lite"
+            effectiveModel = "gemini-3.5-flash"
         case "gemini-3.1-pro":
             effectiveModel = "gemini-3.1-pro-preview"
         default:

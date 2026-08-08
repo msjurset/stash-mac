@@ -85,7 +85,12 @@ struct AddItemSheet: View {
                             .foregroundStyle(.secondary)
                         MultiTagField(text: $tagsString, allTags: store.tags, placeholder: "Comma-separated")
                     }
-                    StashField("Note", text: $note, prompt: "Optional")
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Note")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        StashTextEditor(text: $note, idleHeight: 72, focusedHeight: 140)
+                    }
 
                     HStack {
                         Text("Collection")

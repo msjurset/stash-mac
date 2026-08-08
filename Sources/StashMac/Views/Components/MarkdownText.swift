@@ -417,41 +417,68 @@ private struct SelectableMarkdownView: NSViewRepresentable {
     }
 
     private func createAttributedString(from content: String) -> NSAttributedString {
-        let cleaned = preprocessInlineMarkdown(content)
+        let lines = content.components(separatedBy: "\n")
+        let resultAttr = NSMutableAttributedString()
+        
         let paragraphStyle = NSMutableParagraphStyle()
         paragraphStyle.lineSpacing = 4
 
-        var resultAttr: NSMutableAttributedString
-        if let attributed = try? AttributedString(markdown: cleaned, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)) {
-            resultAttr = NSMutableAttributedString(attributed)
-        } else {
-            resultAttr = NSMutableAttributedString(string: content)
+        for (idx, line) in lines.enumerated() {
+            let trimmed = line.drop(while: { $0 == " " })
+            var font: NSFont = NSFont.systemFont(ofSize: 13)
+            let lineAttr: NSMutableAttributedString
+
+            if let m = trimmed.wholeMatch(of: /^(#{1,6})\s+(.+)/) {
+                let level = m.output.1.count
+                let headerText = String(m.output.2)
+                let inlineAttr = (try? AttributedString(markdown: headerText, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(headerText)
+                lineAttr = NSMutableAttributedString(inlineAttr)
+                
+                switch level {
+                case 1: font = NSFont.boldSystemFont(ofSize: 20)
+                case 2: font = NSFont.boldSystemFont(ofSize: 17)
+                case 3: font = NSFont.boldSystemFont(ofSize: 15)
+                case 4: font = NSFont.boldSystemFont(ofSize: 14)
+                default: font = NSFont.boldSystemFont(ofSize: 13)
+                }
+            } else {
+                let cleaned = preprocessSingleLine(String(line))
+                let inlineAttr = (try? AttributedString(markdown: cleaned, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(line)
+                lineAttr = NSMutableAttributedString(inlineAttr)
+                font = NSFont.systemFont(ofSize: 13)
+            }
+
+            let range = NSRange(location: 0, length: lineAttr.length)
+            lineAttr.addAttribute(.font, value: font, range: range)
+            lineAttr.addAttribute(.foregroundColor, value: NSColor.textColor, range: range)
+            lineAttr.addAttribute(.paragraphStyle, value: paragraphStyle, range: range)
+
+            resultAttr.append(lineAttr)
+            if idx < lines.count - 1 {
+                let newlineAttr = NSAttributedString(string: "\n", attributes: [
+                    .font: font,
+                    .foregroundColor: NSColor.textColor,
+                    .paragraphStyle: paragraphStyle
+                ])
+                resultAttr.append(newlineAttr)
+            }
         }
 
-        let fullRange = NSRange(location: 0, length: resultAttr.length)
-        resultAttr.addAttribute(.font, value: NSFont.systemFont(ofSize: 13), range: fullRange)
-        resultAttr.addAttribute(.foregroundColor, value: NSColor.textColor, range: fullRange)
-        resultAttr.addAttribute(.paragraphStyle, value: paragraphStyle, range: fullRange)
         return resultAttr
     }
 
-    private func preprocessInlineMarkdown(_ text: String) -> String {
-        text.split(separator: "\n", omittingEmptySubsequences: false).map { line in
-            let trimmed = line.drop(while: { $0 == " " })
-            if let m = trimmed.wholeMatch(of: /^(#{1,6})\s+(.+)/) {
-                return "**\(m.output.2)**"
+    private func preprocessSingleLine(_ line: String) -> String {
+        let trimmed = line.drop(while: { $0 == " " })
+        if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") {
+            let bulletText = trimmed.dropFirst(2).trimmingCharacters(in: .whitespaces)
+            if bulletText.hasPrefix("[ ]") {
+                return "☐ \(bulletText.dropFirst(3).trimmingCharacters(in: .whitespaces))"
+            } else if bulletText.hasPrefix("[x]") || bulletText.hasPrefix("[X]") {
+                return "☑ \(bulletText.dropFirst(3).trimmingCharacters(in: .whitespaces))"
             }
-            if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") {
-                let bulletText = trimmed.dropFirst(2).trimmingCharacters(in: .whitespaces)
-                if bulletText.hasPrefix("[ ]") {
-                    return "☐ \(bulletText.dropFirst(3).trimmingCharacters(in: .whitespaces))"
-                } else if bulletText.hasPrefix("[x]") || bulletText.hasPrefix("[X]") {
-                    return "☑ \(bulletText.dropFirst(3).trimmingCharacters(in: .whitespaces))"
-                }
-                return "• \(trimmed.dropFirst(2))"
-            }
-            return String(line)
-        }.joined(separator: "\n")
+            return "• \(trimmed.dropFirst(2))"
+        }
+        return line
     }
 }
 
@@ -467,15 +494,20 @@ private final class ClickAwareTextView: NSTextView {
     private var isDragging = false
 
     private func isPointOnGlyph(_ point: NSPoint) -> Bool {
-        guard let layoutManager, let textContainer else { return false }
-        var fraction: CGFloat = 0
+        let nsString = string as NSString
+        if nsString.length == 0 { return false }
+        guard let layoutManager = self.layoutManager, let textContainer = self.textContainer else { return false }
+        
         let containerPoint = NSPoint(x: point.x - textContainerOrigin.x, y: point.y - textContainerOrigin.y)
-        let glyphIndex = layoutManager.glyphIndex(for: containerPoint, in: textContainer, fractionOfDistanceThroughGlyph: &fraction)
-        if fraction > 0 && fraction < 1 {
-            return true
-        }
-        let glyphRect = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyphIndex, length: 1), in: textContainer)
-        return glyphRect.contains(containerPoint)
+        let charIndex = self.characterIndexForInsertion(at: point)
+        
+        guard charIndex < nsString.length else { return false }
+        
+        let glyphIndex = layoutManager.glyphIndexForCharacter(at: charIndex)
+        let boundingRect = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyphIndex, length: 1), in: textContainer)
+        
+        let hitRect = boundingRect.insetBy(dx: -4, dy: -4)
+        return hitRect.contains(containerPoint)
     }
 
     override func mouseDown(with event: NSEvent) {

@@ -218,6 +218,207 @@ struct VimHostEditor: NSViewRepresentable {
 
 
 
+        func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+                return handleNewline(in: textView)
+            } else if commandSelector == #selector(NSResponder.deleteBackward(_:)) {
+                let handled = handleDeleteBackward(in: textView)
+                if !handled {
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self = self, let tv = self.textView else { return }
+                        self.renumberListsAroundCursor(in: tv)
+                    }
+                }
+                return handled
+            } else if commandSelector == #selector(NSResponder.insertTab(_:)) {
+                if parent.currentMode == .vim {
+                    return false
+                }
+                let spaces = "  "
+                let range = textView.selectedRange()
+                if textView.shouldChangeText(in: range, replacementString: spaces) {
+                    textView.textStorage?.replaceCharacters(in: range, with: spaces)
+                    textView.didChangeText()
+                    textView.setSelectedRange(NSRange(location: range.location + spaces.utf16.count, length: 0))
+                }
+                return true
+            } else if commandSelector == #selector(NSResponder.insertBacktab(_:)) {
+                if parent.currentMode == .vim {
+                    return false
+                }
+                let nsString = textView.string as NSString
+                let cursor = textView.selectedRange().location
+                if cursor >= 2 && nsString.substring(with: NSRange(location: cursor - 2, length: 2)) == "  " {
+                    let range = NSRange(location: cursor - 2, length: 2)
+                    if textView.shouldChangeText(in: range, replacementString: "") {
+                        textView.textStorage?.replaceCharacters(in: range, with: "")
+                        textView.didChangeText()
+                        textView.setSelectedRange(NSRange(location: cursor - 2, length: 0))
+                    }
+                    return true
+                }
+                return false
+            }
+            return false
+        }
+
+        private func handleNewline(in textView: NSTextView) -> Bool {
+            let nsString = textView.string as NSString
+            let selection = textView.selectedRange()
+            guard selection.length == 0 else { return false }
+
+            let lineRange = nsString.lineRange(for: NSRange(location: selection.location, length: 0))
+            let line = nsString.substring(with: lineRange)
+            let lineNoNewline = line.hasSuffix("\n") ? String(line.dropLast()) : line
+
+            let indent = String(lineNoNewline.prefix(while: { $0 == " " || $0 == "\t" }))
+            let bodyAfterIndent = String(lineNoNewline.dropFirst(indent.count))
+
+            guard let kind = ListPrefix.detect(in: bodyAfterIndent) else { return false }
+
+            let prefixEnd = lineRange.location + (indent as NSString).length + kind.prefixLength
+            guard selection.location >= prefixEnd else { return false }
+
+            let trailing = String(bodyAfterIndent.dropFirst(kind.prefixLength))
+
+            if trailing.isEmpty {
+                if indent.count >= 2 {
+                    let newIndent = String(indent.dropLast(2))
+                    let replacement = newIndent + kind.continuation(indent: "")
+                    let replaceRange = NSRange(location: lineRange.location, length: lineNoNewline.utf16.count)
+                    guard textView.shouldChangeText(in: replaceRange, replacementString: replacement) else { return false }
+                    textView.textStorage?.replaceCharacters(in: replaceRange, with: replacement)
+                    textView.didChangeText()
+                    let newCaret = lineRange.location + (replacement as NSString).length
+                    textView.setSelectedRange(NSRange(location: newCaret, length: 0))
+                    if case .ordered = kind {
+                        renumberListsAroundCursor(in: textView)
+                    }
+                } else {
+                    let suffix = "\n"
+                    let replaceRange = lineRange
+                    guard textView.shouldChangeText(in: replaceRange, replacementString: suffix) else { return false }
+                    textView.textStorage?.replaceCharacters(in: replaceRange, with: suffix)
+                    textView.didChangeText()
+                    let newCaret = lineRange.location + (suffix as NSString).length
+                    textView.setSelectedRange(NSRange(location: newCaret, length: 0))
+                    renumberListsAroundCursor(in: textView)
+                }
+                return true
+            }
+
+            let insertion = "\n" + kind.continuation(indent: indent)
+            let insertRange = NSRange(location: selection.location, length: 0)
+            guard textView.shouldChangeText(in: insertRange, replacementString: insertion) else { return false }
+            textView.textStorage?.replaceCharacters(in: insertRange, with: insertion)
+            textView.didChangeText()
+            let newCaret = selection.location + (insertion as NSString).length
+            textView.setSelectedRange(NSRange(location: newCaret, length: 0))
+
+            if case .ordered = kind {
+                renumberListsAroundCursor(in: textView)
+            }
+            return true
+        }
+
+        private func handleDeleteBackward(in textView: NSTextView) -> Bool {
+            let nsString = textView.string as NSString
+            let selection = textView.selectedRange()
+            guard selection.length == 0 else { return false }
+
+            let lineRange = nsString.lineRange(for: NSRange(location: selection.location, length: 0))
+            let line = nsString.substring(with: lineRange)
+            let lineNoNewline = line.hasSuffix("\n") ? String(line.dropLast()) : line
+            let indent = String(lineNoNewline.prefix(while: { $0 == " " || $0 == "\t" }))
+            let bodyAfterIndent = String(lineNoNewline.dropFirst(indent.count))
+
+            if let kind = ListPrefix.detect(in: bodyAfterIndent) {
+                let prefixEnd = lineRange.location + (indent as NSString).length + kind.prefixLength
+                if selection.location == prefixEnd && String(bodyAfterIndent.dropFirst(kind.prefixLength)).isEmpty {
+                    if indent.count >= 2 {
+                        let newIndent = String(indent.dropLast(2))
+                        let replacement = newIndent + kind.continuation(indent: "")
+                        let replaceRange = NSRange(location: lineRange.location, length: lineNoNewline.utf16.count)
+                        guard textView.shouldChangeText(in: replaceRange, replacementString: replacement) else { return false }
+                        textView.textStorage?.replaceCharacters(in: replaceRange, with: replacement)
+                        textView.didChangeText()
+                        let newCaret = lineRange.location + (replacement as NSString).length
+                        textView.setSelectedRange(NSRange(location: newCaret, length: 0))
+                        if case .ordered = kind {
+                            renumberListsAroundCursor(in: textView)
+                        }
+                    } else {
+                        let replaceRange = NSRange(location: lineRange.location, length: lineNoNewline.utf16.count)
+                        guard textView.shouldChangeText(in: replaceRange, replacementString: "") else { return false }
+                        textView.textStorage?.replaceCharacters(in: replaceRange, with: "")
+                        textView.didChangeText()
+                        textView.setSelectedRange(NSRange(location: lineRange.location, length: 0))
+                        renumberListsAroundCursor(in: textView)
+                    }
+                    return true
+                }
+            }
+            return false
+        }
+
+        private func renumberListsAroundCursor(in textView: NSTextView) {
+            let text = textView.string as NSString
+            let selection = textView.selectedRange()
+            guard selection.location != NSNotFound && selection.location <= text.length else { return }
+            let searchStart = text.lineRange(for: NSRange(location: selection.location, length: 0)).location
+            
+            var blockStart = searchStart
+            while blockStart > 0 {
+                let prevLineRange = text.lineRange(for: NSRange(location: blockStart - 1, length: 0))
+                let prevLine = text.substring(with: prevLineRange)
+                if prevLine.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { break }
+                let indent = String(prevLine.prefix(while: { $0 == " " || $0 == "\t" }))
+                let body = String(prevLine.dropFirst(indent.count))
+                if let kind = ListPrefix.detect(in: body), case .ordered = kind {
+                    blockStart = prevLineRange.location
+                } else {
+                    break
+                }
+            }
+            
+            var currentPos = blockStart
+            var indentNumbers: [String: Int] = [:]
+            
+            while currentPos < text.length {
+                let currentText = textView.string as NSString
+                if currentPos >= currentText.length { break }
+                let lineRange = currentText.lineRange(for: NSRange(location: currentPos, length: 0))
+                let line = currentText.substring(with: lineRange)
+                
+                if line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { break }
+                
+                let indent = String(line.prefix(while: { $0 == " " || $0 == "\t" }))
+                let body = String(line.dropFirst(indent.count))
+                
+                if let kind = ListPrefix.detect(in: body), case .ordered = kind {
+                    let nextNum = indentNumbers[indent, default: 1]
+                    let oldPrefixLength = kind.prefixLength
+                    let newPrefix = "\(nextNum). "
+                    
+                    if body.prefix(oldPrefixLength) != newPrefix {
+                        let replaceRange = NSRange(location: lineRange.location + indent.count, length: oldPrefixLength)
+                        if textView.shouldChangeText(in: replaceRange, replacementString: newPrefix) {
+                            textView.textStorage?.replaceCharacters(in: replaceRange, with: newPrefix)
+                            textView.didChangeText()
+                        }
+                    }
+                    indentNumbers[indent] = nextNum + 1
+                    
+                    let deeperIndents = indentNumbers.keys.filter { $0.count > indent.count && $0.hasPrefix(indent) }
+                    for d in deeperIndents { indentNumbers.removeValue(forKey: d) }
+                }
+                
+                let updatedText = textView.string as NSString
+                let updatedLineRange = updatedText.lineRange(for: NSRange(location: currentPos, length: 0))
+                currentPos = updatedLineRange.location + updatedLineRange.length
+            }
+        }
+
         /// Walk back from the caret looking for the start of a
         /// slash-command token (`/<alphanum/-/_>*`). Returns the
         /// full `/word` substring, or "" when there's no live
@@ -240,9 +441,6 @@ struct VimHostEditor: NSViewRepresentable {
                 }
                 guard let scalar = Unicode.Scalar(ch) else { return "" }
                 if scalar == "/" {
-                    // Only trigger slash commands if preceded by space or
-                    // start of line. This ensures things like `//` or
-                    // `pollinators./` don't trigger accidentally.
                     if i > 0 {
                         let prev = nsString.character(at: i - 1)
                         if prev >= 0xD800 && prev <= 0xDFFF {
@@ -262,6 +460,56 @@ struct VimHostEditor: NSViewRepresentable {
             }
             return ""
         }
+    }
+}
+
+/// List-prefix kinds the editor recognizes for smart continuation.
+enum ListPrefix {
+    case unordered(marker: Character)               // "-", "*", "+"
+    case task(marker: Character, checked: Bool)     // "- [ ]" or "- [x]"
+    case ordered(number: Int)                       // "1.", "23."
+    case blockquote                                 // ">"
+
+    var prefixLength: Int {
+        switch self {
+        case .unordered: return 2
+        case .task: return 6
+        case .ordered(let n): return String(n).count + 2
+        case .blockquote: return 2
+        }
+    }
+
+    func continuation(indent: String) -> String {
+        switch self {
+        case .unordered(let marker): return indent + "\(marker) "
+        case .task(let marker, _): return indent + "\(marker) [ ] "
+        case .ordered(let n): return indent + "\(n + 1). "
+        case .blockquote: return indent + "> "
+        }
+    }
+
+    static func detect(in body: String) -> ListPrefix? {
+        let chars = Array(body)
+        if chars.count >= 6, let marker = chars.first, "-*+–—".contains(marker),
+           chars[1] == " ", chars[2] == "[", "xX ".contains(chars[3]),
+           chars[4] == "]", chars[5] == " " {
+            return .task(marker: marker, checked: chars[3].lowercased() == "x")
+        }
+        if chars.count >= 2, let marker = chars.first, "-*+–—".contains(marker), chars[1] == " " {
+            return .unordered(marker: marker)
+        }
+        var digits = ""
+        var i = 0
+        while i < chars.count, chars[i].isASCII, chars[i].isNumber {
+            digits.append(chars[i])
+            i += 1
+        }
+        if !digits.isEmpty, i + 1 < chars.count, chars[i] == ".", chars[i + 1] == " ",
+           let n = Int(digits) {
+            return .ordered(number: n)
+        }
+        if body.hasPrefix("> ") { return .blockquote }
+        return nil
     }
 }
 
