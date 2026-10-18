@@ -239,6 +239,10 @@ final class StashDocsScreenshotTests: XCTestCase {
             withIntermediateDirectories: true
         )
         try pngData.write(to: url)
+
+        if !callouts.isEmpty && path.hasSuffix(".png") {
+            try renderAnnotatedScreenshot(view, callouts: [], size: size, to: String(path.dropLast(4)) + "_clean.png")
+        }
     }
 
     @MainActor
