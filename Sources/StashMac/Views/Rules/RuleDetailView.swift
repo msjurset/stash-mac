@@ -1110,7 +1110,7 @@ struct RuleDetailView: View {
         if actionRows.isEmpty { actionRows = [ActionRow(type: .addTags)] }
         pristineSnapshot = currentSnapshot()
         // Drafts always start in edit mode — no read-only state to view yet.
-        mode = isDraft ? .edit : .view
+        mode = (isDraft || store.initialRuleDetailEditMode) ? .edit : .view
     }
 
     private func removeCondition(_ id: UUID) {

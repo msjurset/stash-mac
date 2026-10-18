@@ -7,11 +7,13 @@ enum FilePathResolver {
             .appendingPathComponent("files")
     }()
 
+    nonisolated(unsafe) static var customFilesDir: URL?
+
     /// Resolves a store path (SHA-256 hash) to an absolute file URL.
     /// The file store layout is: `<filesDir>/<hash[:2]>/<hash>`
     static func resolve(storePath: String, filesDir: URL? = nil) -> URL? {
         guard storePath.count >= 2 else { return nil }
-        let base = filesDir ?? defaultFilesDir
+        let base = filesDir ?? customFilesDir ?? defaultFilesDir
         let prefix = String(storePath.prefix(2))
         let url = base
             .appendingPathComponent(prefix)
@@ -27,11 +29,11 @@ enum FilePathResolver {
     /// destination URL before writing.
     static func resolveRelative(_ relPath: String, filesDir: URL? = nil) -> URL? {
         guard !relPath.isEmpty else { return nil }
-        let base = filesDir ?? defaultFilesDir
+        let base = filesDir ?? customFilesDir ?? defaultFilesDir
         return base.appendingPathComponent(relPath)
     }
 
     /// Returns the files-dir root that all stash artifacts (content
     /// blobs, thumbnails) live under.
-    static func filesDir() -> URL { defaultFilesDir }
+    static func filesDir() -> URL { customFilesDir ?? defaultFilesDir }
 }

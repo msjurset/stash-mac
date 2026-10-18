@@ -35,6 +35,15 @@ final class ThumbnailCache {
         images.object(forKey: path as NSString)
     }
 
+    func inject(_ img: NSImage, forPath path: String) {
+        images.setObject(img, forKey: path as NSString)
+        let size = img.size
+        if size.width > 0, size.height > 0 {
+            let raw = size.width / size.height
+            aspects[path] = max(0.4, min(raw, 2.5))
+        }
+    }
+
     /// Cached aspect ratio (width / height), clamped to [0.4, 2.5]
     /// to mirror the masonry grid's layout cap. Returns nil on miss
     /// — caller decides what to do (typically: render with 1.0

@@ -12,9 +12,20 @@ struct RelatedSection: View {
     @State private var items: [StashItem] = []
     @State private var loading = true
 
+    private var effectiveItems: [StashItem] {
+        if store.disableCLIFetch {
+            return store.syntheticRelatedItems[itemID] ?? []
+        }
+        return items
+    }
+
+    private var effectiveLoading: Bool {
+        store.disableCLIFetch ? false : loading
+    }
+
     var body: some View {
         Group {
-            if loading {
+            if effectiveLoading {
                 // Stabilized loader: fixed height prevents the
                 // section below (Info) from jittering or bouncing
                 // as much while the CLI is working.
@@ -27,10 +38,10 @@ struct RelatedSection: View {
                 }
                 .frame(height: 60)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            } else if !items.isEmpty {
+            } else if !effectiveItems.isEmpty {
                 DetailSection(title: "Related items") {
                     VStack(alignment: .leading, spacing: 2) {
-                        ForEach(items) { item in
+                        ForEach(effectiveItems) { item in
                             row(item)
                         }
                     }
@@ -38,6 +49,7 @@ struct RelatedSection: View {
             }
         }
         .task(id: itemID) {
+            guard !store.disableCLIFetch else { return }
             do {
                 
                 await withThrowingTaskGroup(of: Void.self) { group in
@@ -97,6 +109,10 @@ struct RelatedSection: View {
     }
 
     private func reload() async {
+        guard !store.disableCLIFetch else {
+            loading = false
+            return
+        }
         loading = true
         defer { loading = false }
         do {

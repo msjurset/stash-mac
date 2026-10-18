@@ -262,10 +262,21 @@ private struct MomentPreviewImage: View {
     let item: StashCLI.MomentSuggestion.MomentItem
     @State private var image: NSImage?
 
+    private var cachedOrLoadedImage: NSImage? {
+        if let image { return image }
+        if let rel = item.thumbnailPath,
+           !rel.isEmpty,
+           let url = FilePathResolver.resolveRelative(rel),
+           let cached = ThumbnailCache.shared.image(forPath: url.path) {
+            return cached
+        }
+        return nil
+    }
+
     var body: some View {
         Group {
-            if let image {
-                Image(nsImage: image)
+            if let img = cachedOrLoadedImage {
+                Image(nsImage: img)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
             } else {

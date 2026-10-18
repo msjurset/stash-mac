@@ -6,6 +6,27 @@ import UniformTypeIdentifiers
 
 private let logger = Logger(subsystem: "com.msjurseth.stash", category: "store")
 
+/// Pending failover state waiting for user approval.
+struct PendingFailover: Identifiable, Sendable {
+    var id: String { "\(operation)-\(itemID ?? "")" }
+    var operation: String
+    var itemID: String?
+    var durationHours: Int
+    var retryAction: (@Sendable () async -> Void)?
+
+    init(
+        operation: String = "identify",
+        itemID: String? = nil,
+        durationHours: Int = 24,
+        retryAction: (@Sendable () async -> Void)? = nil
+    ) {
+        self.operation = operation
+        self.itemID = itemID
+        self.durationHours = durationHours
+        self.retryAction = retryAction
+    }
+}
+
 @Observable
 @MainActor
 final class StashStore {
@@ -629,6 +650,33 @@ final class StashStore {
     var isLoading = false
     var error: String?
     var flashMessage: String?
+    var pendingFailover: PendingFailover?
+
+    func approveFailover(hours: Int = 24) async {
+        guard let pending = pendingFailover else { return }
+        AIPrefsStore().approveFailover(hours: hours)
+        try? await StashCLI.shared.approveFailover(operation: pending.operation, durationHours: hours)
+        let retry = pending.retryAction
+        pendingFailover = nil
+        if let retry {
+            await retry()
+        }
+    }
+
+    func approveFailoverOnce() async {
+        guard let pending = pendingFailover else { return }
+        AIPrefsStore().approveFailoverOnce()
+        try? await StashCLI.shared.approveFailover(operation: pending.operation, durationHours: 1)
+        let retry = pending.retryAction
+        pendingFailover = nil
+        if let retry {
+            await retry()
+        }
+    }
+
+    func dismissFailover() {
+        pendingFailover = nil
+    }
     @ObservationIgnored
     var seenItemIDs: Set<String> = {
         Set(UserDefaults.standard.stringArray(forKey: "seenItemIDs") ?? [])
@@ -676,8 +724,14 @@ final class StashStore {
     private var lastDBModTime: Date?
 
     var fetchedItem: StashItem?
+    var disableCLIFetch: Bool = false
+    var initialRuleDetailEditMode: Bool = false
+    var syntheticRelatedItems: [String: [StashItem]] = [:]
+    var syntheticProvenance: [String: [ProvenanceEvent]] = [:]
 
-    init() {
+    init(disableCLIFetch: Bool = false) {
+        self.disableCLIFetch = disableCLIFetch
+        guard !disableCLIFetch else { return }
         ingestObserver = NotificationCenter.default.addObserver(
             forName: .stashDidIngest,
             object: nil,
@@ -829,7 +883,7 @@ final class StashStore {
     }
 
     func loadAll() {
-        guard !isLoading else { return }
+        guard !disableCLIFetch, !isLoading else { return }
         itemsCache.removeAll()
         Task {
             isLoading = true
@@ -884,7 +938,7 @@ final class StashStore {
     }
 
     func refresh() {
-        guard !isLoading else { return }
+        guard !disableCLIFetch, !isLoading else { return }
         itemsCache.removeAll()
         Task {
             isLoading = true
@@ -1869,6 +1923,7 @@ final class StashStore {
     // MARK: - Rules
 
     func loadRules() {
+        guard !disableCLIFetch else { return }
         Task {
             rulesLoading = true
             defer { rulesLoading = false }
@@ -1973,6 +2028,7 @@ final class StashStore {
         since: String? = nil,
         limit: Int = 200
     ) {
+        guard !disableCLIFetch else { return }
         Task {
             ruleEventsLoading = true
             defer { ruleEventsLoading = false }
@@ -2003,6 +2059,7 @@ final class StashStore {
     // MARK: - Stats & Check
 
     func loadStats() {
+        guard !disableCLIFetch else { return }
         Task {
             do {
                 statsData = try await cli.stats()
@@ -2013,7 +2070,7 @@ final class StashStore {
     }
 
     func runCheck() {
-        guard !isCheckRunning else { return }
+        guard !disableCLIFetch, !isCheckRunning else { return }
         Task {
             isCheckRunning = true
             error = nil
@@ -2501,6 +2558,7 @@ final class StashStore {
     /// rather than waiting for a re-fetch. The explicit Refresh
     /// button passes forceReload=true.
     func loadMoments(scanAll: Bool, forceReload: Bool = false) async {
+        guard !disableCLIFetch else { return }
         if !forceReload,
            !moments.isEmpty,
            momentsScanAll == scanAll {
@@ -2695,6 +2753,7 @@ final class StashStore {
     /// debt rotates back as a nag. The "Show all" header link opens
     /// the full list filtered to both queue tags.
     func loadInbox() {
+        guard !disableCLIFetch else { return }
         Task {
             do {
                 async let cands = cli.listFeedCandidates(state: "unread", limit: 200)
@@ -2785,6 +2844,7 @@ final class StashStore {
     /// auto-poll timer, the manual refresh button, and (optionally)
     /// the menubar quick-action.
     func pollFeeds() {
+        guard !disableCLIFetch else { return }
         Task {
             do {
                 try await cli.refreshFeeds()
@@ -2801,6 +2861,7 @@ final class StashStore {
     /// (the user delegated polling to Runbook). Default is 30
     /// minutes when unset.
     func startFeedPollTimer() {
+        guard !disableCLIFetch else { return }
         feedPollTimer?.invalidate()
         feedPollTimer = nil
         let stored = UserDefaults.standard.object(forKey: "feedPollIntervalMinutes") as? Int
@@ -2930,7 +2991,10 @@ final class StashStore {
             return
         }
         let mime = item.mimeType ?? "image/jpeg"
-        let prompt = prefs.promptText
+        var prompt = prefs.promptText
+        if let loc = item.location, (loc.lat != 0 || loc.lon != 0) {
+            prompt += "\n\nLocation context: GPS coordinates (\(loc.lat), \(loc.lon))"
+        }
         // Collect the primary blob plus every attached file in
         // carousel order. Multi-photo items (mushroom top/side/
         // bottom, flower-plus-leaves) identify much better when
@@ -2975,6 +3039,7 @@ final class StashStore {
                     // network call — the actual secret never leaves
                     // 1Password's keychain.
                     let resolvedKey = try await AIKeyResolver.resolve(key)
+                    let resolvedPaidKey = prefs.hasPaidKey ? try? await AIKeyResolver.resolve(prefs.paidApiKey) : nil
                     var media: [AIMedia] = []
                     let primaryBytes = try Data(contentsOf: url)
                     media.append(AIMedia(data: primaryBytes, mimeType: mime))
@@ -2991,6 +3056,8 @@ final class StashStore {
                         : media
                     let result = try await provider.identify(
                         apiKey: resolvedKey,
+                        paidApiKey: resolvedPaidKey,
+                        isFailoverApproved: prefs.isFailoverApproved,
                         media: sendMedia,
                         promptText: prompt
                     )
@@ -3001,7 +3068,7 @@ final class StashStore {
                     if isTransientIdentifyError(error), attempt < backoffs.count {
                         // Surface a quieter status while we wait so the
                         // user knows it's still trying.
-                        await MainActor.run {
+                        await MainActor.run { [weak self] in
                             self?.flashMessage =
                                 "Identifying \(shortened) with \(provider.displayName)… (\(provider.displayName) is busy, retrying)"
                         }
@@ -3013,7 +3080,36 @@ final class StashStore {
                 }
             }
 
-            await MainActor.run {
+            if let failoverErr = lastError as? GeminiFailoverApprovalRequiredError {
+                await MainActor.run { [weak self] in
+                    self?.flashMessage = nil
+                    self?.pendingFailover = PendingFailover(
+                        operation: failoverErr.operation,
+                        itemID: id,
+                        durationHours: failoverErr.durationHours,
+                        retryAction: { [weak self] in
+                            await self?.identifyImageItem(id: id, with: prefs)
+                        }
+                    )
+                }
+                return
+            }
+            if case .failoverRequired(let op, let dur) = (lastError as? CLIError) {
+                await MainActor.run { [weak self] in
+                    self?.flashMessage = nil
+                    self?.pendingFailover = PendingFailover(
+                        operation: op,
+                        itemID: id,
+                        durationHours: dur,
+                        retryAction: { [weak self] in
+                            await self?.identifyImageItem(id: id, with: prefs)
+                        }
+                    )
+                }
+                return
+            }
+
+            await MainActor.run { [weak self] in
                 self?.flashMessage = nil
                 self?.error = friendlyIdentifyErrorMessage(
                     provider: provider.displayName,
@@ -3091,6 +3187,7 @@ final class StashStore {
             while attempt <= backoffs.count {
                 do {
                     let resolvedKey = try await AIKeyResolver.resolve(key)
+                    let resolvedPaidKey = prefs.hasPaidKey ? try? await AIKeyResolver.resolve(prefs.paidApiKey) : nil
                     let mediaToSend: AIMedia
                     
                     if isVideo && !fullVideo {
@@ -3105,6 +3202,8 @@ final class StashStore {
                     
                     result = try await provider.identify(
                         apiKey: resolvedKey,
+                        paidApiKey: resolvedPaidKey,
+                        isFailoverApproved: prefs.isFailoverApproved,
                         media: [mediaToSend],
                         promptText: prompt
                     )
@@ -3128,6 +3227,34 @@ final class StashStore {
             if let result {
                 await self?.applyTranscribeResult(itemID: id, result: result)
             } else if let lastError {
+                if let failoverErr = lastError as? GeminiFailoverApprovalRequiredError {
+                    await MainActor.run { [weak self] in
+                        self?.flashMessage = nil
+                        self?.pendingFailover = PendingFailover(
+                            operation: failoverErr.operation,
+                            itemID: id,
+                            durationHours: failoverErr.durationHours,
+                            retryAction: { [weak self] in
+                                await self?.transcribeMediaItem(id: id, with: prefs, fullVideo: fullVideo)
+                            }
+                        )
+                    }
+                    return
+                }
+                if case .failoverRequired(let op, let dur) = (lastError as? CLIError) {
+                    await MainActor.run { [weak self] in
+                        self?.flashMessage = nil
+                        self?.pendingFailover = PendingFailover(
+                            operation: op,
+                            itemID: id,
+                            durationHours: dur,
+                            retryAction: { [weak self] in
+                                await self?.transcribeMediaItem(id: id, with: prefs, fullVideo: fullVideo)
+                            }
+                        )
+                    }
+                    return
+                }
                 let msg = friendlyIdentifyErrorMessage(
                     provider: provider.displayName,
                     error: lastError

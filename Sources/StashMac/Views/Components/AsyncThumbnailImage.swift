@@ -32,10 +32,19 @@ struct AsyncThumbnailImage<Fallback: View>: View {
 
     @State private var image: NSImage?
 
+    private var cachedOrLoadedImage: NSImage? {
+        if let image { return image }
+        guard let rel = relativePath,
+              let url = FilePathResolver.resolveRelative(rel) else {
+            return nil
+        }
+        return ThumbnailCache.shared.image(forPath: url.path)
+    }
+
     var body: some View {
         Group {
-            if let image {
-                configure(Image(nsImage: image))
+            if let img = cachedOrLoadedImage {
+                configure(Image(nsImage: img))
             } else {
                 fallback()
             }

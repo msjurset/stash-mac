@@ -11,15 +11,27 @@ import SwiftUI
 /// events (legacy items with no capture.log entry will at least show
 /// the synthesized "Captured" row, so this is rare in practice).
 struct ProvenanceSection: View {
+    @Environment(StashStore.self) private var store
     let itemID: String
 
     @State private var events: [ProvenanceEvent] = []
     @State private var loading = true
     @State private var loadError: String?
 
+    private var effectiveEvents: [ProvenanceEvent] {
+        if store.disableCLIFetch {
+            return store.syntheticProvenance[itemID] ?? []
+        }
+        return events
+    }
+
+    private var effectiveLoading: Bool {
+        store.disableCLIFetch ? false : loading
+    }
+
     var body: some View {
         DetailSection(title: "Activity") {
-            if loading {
+            if effectiveLoading {
                 ProgressView()
                     .controlSize(.small)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -27,19 +39,20 @@ struct ProvenanceSection: View {
                 Text(loadError)
                     .font(.caption)
                     .foregroundStyle(.red)
-            } else if events.isEmpty {
+            } else if effectiveEvents.isEmpty {
                 Text("No history recorded for this item yet.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
                 VStack(alignment: .leading, spacing: 8) {
-                    ForEach(events) { ev in
+                    ForEach(effectiveEvents) { ev in
                         row(ev)
                     }
                 }
             }
         }
         .task(id: itemID) {
+            guard !store.disableCLIFetch else { return }
             do {
                 await reload()
             } catch {
@@ -80,6 +93,10 @@ struct ProvenanceSection: View {
     }
 
     private func reload() async {
+        guard !store.disableCLIFetch else {
+            loading = false
+            return
+        }
         loading = true
         loadError = nil
         do {

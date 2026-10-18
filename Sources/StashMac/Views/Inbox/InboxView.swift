@@ -745,6 +745,7 @@ struct InboxView: View {
     }
 
     private func initialSelection() -> Selection {
+        if let cand = store.inboxSelectedCandidate { return .feed(cand.id) }
         if let item = store.queueItems.first       { return .queue(item.id) }
         if let cand = store.feedCandidates.first   { return .feed(cand.id) }
         if let item = store.resurfaceItems.first   { return .resurface(item.id) }
