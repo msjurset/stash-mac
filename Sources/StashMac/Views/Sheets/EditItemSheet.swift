@@ -18,6 +18,7 @@ struct EditItemSheet: View {
     @State private var collection = ""
     @State private var isIdentifying = false
     @State private var identifyError: String?
+    @State private var pendingFailover: PendingFailover?
     @State private var suggestedTags: [String] = []
     @State private var latText: String
     @State private var lonText: String
@@ -112,6 +113,9 @@ struct EditItemSheet: View {
             .padding(.vertical, 12)
         }
         .frame(width: 540, height: 720)
+        .sheet(item: $pendingFailover) { failover in
+            FailoverApprovalSheet(failover: failover)
+        }
     }
 
     private var formContent: some View {
@@ -432,6 +436,21 @@ struct EditItemSheet: View {
                     .font(.caption)
                     .foregroundStyle(.red)
                     .lineLimit(2)
+                if aiPrefs.hasPaidKey && (identifyError.contains("quota") || identifyError.contains("failover")) {
+                    Button("Authorize…") {
+                        pendingFailover = PendingFailover(
+                            operation: "identify",
+                            itemID: item.id,
+                            durationHours: 24,
+                            retryAction: {
+                                await MainActor.run { identify() }
+                            }
+                        )
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .focusable(false)
+                }
             }
             Spacer()
         }
@@ -477,6 +496,7 @@ struct EditItemSheet: View {
             while attempt <= backoffs.count {
                 do {
                     let resolved = try await AIKeyResolver.resolve(key)
+                    let resolvedPaidKey = aiPrefs.hasPaidKey ? try? await AIKeyResolver.resolve(aiPrefs.paidApiKey) : nil
                     var media: [AIMedia] = []
                     let primary = try Data(contentsOf: fileURL)
                     media.append(AIMedia(data: primary, mimeType: mime))
@@ -492,6 +512,8 @@ struct EditItemSheet: View {
                         : media
                     result = try await provider.identify(
                         apiKey: resolved,
+                        paidApiKey: resolvedPaidKey,
+                        isFailoverApproved: aiPrefs.isFailoverApproved,
                         media: sendMedia,
                         promptText: prompt
                     )
@@ -547,6 +569,34 @@ struct EditItemSheet: View {
                     }
                 }
             } else if let lastError {
+                if let failoverErr = lastError as? GeminiFailoverApprovalRequiredError {
+                    await MainActor.run {
+                        identifyError = "Free-tier quota reached. Approval required for paid failover."
+                        pendingFailover = PendingFailover(
+                            operation: failoverErr.operation,
+                            itemID: item.id,
+                            durationHours: failoverErr.durationHours,
+                            retryAction: {
+                                await MainActor.run { identify() }
+                            }
+                        )
+                    }
+                    return
+                }
+                if case .failoverRequired(let op, let dur) = (lastError as? CLIError) {
+                    await MainActor.run {
+                        identifyError = "Free-tier quota reached. Approval required for paid failover."
+                        pendingFailover = PendingFailover(
+                            operation: op,
+                            itemID: item.id,
+                            durationHours: dur,
+                            retryAction: {
+                                await MainActor.run { identify() }
+                            }
+                        )
+                    }
+                    return
+                }
                 let msg = friendlyIdentifyErrorMessage(
                     provider: provider.displayName,
                     error: lastError

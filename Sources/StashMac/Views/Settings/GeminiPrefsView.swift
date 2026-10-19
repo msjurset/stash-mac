@@ -10,8 +10,11 @@ struct AIPrefsView: View {
 
     @State private var keyField: String = ""
     @State private var keyRevealed = false
+    @State private var paidKeyField: String = ""
+    @State private var paidKeyRevealed = false
     @State private var promptDraft: String = ""
     @State private var testStatus: TestStatus = .idle
+    @State private var paidTestStatus: TestStatus = .idle
 
     private enum TestStatus: Equatable {
         case idle
@@ -61,14 +64,107 @@ struct AIPrefsView: View {
                     Link("Get a key →", destination: prefs.activeProvider.keyURL)
                         .font(.caption)
                 }
-                onePasswordHint
-                statusLine
+                onePasswordHint(for: keyField)
+                statusLine(for: testStatus)
             } header: {
-                Text("API key")
+                Text(prefs.activeID == .gemini ? "Primary API Key (Free Tier)" : "API key")
             } footer: {
                 Text("Used to identify image items via right-click → Identify with \(prefs.activeProvider.displayName). The key never leaves this Mac.\n\nPaste an `op://vault/item/field` reference to resolve the secret via the 1Password CLI on every request — install with `brew install 1password-cli`.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+
+            if prefs.activeID == .gemini {
+                Section {
+                    paidKeyRow
+                    HStack(spacing: 8) {
+                        Button("Save") {
+                            prefs.setPaidKey(paidKeyField)
+                            paidKeyField = prefs.paidApiKey
+                            paidTestStatus = .idle
+                            Task {
+                                try? await StashCLI.shared.setDaemonConfig(key: "paid_credential", value: paidKeyField)
+                                try? await StashCLI.shared.setDaemonConfig(key: "paid_tier_enabled", value: "true")
+                            }
+                        }
+                        .disabled(paidKeyField.trimmingCharacters(in: .whitespaces).isEmpty
+                                  || paidKeyField == prefs.paidApiKey)
+                        Button("Test") {
+                            Task { await testPaidKey() }
+                        }
+                        .disabled(paidKeyField.trimmingCharacters(in: .whitespaces).isEmpty
+                                  || paidTestStatus == .pending)
+                        if prefs.hasPaidKey {
+                            Button("Clear") {
+                                prefs.setPaidKey("")
+                                paidKeyField = ""
+                                paidTestStatus = .idle
+                                Task {
+                                    try? await StashCLI.shared.setDaemonConfig(key: "paid_credential", value: "")
+                                    try? await StashCLI.shared.setDaemonConfig(key: "paid_tier_enabled", value: "false")
+                                }
+                            }
+                        }
+                        Spacer()
+                    }
+                    onePasswordHint(for: paidKeyField)
+                    statusLine(for: paidTestStatus)
+
+                    Divider()
+                        .padding(.vertical, 4)
+
+                    Picker("Failover Policy", selection: Binding(
+                        get: { prefs.failoverPolicy },
+                        set: { newPolicy in
+                            prefs.failoverPolicy = newPolicy
+                            let policyStr: String
+                            switch newPolicy {
+                            case .prompt: policyStr = "prompt"
+                            case .alwaysAllow: policyStr = "always_allow"
+                            case .neverAllow: policyStr = "never_allow"
+                            }
+                            Task {
+                                try? await StashCLI.shared.setDaemonConfig(key: "failover_policy", value: policyStr)
+                            }
+                        }
+                    )) {
+                        ForEach(FailoverPolicy.allCases) { policy in
+                            Text(policy.displayName).tag(policy)
+                        }
+                    }
+                    .pickerStyle(.radioGroup)
+
+                    if prefs.remainingApprovalHours > 0 {
+                        HStack(spacing: 8) {
+                            Image(systemName: "bolt.badge.clock.fill")
+                                .foregroundStyle(.orange)
+                            if prefs.remainingApprovalHours > 720 {
+                                Text("Paid failover approved for next \(prefs.remainingApprovalHours / 24) days")
+                                    .font(.caption)
+                            } else {
+                                Text("Paid failover approved for next \(prefs.remainingApprovalHours) hour(s)")
+                                    .font(.caption)
+                            }
+                            Spacer()
+                            Button("Revoke Approval") {
+                                prefs.revokeFailoverApproval()
+                                Task { try? await StashCLI.shared.revokeFailover() }
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .focusable(false)
+                        }
+                        .padding(8)
+                        .background(Color.orange.opacity(0.1))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                    }
+                } header: {
+                    Text("Paid-Tier Failover Key & Policy")
+                } footer: {
+                    Text("Used automatically or upon confirmation when free-tier quotas (20 requests/day) exhaust or when Google Gemini sheds load (HTTP 503). Prevents disruptions when capturing or identifying media.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Section {
@@ -112,6 +208,7 @@ struct AIPrefsView: View {
         .padding(20)
         .onAppear {
             keyField = prefs.apiKey
+            paidKeyField = prefs.paidApiKey
             promptDraft = prefs.promptText
         }
     }
@@ -124,8 +221,10 @@ struct AIPrefsView: View {
                 // Repopulate the editors so they reflect the
                 // newly-selected provider's stored values.
                 keyField = prefs.apiKey
+                paidKeyField = prefs.paidApiKey
                 promptDraft = prefs.promptText
                 testStatus = .idle
+                paidTestStatus = .idle
             }
         )) {
             ForEach(AIProviderID.allCases) { id in
@@ -170,7 +269,38 @@ struct AIPrefsView: View {
                 Image(systemName: keyRevealed ? "eye.slash" : "eye")
             }
             .buttonStyle(.borderless)
+            .focusable(false)
             .help(keyRevealed ? "Hide" : "Show")
+        }
+    }
+
+    private var paidKeyRow: some View {
+        HStack(spacing: 6) {
+            if paidKeyRevealed {
+                FilterField(
+                    placeholder: "AIza… (Paid Tier)",
+                    text: $paidKeyField,
+                    isBordered: true,
+                    backgroundColor: .textBackgroundColor
+                )
+                .frame(height: 22)
+            } else {
+                SecureField(
+                    "",
+                    text: $paidKeyField,
+                    prompt: Text("AIza… (Paid Tier)")
+                )
+                .textFieldStyle(.roundedBorder)
+                .labelsHidden()
+            }
+            Button {
+                paidKeyRevealed.toggle()
+            } label: {
+                Image(systemName: paidKeyRevealed ? "eye.slash" : "eye")
+            }
+            .buttonStyle(.borderless)
+            .focusable(false)
+            .help(paidKeyRevealed ? "Hide" : "Show")
         }
     }
 
@@ -179,8 +309,8 @@ struct AIPrefsView: View {
     /// `op` binary isn't on disk so the user can fix the install
     /// before hitting Test / Identify.
     @ViewBuilder
-    private var onePasswordHint: some View {
-        if AIKeyResolver.isReference(keyField) {
+    private func onePasswordHint(for key: String) -> some View {
+        if AIKeyResolver.isReference(key) {
             HStack(spacing: 6) {
                 Image(systemName: AIKeyResolver.opAvailable
                       ? "lock.shield"
@@ -202,8 +332,8 @@ struct AIPrefsView: View {
     }
 
     @ViewBuilder
-    private var statusLine: some View {
-        switch testStatus {
+    private func statusLine(for status: TestStatus) -> some View {
+        switch status {
         case .idle:
             EmptyView()
         case .pending:
@@ -235,6 +365,19 @@ struct AIPrefsView: View {
             testStatus = .ok
         } catch {
             testStatus = .failed(describe(error))
+        }
+    }
+
+    private func testPaidKey() async {
+        let trimmed = paidKeyField.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        paidTestStatus = .pending
+        do {
+            let resolved = try await AIKeyResolver.resolve(trimmed)
+            try await prefs.activeProvider.testKey(resolved)
+            paidTestStatus = .ok
+        } catch {
+            paidTestStatus = .failed(describe(error))
         }
     }
 

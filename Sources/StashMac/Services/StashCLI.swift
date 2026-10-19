@@ -716,6 +716,32 @@ actor StashCLI {
         ])
     }
 
+    func approveFailover(operation: String = "identify", durationHours: Int = 24) async throws {
+        _ = try await captureOutput(args: [
+            "auth", "approve-failover", operation, "-d", "\(durationHours)",
+        ])
+    }
+
+    func revokeFailover(operation: String? = nil) async throws {
+        var args = ["auth", "revoke-failover"]
+        if let operation, !operation.isEmpty {
+            args.append(operation)
+        }
+        _ = try await captureOutput(args: args)
+    }
+
+    func checkFailover(operation: String = "identify") async throws -> Bool {
+        struct CheckResult: Decodable {
+            let approved: Bool
+        }
+        do {
+            let res: CheckResult = try await captureJSON(args: ["auth", "check-failover", operation, "--json"])
+            return res.approved
+        } catch {
+            return false
+        }
+    }
+
     /// Browser sources for `import history`. Mirrors `BookmarkSource`
     /// but only includes the variants that have a local history DB
     /// — Pocket / Pinterest / Raindrop / generic-HTML aren't browsers.
@@ -1688,9 +1714,16 @@ actor StashCLI {
 
                     if process.terminationStatus != 0 {
                         let errOutput = String(data: errData, encoding: .utf8) ?? ""
-                        let raw = errOutput.isEmpty ? output : errOutput
-                        let message = Self.extractErrorMessage(raw)
-                        continuation.resume(throwing: CLIError.failed(message))
+                        if let failover = Self.parseFailoverError(from: output) ?? Self.parseFailoverError(from: errOutput) {
+                            continuation.resume(throwing: failover)
+                        } else {
+                            let raw = errOutput.isEmpty ? output : errOutput
+                            var message = Self.extractErrorMessage(raw)
+                            if message == "Unknown error" {
+                                message = "CLI command '\(args.first ?? "")' exited with status \(process.terminationStatus)"
+                            }
+                            continuation.resume(throwing: CLIError.failed(message))
+                        }
                     } else {
                         continuation.resume(returning: output.trimmingCharacters(in: .whitespacesAndNewlines))
                     }
@@ -1733,9 +1766,16 @@ actor StashCLI {
 
                     if process.terminationStatus != 0 {
                         let errOutput = String(data: errData, encoding: .utf8) ?? ""
-                        let raw = errOutput.isEmpty ? output : errOutput
-                        let message = Self.extractErrorMessage(raw)
-                        continuation.resume(throwing: CLIError.failed(message))
+                        if let failover = Self.parseFailoverError(from: output) ?? Self.parseFailoverError(from: errOutput) {
+                            continuation.resume(throwing: failover)
+                        } else {
+                            let raw = errOutput.isEmpty ? output : errOutput
+                            var message = Self.extractErrorMessage(raw)
+                            if message == "Unknown error" {
+                                message = "CLI command '\(args.first ?? "")' exited with status \(process.terminationStatus)"
+                            }
+                            continuation.resume(throwing: CLIError.failed(message))
+                        }
                     } else {
                         continuation.resume(returning: output.trimmingCharacters(in: .whitespacesAndNewlines))
                     }
@@ -1768,14 +1808,45 @@ actor StashCLI {
         }
         return trimmed
     }
+
+    static func parseFailoverError(from text: String) -> CLIError? {
+        guard text.contains("failover_approval_required") || text.contains("failover approval required") else {
+            return nil
+        }
+        struct FailoverPayload: Decodable {
+            let error: String
+            let operation: String?
+            let duration: Int?
+        }
+        for line in text.components(separatedBy: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.contains("failover_approval_required") {
+                if let data = trimmed.data(using: .utf8),
+                   let payload = try? JSONDecoder().decode(FailoverPayload.self, from: data),
+                   payload.error == "failover_approval_required" {
+                    return CLIError.failoverRequired(
+                        operation: payload.operation ?? "identify",
+                        durationHours: payload.duration ?? 24
+                    )
+                }
+            }
+        }
+        if text.contains("failover approval required for") {
+            return CLIError.failoverRequired(operation: "identify", durationHours: 24)
+        }
+        return nil
+    }
 }
 
-enum CLIError: LocalizedError {
+enum CLIError: LocalizedError, Equatable {
     case failed(String)
+    case failoverRequired(operation: String, durationHours: Int)
 
     var errorDescription: String? {
         switch self {
         case .failed(let msg): return msg
+        case .failoverRequired(let op, _):
+            return "Paid tier failover approval required for \(op)"
         }
     }
 }

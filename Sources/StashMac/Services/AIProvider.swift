@@ -64,6 +64,42 @@ protocol AIProvider: Sendable {
         media: [AIMedia],
         promptText: String
     ) async throws -> AIIdentifyResult
+
+    func identify(
+        apiKey: String,
+        paidApiKey: String?,
+        isFailoverApproved: Bool,
+        media: [AIMedia],
+        promptText: String
+    ) async throws -> AIIdentifyResult
+}
+
+extension AIProvider {
+    func identify(
+        apiKey: String,
+        paidApiKey: String?,
+        isFailoverApproved: Bool,
+        media: [AIMedia],
+        promptText: String
+    ) async throws -> AIIdentifyResult {
+        try await identify(apiKey: apiKey, media: media, promptText: promptText)
+    }
+}
+
+/// Thrown when free-tier quota is exhausted or model is shedding load (503),
+/// a paid key is available, but failover authorization has not been granted.
+struct GeminiFailoverApprovalRequiredError: LocalizedError, Equatable {
+    let operation: String
+    let durationHours: Int
+
+    init(operation: String = "identify", durationHours: Int = 24) {
+        self.operation = operation
+        self.durationHours = durationHours
+    }
+
+    var errorDescription: String? {
+        "Paid tier failover approval required for \(operation)"
+    }
 }
 
 /// Single media payload — used by the multi-item identify API.
@@ -118,6 +154,8 @@ Respond with exactly these three lines, no preamble, no markdown:
 
 TITLE: <common name; include scientific name in parentheses when applicable>
 NOTES: <natural prose, three to six sentences. Open by naming the subject in plain language — e.g. "This is the YYYY mushroom (Scientificus nameus), also known as XXXX..." or "This is the eastern bluebird (Sialia sialis), a small thrush native to..." Then cover, where relevant: notable visual characteristics; habitat, range, or season; edibility / toxicity / safety; species commonly confused with it; what specific features visible in this photo helped identify it; and any other interesting facts a curious naturalist would want to know. Be generous with detail — the user will trim what they don't want.
+
+If GPS location or regional context is provided or visible, and there is near-equal probability between visually similar species or candidate species, use the location and regional native range to break the tie.
 
 If the subject falls into any of the following categories, you MUST include this extra information within the NOTES section:
 - Mushroom: Include edibility information, preparation info, poison vs. toxic distinction, species commonly confused with it, key visual features in this photo, and health benefits (if edible).
@@ -192,11 +230,17 @@ If the video is silent and has no clear subject, write TITLE: Video Capture and 
 /// body contains "quota exceeded" / "free_tier_requests" /
 /// "current quota" when it's quota; plain rate limits don't.
 func isTransientIdentifyError(_ error: Error) -> Bool {
+    if error is GeminiFailoverApprovalRequiredError {
+        return false
+    }
+    if case .failoverRequired = (error as? CLIError) {
+        return false
+    }
     let msg = error.localizedDescription.lowercased()
     if msg.contains("503") || msg.contains("unavailable") || msg.contains("high demand") {
         return true
     }
-    if msg.contains("quota") || msg.contains("free_tier") || msg.contains("billing") {
+    if msg.contains("quota") || msg.contains("free_tier") || msg.contains("billing") || msg.contains("resource_exhausted") {
         // 429-with-quota — permanent for the current quota window.
         // Don't retry.
         return false

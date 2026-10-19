@@ -262,6 +262,7 @@ struct VimHostEditor: NSViewRepresentable {
             return false
         }
 
+        @MainActor
         private func handleNewline(in textView: NSTextView) -> Bool {
             let nsString = textView.string as NSString
             let selection = textView.selectedRange()
@@ -321,6 +322,7 @@ struct VimHostEditor: NSViewRepresentable {
             return true
         }
 
+        @MainActor
         private func handleDeleteBackward(in textView: NSTextView) -> Bool {
             let nsString = textView.string as NSString
             let selection = textView.selectedRange()
@@ -361,6 +363,7 @@ struct VimHostEditor: NSViewRepresentable {
             return false
         }
 
+        @MainActor
         private func renumberListsAroundCursor(in textView: NSTextView) {
             let text = textView.string as NSString
             let selection = textView.selectedRange()

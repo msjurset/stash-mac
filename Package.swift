@@ -17,12 +17,19 @@ let package = Package(
                 .product(name: "VimEngine", package: "swift-vim-engine"),
             ],
             path: "Sources/StashMac",
-            resources: [.process("Resources")]
+            resources: [.process("Resources")],
+            swiftSettings: [
+                .enableUpcomingFeature("BareSlashRegexLiterals"),
+            ]
         ),
         .testTarget(
             name: "StashMacTests",
             dependencies: ["StashMac"],
-            path: "Tests/StashMacTests"
+            path: "Tests/StashMacTests",
+            swiftSettings: [
+                .enableUpcomingFeature("BareSlashRegexLiterals"),
+            ]
         ),
-    ]
+    ],
+    swiftLanguageModes: [.v5]
 )

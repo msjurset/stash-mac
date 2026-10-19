@@ -170,6 +170,7 @@ struct ItemDetailView: View {
                     }
 
                     NotesView(text: item.notes ?? "", itemID: item.id)
+                        .id("notes-section")
 
                     if let loc = item.location {
                         DetailSection(title: "Location") {
@@ -364,6 +365,26 @@ struct ItemDetailView: View {
                 }
             }
             .coordinateSpace(name: "scroll")
+            .onChange(of: store.identifyingItemIDs.contains(item.id)) { wasIdentifying, isIdentifying in
+                if wasIdentifying && !isIdentifying {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                        withAnimation(.easeInOut(duration: 0.3)) {
+                            proxy.scrollTo("notes-section", anchor: .bottom)
+                        }
+                    }
+                }
+            }
+            .onChange(of: item.notes) { oldNotes, newNotes in
+                let oldLen = oldNotes?.count ?? 0
+                let newLen = newNotes?.count ?? 0
+                if newLen > oldLen {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                        withAnimation(.easeInOut(duration: 0.3)) {
+                            proxy.scrollTo("notes-section", anchor: .bottom)
+                        }
+                    }
+                }
+            }
             .helpAnchor(.itemDetail)
             .onReceive(NotificationCenter.default.publisher(for: .stashOpenFetchURL)) { note in
                 if let url = note.userInfo?["url"] as? String, url == item.url {

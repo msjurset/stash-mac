@@ -1,67 +1,19 @@
 import SwiftUI
+import AppKit
 
 struct TagGraphView: View {
     @Environment(StashStore.self) private var store
     @StateObject private var simulation = GraphSimulation()
-    @State private var canvasOffset: CGSize = .zero
-    @State private var dragOffset: CGSize = .zero
-    @State private var canvasScale: CGFloat = 1.0
-    @State private var draggedNodeIndex: Int?
-    @State private var lastMagnification: CGFloat = 1.0
-    @GestureState private var isMagnifying: Bool = false
 
     var body: some View {
         GeometryReader { geo in
-            Canvas { context, size in
-                let transform = CGAffineTransform(translationX: totalOffset.width, y: totalOffset.height)
-                    .scaledBy(x: canvasScale, y: canvasScale)
-
-                // Draw edges
-                for edge in simulation.edges {
-                    guard edge.sourceIndex < simulation.nodes.count,
-                          edge.targetIndex < simulation.nodes.count else { continue }
-                    let from = simulation.nodes[edge.sourceIndex].position.applying(transform)
-                    let to = simulation.nodes[edge.targetIndex].position.applying(transform)
-
-                    var path = Path()
-                    path.move(to: from)
-                    path.addLine(to: to)
-
-                    let lineWidth = max(1.0, min(CGFloat(edge.weight) * 0.8, 8.0)) * canvasScale
-                    let opacity = min(Double(edge.weight) * 0.15, 0.6)
-                    context.stroke(path, with: .color(.gray.opacity(opacity)), lineWidth: lineWidth)
+            TagGraphCanvasRepresentable(
+                simulation: simulation,
+                filterTags: store.filterTags,
+                onSelectTag: { tagName, isAdditive in
+                    store.filterByTag(tagName, additive: isAdditive)
                 }
-
-                // Draw nodes
-                for node in simulation.nodes {
-                    let pos = node.position.applying(transform)
-                    let r = node.radius * canvasScale
-
-                    let rect = CGRect(x: pos.x - r, y: pos.y - r, width: r * 2, height: r * 2)
-                    let color: Color = store.filterTags.contains(node.tag.name) ? .orange : .accentColor
-                    context.fill(Circle().path(in: rect), with: .color(color.opacity(0.8)))
-                    context.stroke(Circle().path(in: rect), with: .color(color), lineWidth: 1.5)
-
-                    // Label
-                    let label = Text(node.tag.name)
-                        .font(.system(size: max(9, 11 * canvasScale)))
-                        .foregroundColor(.primary)
-                    context.draw(label, at: CGPoint(x: pos.x, y: pos.y + r + 10 * canvasScale))
-                }
-            }
-            .background(Color(nsColor: .controlBackgroundColor))
-            .gesture(dragGesture(in: geo.size))
-            .gesture(magnifyGesture)
-            .onChange(of: isMagnifying) { _, active in
-                // @GestureState auto-flips back to false when the gesture
-                // ends OR is cancelled. Reset our delta accumulator so the
-                // next gesture's first tick computes a delta near 1.0
-                // instead of a bogus jump from a stale value.
-                if !active { lastMagnification = 1.0 }
-            }
-            .onTapGesture { location in
-                handleTap(at: location, in: geo.size)
-            }
+            )
             .onDisappear {
                 simulation.stop()
             }
@@ -83,99 +35,203 @@ struct TagGraphView: View {
             }
         }
     }
+}
 
-    private var totalOffset: CGSize {
-        CGSize(width: canvasOffset.width + dragOffset.width,
-               height: canvasOffset.height + dragOffset.height)
+// MARK: - AppKit Canvas View
+
+struct TagGraphCanvasRepresentable: NSViewRepresentable {
+    @ObservedObject var simulation: GraphSimulation
+    var filterTags: Set<String>
+    var onSelectTag: (String, Bool) -> Void
+
+    func makeNSView(context: Context) -> TagGraphCanvasNSView {
+        let view = TagGraphCanvasNSView()
+        view.simulation = simulation
+        view.filterTags = filterTags
+        view.onSelectTag = onSelectTag
+        return view
     }
 
-    private func dragGesture(in size: CGSize) -> some Gesture {
-        DragGesture()
-            .onChanged { value in
-                let start = value.startLocation
-                if draggedNodeIndex == nil {
-                    // Hit test for node drag
-                    draggedNodeIndex = hitTest(at: start, in: size)
-                }
-                if let idx = draggedNodeIndex {
-                    // Move node
-                    let delta = CGVector(
-                        dx: value.translation.width / canvasScale,
-                        dy: value.translation.height / canvasScale
-                    )
-                    simulation.nodes[idx].position = CGPoint(
-                        x: simulation.nodes[idx].position.x + delta.dx - (dragOffset.width / canvasScale),
-                        y: simulation.nodes[idx].position.y + delta.dy - (dragOffset.height / canvasScale)
-                    )
-                    simulation.nodes[idx].velocity = .zero
-                    dragOffset = value.translation
-                } else {
-                    // Pan canvas
-                    dragOffset = value.translation
-                }
-            }
-            .onEnded { value in
-                if draggedNodeIndex != nil {
-                    draggedNodeIndex = nil
-                    dragOffset = .zero
-                } else {
-                    canvasOffset.width += value.translation.width
-                    canvasOffset.height += value.translation.height
-                }
-                dragOffset = .zero
-            }
+    func updateNSView(_ nsView: TagGraphCanvasNSView, context: Context) {
+        nsView.simulation = simulation
+        nsView.filterTags = filterTags
+        nsView.onSelectTag = onSelectTag
+        nsView.needsDisplay = true
+    }
+}
+
+final class TagGraphCanvasNSView: NSView {
+    var simulation: GraphSimulation?
+    var filterTags: Set<String> = []
+    var onSelectTag: ((String, Bool) -> Void)?
+
+    private var canvasOffset: CGPoint = .zero
+    private var canvasScale: CGFloat = 1.0
+
+    private var draggedNodeIndex: Int?
+    private var lastMouseLocation: CGPoint = .zero
+    private var mouseDownLocation: CGPoint = .zero
+    private var isDraggingOrPanning = false
+
+    override var isFlipped: Bool { true }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        let location = convert(event.locationInWindow, from: nil)
+        lastMouseLocation = location
+        mouseDownLocation = location
+        isDraggingOrPanning = false
+
+        if let idx = hitTestNode(at: location) {
+            draggedNodeIndex = idx
+            simulation?.wake()
+        } else {
+            draggedNodeIndex = nil
+        }
     }
 
-    private var magnifyGesture: some Gesture {
-        MagnifyGesture()
-            .updating($isMagnifying) { _, state, _ in state = true }
-            .onChanged { value in
-                // MagnifyGesture.magnification is cumulative-from-gesture-start
-                // (1.0 at start). Convert to a per-tick delta so each onChanged
-                // applies an incremental zoom around the pinch start point.
-                let delta = value.magnification / lastMagnification
-                lastMagnification = value.magnification
-                applyZoom(by: delta, anchor: value.startLocation)
-            }
-            .onEnded { _ in
-                lastMagnification = 1.0
-            }
+    override func mouseDragged(with event: NSEvent) {
+        let location = convert(event.locationInWindow, from: nil)
+        let dx = location.x - lastMouseLocation.x
+        let dy = location.y - lastMouseLocation.y
+        lastMouseLocation = location
+
+        if abs(location.x - mouseDownLocation.x) > 3 || abs(location.y - mouseDownLocation.y) > 3 {
+            isDraggingOrPanning = true
+        }
+
+        if let idx = draggedNodeIndex, let sim = simulation, idx < sim.nodes.count {
+            sim.nodes[idx].position.x += dx / canvasScale
+            sim.nodes[idx].position.y += dy / canvasScale
+            sim.nodes[idx].velocity = .zero
+        } else {
+            canvasOffset.x += dx
+            canvasOffset.y += dy
+        }
+        needsDisplay = true
     }
 
-    /// Multiplicatively scale the canvas by `delta` while keeping the world
-    /// point under `anchor` (in view coordinates) fixed on screen. Adjusts
-    /// `canvasOffset` so the zoom feels anchored to the cursor.
+    override func mouseUp(with event: NSEvent) {
+        let location = convert(event.locationInWindow, from: nil)
+        if !isDraggingOrPanning, let idx = hitTestNode(at: location), let sim = simulation, idx < sim.nodes.count {
+            let tag = sim.nodes[idx].tag.name
+            let isCmd = event.modifierFlags.contains(.command)
+            onSelectTag?(tag, isCmd)
+        }
+        draggedNodeIndex = nil
+        isDraggingOrPanning = false
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        if event.modifierFlags.contains(.option) {
+            let zoomFactor = 1.0 + (event.scrollingDeltaY * 0.005)
+            let location = convert(event.locationInWindow, from: nil)
+            applyZoom(by: zoomFactor, anchor: location)
+        } else {
+            canvasOffset.x += event.scrollingDeltaX
+            canvasOffset.y += event.scrollingDeltaY
+            needsDisplay = true
+        }
+    }
+
+    override func magnify(with event: NSEvent) {
+        let zoomFactor = 1.0 + event.magnification
+        let location = convert(event.locationInWindow, from: nil)
+        applyZoom(by: zoomFactor, anchor: location)
+    }
+
     private func applyZoom(by delta: CGFloat, anchor: CGPoint) {
         let oldScale = canvasScale
         let newScale = max(0.3, min(3.0, oldScale * delta))
         guard newScale != oldScale else { return }
         let k = newScale / oldScale
-        canvasOffset.width = anchor.x - (anchor.x - canvasOffset.width) * k
-        canvasOffset.height = anchor.y - (anchor.y - canvasOffset.height) * k
+        canvasOffset.x = anchor.x - (anchor.x - canvasOffset.x) * k
+        canvasOffset.y = anchor.y - (anchor.y - canvasOffset.y) * k
         canvasScale = newScale
+        needsDisplay = true
     }
 
-    private func handleTap(at location: CGPoint, in size: CGSize) {
-        if let idx = hitTest(at: location, in: size) {
-            let tagName = simulation.nodes[idx].tag.name
-            store.filterByTag(tagName, additive: NSEvent.modifierFlags.contains(.command))
-        }
-    }
-
-    private func hitTest(at point: CGPoint, in size: CGSize) -> Int? {
-        let transform = CGAffineTransform(translationX: totalOffset.width, y: totalOffset.height)
-            .scaledBy(x: canvasScale, y: canvasScale)
-
-        for (i, node) in simulation.nodes.enumerated() {
-            let pos = node.position.applying(transform)
-            let r = node.radius * canvasScale + 5 // extra tap target
-            let dx = point.x - pos.x
-            let dy = point.y - pos.y
+    private func hitTestNode(at screenPoint: CGPoint) -> Int? {
+        guard let sim = simulation else { return nil }
+        let worldPoint = CGPoint(
+            x: (screenPoint.x - canvasOffset.x) / canvasScale,
+            y: (screenPoint.y - canvasOffset.y) / canvasScale
+        )
+        for (i, node) in sim.nodes.enumerated() {
+            let dx = worldPoint.x - node.position.x
+            let dy = worldPoint.y - node.position.y
+            let r = node.radius + 5 / canvasScale
             if dx * dx + dy * dy <= r * r {
                 return i
             }
         }
         return nil
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard let context = NSGraphicsContext.current?.cgContext, let sim = simulation else { return }
+
+        // Background
+        NSColor.controlBackgroundColor.setFill()
+        dirtyRect.fill()
+
+        context.saveGState()
+        context.translateBy(x: canvasOffset.x, y: canvasOffset.y)
+        context.scaleBy(x: canvasScale, y: canvasScale)
+
+        // Draw edges
+        for edge in sim.edges {
+            guard edge.sourceIndex < sim.nodes.count, edge.targetIndex < sim.nodes.count else { continue }
+            let from = sim.nodes[edge.sourceIndex].position
+            let to = sim.nodes[edge.targetIndex].position
+
+            let lineWidth = max(1.0, min(CGFloat(edge.weight) * 0.8, 8.0))
+            let opacity = min(Double(edge.weight) * 0.15, 0.6)
+
+            context.setStrokeColor(NSColor.gray.withAlphaComponent(opacity).cgColor)
+            context.setLineWidth(lineWidth)
+            context.beginPath()
+            context.move(to: from)
+            context.addLine(to: to)
+            context.strokePath()
+        }
+
+        // Draw nodes
+        let textFont = NSFont.systemFont(ofSize: 11)
+        let textColor = NSColor.labelColor
+
+        for node in sim.nodes {
+            let pos = node.position
+            let r = node.radius
+            let isFiltered = filterTags.contains(node.tag.name)
+
+            let fillColor = isFiltered ? NSColor.systemOrange.withAlphaComponent(0.8) : NSColor.controlAccentColor.withAlphaComponent(0.8)
+            let strokeColor = isFiltered ? NSColor.systemOrange : NSColor.controlAccentColor
+
+            let rect = CGRect(x: pos.x - r, y: pos.y - r, width: r * 2, height: r * 2)
+
+            context.setFillColor(fillColor.cgColor)
+            context.fillEllipse(in: rect)
+
+            context.setStrokeColor(strokeColor.cgColor)
+            context.setLineWidth(1.5)
+            context.strokeEllipse(in: rect)
+
+            // Draw label
+            let attrs: [NSAttributedString.Key: Any] = [
+                .font: textFont,
+                .foregroundColor: textColor
+            ]
+            let str = NSString(string: node.tag.name)
+            let strSize = str.size(withAttributes: attrs)
+            let textPoint = CGPoint(x: pos.x - strSize.width / 2.0, y: pos.y + r + 4 / canvasScale)
+
+            str.draw(at: textPoint, withAttributes: attrs)
+        }
+
+        context.restoreGState()
     }
 }
 
@@ -200,9 +256,11 @@ class GraphSimulation: ObservableObject {
     var edges: [GraphEdgeRef] = []
     private var timer: Timer?
     private var tick = 0
+    private var totalTicks = 300
 
     func setup(data: TagGraphData, canvasSize: CGSize) {
         timer?.invalidate()
+        timer = nil
 
         let center = CGPoint(x: canvasSize.width / 2, y: canvasSize.height / 2)
         let maxCount = data.nodes.map { $0.count ?? 0 }.max() ?? 1
@@ -215,7 +273,7 @@ class GraphSimulation: ObservableObject {
             nameToIndex[tag.name] = i
             let r = minR + (maxR - minR) * sqrt(CGFloat(tag.count ?? 0) / CGFloat(max(maxCount, 1)))
             // Arrange in a circle initially
-            let angle = CGFloat(i) / CGFloat(data.nodes.count) * 2 * .pi
+            let angle = CGFloat(i) / CGFloat(max(data.nodes.count, 1)) * 2 * .pi
             let spread = min(canvasSize.width, canvasSize.height) * 0.35
             let pos = CGPoint(x: center.x + cos(angle) * spread, y: center.y + sin(angle) * spread)
             return GraphNode(tag: tag, position: pos, velocity: .zero, radius: r)
@@ -226,10 +284,28 @@ class GraphSimulation: ObservableObject {
             return GraphEdgeRef(sourceIndex: si, targetIndex: ti, weight: edge.weight)
         }
 
-        tick = 0
+        // Fast synchronous pre-pass (80 ticks) so layout is already semi-stable when rendered
+        for _ in 0..<80 {
+            performStep(dtScale: 1.0)
+        }
+
+        tick = 80
+        startTimer()
+    }
+
+    func wake() {
+        if timer == nil && !nodes.isEmpty {
+            tick = max(0, totalTicks - 100) // gentle wake for 100 ticks
+            startTimer()
+        }
+    }
+
+    private func startTimer() {
+        timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                self?.step()
+            guard let self = self else { return }
+            MainActor.assumeIsolated {
+                self.step()
             }
         }
     }
@@ -238,27 +314,35 @@ class GraphSimulation: ObservableObject {
         guard !nodes.isEmpty else { return }
         tick += 1
 
-        // Cooling: reduce forces over time
-        let alpha = max(0.01, 1.0 - Double(tick) / 400.0)
-        if alpha <= 0.01 {
-            timer?.invalidate()
+        if tick >= totalTicks {
+            stop()
             return
         }
 
+        let alpha = max(0.01, 1.0 - Double(tick) / Double(totalTicks))
+        performStep(dtScale: alpha)
+        objectWillChange.send()
+    }
+
+    private func performStep(dtScale: Double) {
         let repulsionK: CGFloat = 3000.0
-        let dt: CGFloat = CGFloat(alpha)
+        let dt: CGFloat = CGFloat(dtScale)
+        let count = nodes.count
 
         // Repulsion between all node pairs
-        for i in 0..<nodes.count {
-            for j in (i + 1)..<nodes.count {
-                var dx = nodes[i].position.x - nodes[j].position.x
-                var dy = nodes[i].position.y - nodes[j].position.y
+        for i in 0..<count {
+            let posI = nodes[i].position
+            for j in (i + 1)..<count {
+                let posJ = nodes[j].position
+                var dx = posI.x - posJ.x
+                var dy = posI.y - posJ.y
                 var dist = sqrt(dx * dx + dy * dy)
                 if dist < 1 { dist = 1; dx = CGFloat.random(in: -1...1); dy = CGFloat.random(in: -1...1) }
+                if dist > 600 { continue } // distant nodes have negligible repulsion force
 
-                let force = repulsionK / (dist * dist) * dt
-                let fx = dx / dist * force
-                let fy = dy / dist * force
+                let force = (repulsionK / (dist * dist)) * dt
+                let fx = (dx / dist) * force
+                let fy = (dy / dist) * force
 
                 nodes[i].velocity.dx += fx
                 nodes[i].velocity.dy += fy
@@ -271,6 +355,7 @@ class GraphSimulation: ObservableObject {
         for edge in edges {
             let i = edge.sourceIndex
             let j = edge.targetIndex
+            guard i < count && j < count else { continue }
             let dx = nodes[j].position.x - nodes[i].position.x
             let dy = nodes[j].position.y - nodes[i].position.y
             let dist = sqrt(dx * dx + dy * dy)
@@ -279,8 +364,8 @@ class GraphSimulation: ObservableObject {
             let restLength: CGFloat = 100.0 / sqrt(CGFloat(max(edge.weight, 1)))
             let stiffness: CGFloat = 0.05 * dt
             let force = (dist - restLength) * stiffness
-            let fx = dx / dist * force
-            let fy = dy / dist * force
+            let fx = (dx / dist) * force
+            let fy = (dy / dist) * force
 
             nodes[i].velocity.dx += fx
             nodes[i].velocity.dy += fy
@@ -289,31 +374,28 @@ class GraphSimulation: ObservableObject {
         }
 
         // Centering force
-        let centerX = nodes.reduce(0.0) { $0 + $1.position.x } / CGFloat(nodes.count)
-        let centerY = nodes.reduce(0.0) { $0 + $1.position.y } / CGFloat(nodes.count)
-        for i in 0..<nodes.count {
+        let centerX = nodes.reduce(0.0) { $0 + $1.position.x } / CGFloat(max(count, 1))
+        let centerY = nodes.reduce(0.0) { $0 + $1.position.y } / CGFloat(max(count, 1))
+        for i in 0..<count {
             nodes[i].velocity.dx -= (nodes[i].position.x - centerX) * 0.005 * dt
             nodes[i].velocity.dy -= (nodes[i].position.y - centerY) * 0.005 * dt
         }
 
         // Update positions with velocity damping and clamping
-        for i in 0..<nodes.count {
+        let maxV: CGFloat = 15.0
+        for i in 0..<count {
             nodes[i].velocity.dx *= 0.85
             nodes[i].velocity.dy *= 0.85
 
-            // Clamp velocity
-            let maxV: CGFloat = 15.0
             let vMag = sqrt(nodes[i].velocity.dx * nodes[i].velocity.dx + nodes[i].velocity.dy * nodes[i].velocity.dy)
             if vMag > maxV {
-                nodes[i].velocity.dx = nodes[i].velocity.dx / vMag * maxV
-                nodes[i].velocity.dy = nodes[i].velocity.dy / vMag * maxV
+                nodes[i].velocity.dx = (nodes[i].velocity.dx / vMag) * maxV
+                nodes[i].velocity.dy = (nodes[i].velocity.dy / vMag) * maxV
             }
 
             nodes[i].position.x += nodes[i].velocity.dx
             nodes[i].position.y += nodes[i].velocity.dy
         }
-
-        objectWillChange.send()
     }
 
     func stop() {

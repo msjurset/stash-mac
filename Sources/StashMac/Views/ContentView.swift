@@ -60,6 +60,9 @@ struct ContentView: View {
             .sheet(isPresented: $showImportHistorySheet) { ImportHistorySheet() }
             .sheet(isPresented: $showQuickSearch) { QuickSearchView() }
             .sheet(item: $fetchURLTrigger) { trigger in FetchURLSheet(initialURL: trigger.initialURL) }
+            .sheet(item: Bindable(store).pendingFailover) { failover in
+                FailoverApprovalSheet(failover: failover)
+            }
             
             ToastOverlay()
                 .frame(maxHeight: .infinity, alignment: .top)

@@ -61,6 +61,22 @@ struct GeminiProvider: AIProvider {
         media: [AIMedia],
         promptText: String
     ) async throws -> AIIdentifyResult {
+        try await identify(
+            apiKey: apiKey,
+            paidApiKey: nil,
+            isFailoverApproved: false,
+            media: media,
+            promptText: promptText
+        )
+    }
+
+    func identify(
+        apiKey: String,
+        paidApiKey: String?,
+        isFailoverApproved: Bool,
+        media: [AIMedia],
+        promptText: String
+    ) async throws -> AIIdentifyResult {
         guard !media.isEmpty else { throw GeminiError.emptyResponse }
         struct IdBody: Encodable { let contents: [Content] }
         let effectivePrompt = media.count > 1
@@ -77,9 +93,45 @@ struct GeminiProvider: AIProvider {
             ))
         }
         let body = IdBody(contents: [Content(parts: parts)])
-        let raw = try await postGenerate(apiKey: apiKey, body: body)
-        guard !raw.isEmpty else { throw GeminiError.emptyResponse }
-        return AIResponseParser.parse(raw)
+        do {
+            let raw = try await postGenerate(apiKey: apiKey, body: body)
+            guard !raw.isEmpty else { throw GeminiError.emptyResponse }
+            return AIResponseParser.parse(raw)
+        } catch let error as GeminiError {
+            if shouldFailover(error) {
+                if let paidKey = paidApiKey?.trimmingCharacters(in: .whitespacesAndNewlines), !paidKey.isEmpty {
+                    if isFailoverApproved {
+                        logGemini("Free-tier quota or capacity reached on primary key. Failing over immediately to paid key on pass 1...")
+                        let raw = try await postGenerate(apiKey: paidKey, body: body)
+                        guard !raw.isEmpty else { throw GeminiError.emptyResponse }
+                        return AIResponseParser.parse(raw)
+                    } else {
+                        throw GeminiFailoverApprovalRequiredError(operation: "identify")
+                    }
+                }
+            }
+            throw error
+        }
+    }
+
+    private func shouldFailover(_ error: GeminiError) -> Bool {
+        switch error {
+        case .http(let status, let body):
+            let lower = body.lowercased()
+            if status == 429 {
+                if lower.contains("quota") || lower.contains("free_tier") || lower.contains("resource_exhausted") || lower.contains("billing") {
+                    return true
+                }
+            }
+            if status == 503 {
+                if lower.contains("unavailable") || lower.contains("high demand") {
+                    return true
+                }
+            }
+            return false
+        default:
+            return false
+        }
     }
 
     // MARK: - Wire types

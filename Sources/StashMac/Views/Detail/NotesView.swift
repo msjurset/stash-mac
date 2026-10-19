@@ -280,7 +280,19 @@ struct NotesView: View {
             editedText = text
             originalText = text
         }
-        .onChange(of: text) { _, newText in
+        .onChange(of: store.identifyingItemIDs.contains(itemID)) { wasIdentifying, isIdentifying in
+            if wasIdentifying && !isIdentifying {
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    isExpanded = true
+                }
+            }
+        }
+        .onChange(of: text) { oldText, newText in
+            if newText.count > oldText.count {
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    isExpanded = true
+                }
+            }
             if !isFocused {
                 editedText = newText
                 originalText = newText
