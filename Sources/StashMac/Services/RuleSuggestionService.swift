@@ -341,6 +341,7 @@ Rules:
         return lines.joined(separator: "\n")
     }
 
+    #if canImport(FoundationModels)
     @available(macOS 26.0, *)
     static func makeSuggestion(from proposal: RuleMatchProposal, bucket: TagBucket) -> RuleSuggestion {
         let domain = nilIfEmpty(proposal.domain)
@@ -362,6 +363,7 @@ Rules:
             supportingItemIDs: bucket.events.map { $0.itemId }
         )
     }
+    #endif
 
     private static func nilIfEmpty(_ s: String) -> String? {
         let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
