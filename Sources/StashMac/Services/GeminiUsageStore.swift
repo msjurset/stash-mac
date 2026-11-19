@@ -318,15 +318,23 @@ enum GeminiPricing {
     /// missing, corrupt, or doesn't mention a particular model.
     private static let compiledDefaults = Catalog(
         models: [
+            "gemini-4-hydrogen":     Rate(inputPerMillion: 0.75,  outputPerMillion: 3.75),
+            "gemini-4-argon":        Rate(inputPerMillion: 2.00,  outputPerMillion: 12.00),
+            "gemini-4-carbon":       Rate(inputPerMillion: 2.00,  outputPerMillion: 12.00),
+            "gemini-4-neon":         Rate(inputPerMillion: 2.00,  outputPerMillion: 12.00),
+            "gemini-3.8-flash":      Rate(inputPerMillion: 0.75,  outputPerMillion: 3.75),
+            "gemini-3.5-flash":      Rate(inputPerMillion: 0.30,  outputPerMillion: 2.50),
+            "gemini-3.5-flash-lite": Rate(inputPerMillion: 0.25,  outputPerMillion: 1.50),
+            "gemini-3.1-flash":      Rate(inputPerMillion: 0.30,  outputPerMillion: 2.50),
+            "gemini-3.1-flash-lite": Rate(inputPerMillion: 0.10,  outputPerMillion: 0.40),
+            "gemini-3.1-pro":        Rate(inputPerMillion: 1.25,  outputPerMillion: 10.00),
+            "gemini-3-flash":        Rate(inputPerMillion: 0.50,  outputPerMillion: 3.00),
+            "gemini-3-pro":          Rate(inputPerMillion: 2.00,  outputPerMillion: 12.00),
             "gemini-2.5-flash":      Rate(inputPerMillion: 0.30,  outputPerMillion: 2.50),
             "gemini-2.5-flash-lite": Rate(inputPerMillion: 0.10,  outputPerMillion: 0.40),
             "gemini-2.5-pro":        Rate(inputPerMillion: 1.25,  outputPerMillion: 10.00),
-            "gemini-3-flash":        Rate(inputPerMillion: 0.50,  outputPerMillion: 3.00),
-            "gemini-3-pro":          Rate(inputPerMillion: 2.00,  outputPerMillion: 12.00),
-            "gemini-3.1-flash":      Rate(inputPerMillion: 0.30,  outputPerMillion: 2.50),
-            "gemini-3.1-pro":        Rate(inputPerMillion: 1.25,  outputPerMillion: 10.00),
         ],
-        defaultModel: "gemini-2.5-flash"
+        defaultModel: "gemini-4-hydrogen"
     )
 
     /// Effective catalog — compiled defaults overlaid with any

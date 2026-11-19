@@ -18,8 +18,13 @@ struct ModelAutocompleteField: View {
         switch providerID {
         case .gemini:
             return [
-                "gemini-3.1-flash",
+                "gemini-4-hydrogen",
+                "gemini-4-argon",
+                "gemini-4-carbon",
+                "gemini-4-neon",
                 "gemini-3.5-flash",
+                "gemini-3.5-flash-lite",
+                "gemini-3.1-flash",
                 "gemini-3.1-pro",
                 "gemini-3.1-flash-lite",
                 "gemini-2.5-flash",

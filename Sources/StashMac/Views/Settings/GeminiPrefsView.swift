@@ -659,7 +659,7 @@ private struct GeminiDaemonConfigSection: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Global Primary Model").font(.caption).foregroundStyle(.secondary)
                     ModelAutocompleteField(
-                        placeholder: "e.g. gemini-2.5-flash",
+                        placeholder: "e.g. gemini-4-hydrogen",
                         text: $globalPrimaryModelInput,
                         isMultiValue: false,
                         providerID: prefs.activeID
@@ -670,7 +670,7 @@ private struct GeminiDaemonConfigSection: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Global Fallback Models").font(.caption).foregroundStyle(.secondary)
                     ModelAutocompleteField(
-                        placeholder: "e.g. gemini-2.5-flash, gemini-3.1-flash, gemini-2.5-flash-lite, gemini-3.5-flash",
+                        placeholder: "e.g. gemini-4-hydrogen, gemini-3.5-flash, gemini-3.1-flash-lite, gemini-2.5-flash-lite",
                         text: $modelsInput,
                         isMultiValue: true,
                         providerID: prefs.activeID
@@ -704,7 +704,7 @@ private struct GeminiDaemonConfigSection: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("\(operationDisplayName(op)) Primary Model Override").font(.caption).foregroundStyle(.secondary)
                         ModelAutocompleteField(
-                            placeholder: "Use Global Default (\(globalPrimaryModelInput.isEmpty ? "gemini-2.5-flash" : globalPrimaryModelInput))",
+                            placeholder: "Use Global Default (\(globalPrimaryModelInput.isEmpty ? "gemini-4-hydrogen" : globalPrimaryModelInput))",
                             text: Binding(
                                 get: { opPrimaryModelInputs[op] ?? "" },
                                 set: { opPrimaryModelInputs[op] = $0 }

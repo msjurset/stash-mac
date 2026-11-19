@@ -18,7 +18,7 @@ struct GeminiProvider: AIProvider {
     var keyURL: URL { URL(string: "https://aistudio.google.com/app/apikey")! }
     var defaultPrompt: String { AIPrompts.defaultIdentify }
 
-    var model: String = "gemini-3.5-flash"
+    var model: String = "gemini-4-hydrogen"
     var timeout: TimeInterval { 30.0 }
     var urlSession: URLSession = .shared
 
@@ -45,9 +45,13 @@ struct GeminiProvider: AIProvider {
 
     /// Cheap key-validity probe — sends a tiny text-only generate.
     func testKey(_ apiKey: String) async throws {
-        struct PingBody: Encodable { let contents: [Content] }
+        struct PingBody: Encodable {
+            let contents: [Content]
+            let generationConfig: GenerationConfig?
+        }
         let body = PingBody(
-            contents: [Content(parts: [Part(text: "ping", inlineData: nil)])]
+            contents: [Content(parts: [Part(text: "ping", inlineData: nil)])],
+            generationConfig: generationConfigForCurrentModel()
         )
         _ = try await postGenerate(apiKey: apiKey, body: body)
     }
@@ -78,7 +82,10 @@ struct GeminiProvider: AIProvider {
         promptText: String
     ) async throws -> AIIdentifyResult {
         guard !media.isEmpty else { throw GeminiError.emptyResponse }
-        struct IdBody: Encodable { let contents: [Content] }
+        struct IdBody: Encodable {
+            let contents: [Content]
+            let generationConfig: GenerationConfig?
+        }
         let effectivePrompt = media.count > 1
             ? AIPrompts.multiImageHint(count: media.count) + promptText
             : promptText
@@ -92,7 +99,10 @@ struct GeminiProvider: AIProvider {
                 )
             ))
         }
-        let body = IdBody(contents: [Content(parts: parts)])
+        let body = IdBody(
+            contents: [Content(parts: parts)],
+            generationConfig: generationConfigForCurrentModel()
+        )
         do {
             let raw = try await postGenerate(apiKey: apiKey, body: body)
             guard !raw.isEmpty else { throw GeminiError.emptyResponse }
@@ -135,6 +145,23 @@ struct GeminiProvider: AIProvider {
     }
 
     // MARK: - Wire types
+
+    struct GenerationConfig: Encodable {
+        let thinkingConfig: ThinkingConfig?
+    }
+
+    struct ThinkingConfig: Encodable {
+        let thinkingLevel: String
+    }
+
+    private func generationConfigForCurrentModel() -> GenerationConfig? {
+        if model.contains("gemini-4-hydrogen") || model == "gemini-3.1-flash" || model == "gemini-3.8-flash" {
+            return GenerationConfig(thinkingConfig: ThinkingConfig(thinkingLevel: "LOW"))
+        } else if model.contains("3.1-pro") || model.contains("argon") || model.contains("carbon") || model.contains("neon") {
+            return GenerationConfig(thinkingConfig: ThinkingConfig(thinkingLevel: "MEDIUM"))
+        }
+        return nil
+    }
 
     struct Content: Encodable {
         let parts: [Part]
@@ -190,14 +217,14 @@ struct GeminiProvider: AIProvider {
         }
         let effectiveModel: String
         switch model {
-        case "gemini-3.1-flash":
-            effectiveModel = "gemini-3.5-flash"
+        case "gemini-3.1-flash", "gemini-3.8-flash":
+            effectiveModel = "gemini-4-hydrogen"
         case "gemini-3.1-pro":
             effectiveModel = "gemini-3.1-pro-preview"
         default:
             effectiveModel = model
         }
-        let apiVersion = (effectiveModel.contains("3.") || effectiveModel.contains("2.")) ? "v1beta" : "v1"
+        let apiVersion = (effectiveModel.contains("4-") || effectiveModel.contains("3.") || effectiveModel.contains("2.")) ? "v1beta" : "v1"
         let urlString =
             "https://generativelanguage.googleapis.com/\(apiVersion)/models/\(effectiveModel):generateContent?key=\(apiKey)"
 
