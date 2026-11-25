@@ -48,6 +48,8 @@ struct QuickSearchView: View {
     @State private var suggestions: [Suggestion] = []
     @State private var suggestionIndex: Int = -1
     @State private var dismissedSuggestionsQuery: String? = nil
+    @State private var isResultsFocused: Bool = false
+    @State private var hadSuggestionsBeforeResultsFocus: Bool = false
 
     private let commandRegistry = GlobalCommandRegistry.shared
 
@@ -109,10 +111,16 @@ struct QuickSearchView: View {
                     pendingCursor: $pendingCursor,
                     onSelectionChanged: { loc in
                         cursorLocation = loc
-                        updateSuggestions()
+                        if !isResultsFocused {
+                            updateSuggestions()
+                        }
                     },
                     onKey: { handleKey($0) },
-                    onBeginEditing: { updateSuggestions() }
+                    onBeginEditing: {
+                        if !isResultsFocused {
+                            updateSuggestions()
+                        }
+                    }
                 )
                 .frame(height: 28)
 
@@ -194,7 +202,7 @@ struct QuickSearchView: View {
                             .font(.caption2.weight(.semibold))
                             .foregroundStyle(.secondary)
                         Spacer()
-                        Text("Tab / ↑↓ to cycle • Enter to insert • Esc to dismiss")
+                        Text("Tab / ↑↓ to cycle • Enter to insert • ⌃Tab / ⌥Tab to focus results • Esc to dismiss")
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
                     }
@@ -328,6 +336,7 @@ struct QuickSearchView: View {
             }
         }
         .onChange(of: query) { _, newQuery in
+            isResultsFocused = false
             if newQuery == "//" && !regexMode {
                 regexMode = true
                 regexGuideShown = true
@@ -368,15 +377,31 @@ struct QuickSearchView: View {
         HStack(spacing: 8) {
             Text(isEmptyQuery ? "Recent, Saved Searches & Actions" : "Results (\(matches.count))")
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(isResultsFocused ? Color.accentColor : .secondary)
+            if isResultsFocused {
+                Text("Focused")
+                    .font(.system(size: 9, weight: .bold))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1.5)
+                    .background(Color.accentColor.opacity(0.18), in: Capsule())
+                    .foregroundStyle(Color.accentColor)
+            }
             Spacer()
-            if isEmptyQuery {
+            if isEmptyQuery && !isResultsFocused {
                 HStack(spacing: 4) {
                     browseToggleButton(mode: .recent, icon: "clock", tooltip: "Recent searches first")
                     browseToggleButton(mode: .frequent, icon: "chart.bar", tooltip: "Frequent searches first")
                 }
+            } else if isResultsFocused {
+                Text("Tab / ↑↓ to navigate • Enter to open • ⌃Tab / ⌥Tab or Esc for search bar")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
             } else if suggestions.isEmpty {
-                Text("Tab / ↑↓ to navigate • Enter to open")
+                Text("↑↓ or ⌃Tab / ⌥Tab to navigate • Enter to open")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            } else {
+                Text("⌃Tab / ⌥Tab to focus results")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
@@ -572,8 +597,36 @@ struct QuickSearchView: View {
 
     // MARK: - Key Handling
 
+    private func toggleResultsFocus() {
+        if isResultsFocused {
+            isResultsFocused = false
+            dismissedSuggestionsQuery = nil
+            pendingCursor = query.count
+            cursorLocation = query.count
+            searchFieldFocusTrigger &+= 1
+            if !regexMode {
+                _ = requestSuggestions()
+            }
+        } else {
+            hadSuggestionsBeforeResultsFocus = !suggestions.isEmpty
+            suggestions = []
+            suggestionIndex = -1
+            dismissedSuggestionsQuery = query
+            rebuildMatches()
+            if !matches.isEmpty {
+                isResultsFocused = true
+                if activeIndex < 0 || activeIndex >= matches.count {
+                    activeIndex = 0
+                }
+            }
+        }
+    }
+
     private func handleKey(_ key: SuggestKey) -> Bool {
         switch key {
+        case .toggleResultsFocus:
+            toggleResultsFocus()
+            return true
         case .tab:
             handleTab(shift: false)
             return true
@@ -598,6 +651,20 @@ struct QuickSearchView: View {
                 regexGuideShown = false
                 return true
             }
+            if isResultsFocused {
+                isResultsFocused = false
+                dismissedSuggestionsQuery = nil
+                pendingCursor = query.count
+                cursorLocation = query.count
+                searchFieldFocusTrigger &+= 1
+                if hadSuggestionsBeforeResultsFocus {
+                    hadSuggestionsBeforeResultsFocus = false
+                    _ = requestSuggestions()
+                } else {
+                    updateSuggestions()
+                }
+                return true
+            }
             if !suggestions.isEmpty {
                 suggestions = []
                 suggestionIndex = -1
@@ -619,7 +686,7 @@ struct QuickSearchView: View {
     }
 
     private func handleUpArrow() {
-        if !suggestions.isEmpty {
+        if !isResultsFocused && !suggestions.isEmpty {
             if suggestionIndex > 0 {
                 suggestionIndex -= 1
             } else {
@@ -633,7 +700,7 @@ struct QuickSearchView: View {
     }
 
     private func handleDownArrow() {
-        if !suggestions.isEmpty {
+        if !isResultsFocused && !suggestions.isEmpty {
             if suggestionIndex < suggestions.count - 1 {
                 suggestionIndex += 1
             } else {
@@ -647,6 +714,21 @@ struct QuickSearchView: View {
     }
 
     private func handleTab(shift: Bool) {
+        let flags = (NSApp.currentEvent?.modifierFlags ?? []).intersection(.deviceIndependentFlagsMask)
+        if (flags.contains(.control) || flags.contains(.option)) && !flags.contains(.command) {
+            toggleResultsFocus()
+            return
+        }
+
+        if isResultsFocused {
+            if shift {
+                handleUpArrow()
+            } else {
+                handleDownArrow()
+            }
+            return
+        }
+
         if !suggestions.isEmpty {
             if !shift && suggestions.count == 1 {
                 acceptSuggestion(suggestions[0])
@@ -677,7 +759,7 @@ struct QuickSearchView: View {
     }
 
     private func handleEnter() {
-        if !suggestions.isEmpty && suggestionIndex >= 0 && suggestionIndex < suggestions.count {
+        if !isResultsFocused && !suggestions.isEmpty && suggestionIndex >= 0 && suggestionIndex < suggestions.count {
             acceptSuggestion(suggestions[suggestionIndex])
             return
         }
@@ -1659,7 +1741,14 @@ struct QuickSearchView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
-            .background(active ? Color.accentColor.opacity(0.2) : Color.clear)
+            .background(active ? Color.accentColor.opacity(isResultsFocused ? 0.3 : 0.2) : Color.clear)
+            .overlay(alignment: .leading) {
+                if isResultsFocused && active {
+                    Rectangle()
+                        .fill(Color.accentColor)
+                        .frame(width: 3)
+                }
+            }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

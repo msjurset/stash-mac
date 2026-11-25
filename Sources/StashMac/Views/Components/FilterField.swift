@@ -8,7 +8,7 @@ private let log = Logger(subsystem: "com.msjurseth.stash", category: "phantom-di
 /// Shared across `FilterField` and `TagAwareSearchField` so every
 /// input type maps the same way.
 enum SuggestKey {
-    case tab, shiftTab, arrowDown, arrowUp, ctrlJ, ctrlK, enter, escape
+    case tab, shiftTab, toggleResultsFocus, arrowDown, arrowUp, ctrlJ, ctrlK, enter, escape
 }
 
 extension NSTextView {
@@ -231,10 +231,15 @@ struct FilterField: NSViewRepresentable {
             guard eventMonitor == nil else { return }
             eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
                 guard let self else { return event }
-                guard event.modifierFlags.contains(.control) else { return event }
                 guard let field = self.field,
                       let editor = field.currentEditor(),
                       field.window?.firstResponder === editor else { return event }
+                let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                if event.keyCode == 48 && (flags.contains(.control) || flags.contains(.option)) && !flags.contains(.command) {
+                    let consumed = MainActor.assumeIsolated { self.parent.onKey?(.toggleResultsFocus) ?? false }
+                    return consumed ? nil : event
+                }
+                guard flags.contains(.control) else { return event }
                 let char = event.charactersIgnoringModifiers
                 let key: SuggestKey?
                 switch char {
@@ -298,11 +303,14 @@ struct FilterField: NSViewRepresentable {
         }
 
         func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            let flags = (NSApp.currentEvent?.modifierFlags ?? []).intersection(.deviceIndependentFlagsMask)
+            let isModifiedTab = (flags.contains(.control) || flags.contains(.option)) && !flags.contains(.command)
             let key: SuggestKey?
             switch commandSelector {
             case #selector(NSResponder.insertNewline(_:)):     key = .enter
-            case #selector(NSResponder.insertTab(_:)):         key = .tab
-            case #selector(NSResponder.insertBacktab(_:)):     key = .shiftTab
+            case #selector(NSResponder.insertTab(_:)):         key = isModifiedTab ? .toggleResultsFocus : .tab
+            case #selector(NSResponder.insertTabIgnoringFieldEditor(_:)): key = .toggleResultsFocus
+            case #selector(NSResponder.insertBacktab(_:)):     key = isModifiedTab ? .toggleResultsFocus : .shiftTab
             case #selector(NSResponder.moveDown(_:)):          key = .arrowDown
             case #selector(NSResponder.moveUp(_:)):            key = .arrowUp
             case #selector(NSResponder.cancelOperation(_:)):   key = .escape

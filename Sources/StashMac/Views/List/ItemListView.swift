@@ -292,6 +292,32 @@ struct ItemListView: View {
             for id in ids { store.openItem(id: id) }
             return .handled
         }
+        .onKeyPress(.escape) {
+            if let keyWin = NSApp.keyWindow {
+                if keyWin.isSheet || keyWin.attachedSheet != nil || keyWin is NSPanel {
+                    return .ignored
+                }
+                if let children = keyWin.childWindows,
+                   children.contains(where: { $0.isVisible && ($0.className.contains("Popover") || $0 is NSPanel) }) {
+                    return .ignored
+                }
+                if let firstResponder = keyWin.firstResponder,
+                   (firstResponder is NSTextView || firstResponder is NSTextField) {
+                    return .ignored
+                }
+            }
+            if tagPickerTarget != nil || shownThumbnailID != nil {
+                tagPickerTarget = nil
+                shownThumbnailID = nil
+                return .handled
+            }
+            if !store.selectedItems.isEmpty || store.selectedItemID != nil {
+                store.selectedItems.removeAll()
+                store.selectedItemID = nil
+                return .handled
+            }
+            return .ignored
+        }
         .onChange(of: store.navigation) { _, new in
             // Hard-switch to grid (= masonry, since `gridView` reads
             // `isCollectionNavigation`) when the user clicks a sidebar
@@ -491,9 +517,19 @@ struct ItemListView: View {
             // store.pendingRevealID. Scroll to it once the items have
             // populated, then clear the signal so the same id can be
             // re-requested later.
+            .onAppear {
+                if let id = store.pendingRevealID ?? store.selectedItemID {
+                    scrollToPending(id, proxy: proxy)
+                }
+            }
             .onChange(of: store.pendingRevealID) { _, id in
                 guard let id else { return }
                 scrollToPending(id, proxy: proxy)
+            }
+            .onChange(of: store.revealTrigger) { _, _ in
+                if let id = store.pendingRevealID ?? store.selectedItemID {
+                    scrollToPending(id, proxy: proxy)
+                }
             }
             .onChange(of: store.items) { _, _ in
                 if let id = store.pendingRevealID {
@@ -505,67 +541,97 @@ struct ItemListView: View {
 
     private func scrollToPending(_ id: String, proxy: ScrollViewProxy) {
         guard store.items.contains(where: { $0.id == id }) else { return }
-        DispatchQueue.main.async {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) {
             withAnimation(.easeOut(duration: 0.18)) {
                 proxy.scrollTo(id, anchor: .center)
             }
-            store.pendingRevealID = nil
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            withAnimation(.easeOut(duration: 0.18)) {
+                proxy.scrollTo(id, anchor: .center)
+            }
+            if store.pendingRevealID == id {
+                store.pendingRevealID = nil
+            }
         }
     }
 
     private var gridView: some View {
-        ScrollView {
-            LazyVGrid(
-                // alignment: .top so tiles with single-line vs
-                // two-line captions in the same row anchor their
-                // images at the same Y. Default .center pushed
-                // short-caption images downward to match the taller
-                // cell, giving the grid a visibly mis-aligned look.
-                columns: [GridItem(.adaptive(minimum: 140, maximum: 200),
-                                   spacing: 14,
-                                   alignment: .top)],
-                spacing: 14
-            ) {
-                ForEach(store.items) { item in
-                    ItemTile(item: item)
-                        .onTapGesture(count: 2) {
-                            store.openItem(id: item.id)
-                        }
-                        .onTapGesture {
-                            handleTileClick(item: item)
-                        }
-                        .draggable(dragString(for: item.id))
-                        .contextMenu { itemContextMenu(rightClickedID: item.id, inGridView: true) }
-                        .popover(
-                            isPresented: Binding(
-                                get: { tagPickerTarget?.id == item.id },
-                                set: { newValue in
-                                    if !newValue && tagPickerTarget?.id == item.id {
-                                        tagPickerTarget = nil
-                                    }
-                                }
-                            ),
-                            arrowEdge: .leading
-                        ) {
-                            if let target = tagPickerTarget,
-                               target.id == item.id {
-                                TagPickerPopover(
-                                    itemIDs: target.itemIDs,
-                                    initialTags: target.initialTags
-                                )
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVGrid(
+                    // alignment: .top so tiles with single-line vs
+                    // two-line captions in the same row anchor their
+                    // images at the same Y. Default .center pushed
+                    // short-caption images downward to match the taller
+                    // cell, giving the grid a visibly mis-aligned look.
+                    columns: [GridItem(.adaptive(minimum: 140, maximum: 200),
+                                       spacing: 14,
+                                       alignment: .top)],
+                    spacing: 14
+                ) {
+                    ForEach(store.items) { item in
+                        ItemTile(item: item)
+                            .id(item.id)
+                            .onTapGesture(count: 2) {
+                                store.openItem(id: item.id)
                             }
-                        }
+                            .onTapGesture {
+                                handleTileClick(item: item)
+                            }
+                            .draggable(dragString(for: item.id))
+                            .contextMenu { itemContextMenu(rightClickedID: item.id, inGridView: true) }
+                            .popover(
+                                isPresented: Binding(
+                                    get: { tagPickerTarget?.id == item.id },
+                                    set: { newValue in
+                                        if !newValue && tagPickerTarget?.id == item.id {
+                                            tagPickerTarget = nil
+                                        }
+                                    }
+                                ),
+                                arrowEdge: .leading
+                            ) {
+                                if let target = tagPickerTarget,
+                                   target.id == item.id {
+                                    TagPickerPopover(
+                                        itemIDs: target.itemIDs,
+                                        initialTags: target.initialTags
+                                    )
+                                }
+                            }
+                    }
+                }
+                .padding(14)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .onAppear {
+                if let id = store.pendingRevealID ?? store.selectedItemID {
+                    scrollToPending(id, proxy: proxy)
                 }
             }
-            .padding(14)
+            .onChange(of: store.pendingRevealID) { _, id in
+                guard let id else { return }
+                scrollToPending(id, proxy: proxy)
+            }
+            .onChange(of: store.revealTrigger) { _, _ in
+                if let id = store.pendingRevealID ?? store.selectedItemID {
+                    scrollToPending(id, proxy: proxy)
+                }
+            }
+            .onChange(of: store.items) { _, _ in
+                if let id = store.pendingRevealID {
+                    scrollToPending(id, proxy: proxy)
+                }
+            }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     /// Tile click handling — modifier-aware multi-select that
     /// mirrors the List's native Cmd-click toggle behavior. SwiftUI
     /// LazyVGrid doesn't have a `selection:` binding so we drive
-    /// `store.selectedItems` manually.
+    /// `store.selectedItems` manually. Clicking the sole selected
+    /// tile without modifiers unselects it.
     private func handleTileClick(item: StashItem) {
         let cmd = NSEvent.modifierFlags.contains(.command)
         let shift = NSEvent.modifierFlags.contains(.shift)
@@ -580,6 +646,9 @@ struct ItemListView: View {
                   let hi = store.items.firstIndex(where: { $0.id == item.id }) {
             let range = lo <= hi ? lo...hi : hi...lo
             store.selectedItems = Set(store.items[range].map(\.id))
+        } else if store.selectedItems == [item.id] {
+            store.selectedItems.removeAll()
+            store.selectedItemID = nil
         } else {
             store.selectedItems = [item.id]
         }
@@ -1002,6 +1071,15 @@ struct ItemListView: View {
 
     private func handleKey(_ key: SuggestKey) -> Bool {
         switch key {
+        case .toggleResultsFocus:
+            state.matches = []
+            state.activeIndex = 0
+            if store.selectedItems.isEmpty, let first = store.items.first {
+                store.selectedItems = [first.id]
+                store.selectedItemID = first.id
+            }
+            NSApp.keyWindow?.makeFirstResponder(nil)
+            return true
         case .tab, .shiftTab:
             if state.matches.isEmpty {
                 let opened = requestListSuggestions()
@@ -1446,14 +1524,22 @@ struct SearchFieldKeyMonitor: NSViewRepresentable {
                 let focused = MainActor.assumeIsolated { state.isSearchFocused }
                 guard focused else { return event }
 
-                let ctrl = event.modifierFlags.contains(.control)
-                let shift = event.modifierFlags.contains(.shift)
+                let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                let ctrl = flags.contains(.control)
+                let opt = flags.contains(.option)
+                let cmd = flags.contains(.command)
+                let shift = flags.contains(.shift)
                 let char = event.charactersIgnoringModifiers
                 let keyCode = event.keyCode
 
                 let key: SuggestKey?
                 switch keyCode {
-                case 48:  key = shift ? .shiftTab : .tab            // Tab
+                case 48:
+                    if (ctrl || opt) && !cmd {
+                        key = .toggleResultsFocus
+                    } else {
+                        key = shift ? .shiftTab : .tab            // Tab
+                    }
                 case 125: key = .arrowDown                          // ↓
                 case 126: key = .arrowUp                            // ↑
                 case 36:  key = .enter                              // Return

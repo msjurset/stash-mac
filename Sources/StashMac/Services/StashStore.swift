@@ -623,6 +623,7 @@ final class StashStore {
     /// Cleared instead of left set so the same id can be re-requested
     /// later (e.g. user re-commits the same result from QuickSearch).
     var pendingRevealID: String?
+    var revealTrigger: Int = 0
     /// Rules loaded from the CLI. Populated lazily by `loadRules()`; the
     /// rules sidebar entry kicks off the first load. Both `RulesView` (the
     /// list) and `RuleDetailView` (the form) read from this.
@@ -2688,6 +2689,7 @@ final class StashStore {
                 navigation = .allItems
             }
             pendingRevealID = id
+            revealTrigger &+= 1
         }
 
         if items.first(where: { $0.id == id }) == nil {

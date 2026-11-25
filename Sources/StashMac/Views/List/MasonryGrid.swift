@@ -71,20 +71,43 @@ struct MasonryGrid: View {
     var body: some View {
         GeometryReader { proxy in
             let columnCount = preferredColumnCount(for: proxy.size.width)
-            ScrollView {
-                let buckets = distribute(displayItems, columns: columnCount)
-                HStack(alignment: .top, spacing: 14) {
-                    ForEach(0..<columnCount, id: \.self) { idx in
-                        LazyVStack(alignment: .leading, spacing: 14) {
-                            ForEach(buckets[idx]) { entry in
-                                tile(for: entry)
+            ScrollViewReader { scrollProxy in
+                ScrollView {
+                    let buckets = distribute(displayItems, columns: columnCount)
+                    HStack(alignment: .top, spacing: 14) {
+                        ForEach(0..<columnCount, id: \.self) { idx in
+                            LazyVStack(alignment: .leading, spacing: 14) {
+                                ForEach(buckets[idx]) { entry in
+                                    tile(for: entry)
+                                        .id(entry.item.id)
+                                }
+                                Spacer(minLength: 0)
                             }
-                            Spacer(minLength: 0)
+                            .frame(maxWidth: .infinity, alignment: .top)
                         }
-                        .frame(maxWidth: .infinity, alignment: .top)
+                    }
+                    .padding(14)
+                }
+                .onAppear {
+                    if let id = store.pendingRevealID ?? store.selectedItemID {
+                        scrollToRevealed(id, proxy: scrollProxy)
                     }
                 }
-                .padding(14)
+                .onChange(of: store.pendingRevealID) { _, id in
+                    if let id {
+                        scrollToRevealed(id, proxy: scrollProxy)
+                    }
+                }
+                .onChange(of: store.revealTrigger) { _, _ in
+                    if let id = store.pendingRevealID ?? store.selectedItemID {
+                        scrollToRevealed(id, proxy: scrollProxy)
+                    }
+                }
+                .onChange(of: store.items) { _, _ in
+                    if let id = store.pendingRevealID {
+                        scrollToRevealed(id, proxy: scrollProxy)
+                    }
+                }
             }
         }
         // Clear the preview state when the drag ends — relying on
@@ -94,6 +117,23 @@ struct MasonryGrid: View {
         // on mouseUp via its NSEvent monitor.
         .onChange(of: store.draggingItemIDs.isEmpty) { _, isEmpty in
             if isEmpty { hoverTargetID = nil }
+        }
+    }
+
+    private func scrollToRevealed(_ id: String, proxy: ScrollViewProxy) {
+        guard items.contains(where: { $0.id == id }) else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) {
+            withAnimation(.easeOut(duration: 0.18)) {
+                proxy.scrollTo(id, anchor: .center)
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            withAnimation(.easeOut(duration: 0.18)) {
+                proxy.scrollTo(id, anchor: .center)
+            }
+            if store.pendingRevealID == id {
+                store.pendingRevealID = nil
+            }
         }
     }
 
