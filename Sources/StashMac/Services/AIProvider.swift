@@ -167,7 +167,7 @@ TRANSCRIPT: <for audio or video, transcribe the speech verbatim here. For images
 If you can't identify confidently, write TITLE: Unknown and explain your best guess and the reasoning in NOTES.
 """
 
-    static let defaultIdentify: String = """
+    static let legacyDefaultIdentifyV2: String = """
 Identify the main subject or summarize the content of this media.
 
 Respond with exactly these three sections, no preamble, no markdown:
@@ -188,13 +188,44 @@ TRANSCRIPT: <for audio or video, transcribe the speech verbatim here. For images
 If you can't identify confidently, write TITLE: Unknown and explain your best guess and the reasoning in NOTES.
 """
 
+    static let defaultIdentify: String = """
+Identify the main subject or summarize the content of this media.
+
+Respond with exactly these three sections, no preamble, no markdown:
+
+TITLE: <common name; include scientific name in parentheses when applicable. If ANY photo shows a recipe page, cookbook page, magazine clipping, or recipe card, use the exact recipe title>
+NOTES: <IMPORTANT: First check whether ANY photo in the set contains a recipe (printed cookbook page, magazine clipping, recipe card, or handwritten recipe — even if paired with a photo of the finished dish).
+- IF A RECIPE IS PRESENT IN ANY PHOTO: Do NOT write a prose description of the image. You MUST format NOTES as a complete, cook-ready structured recipe in this exact multi-line layout:
+  1. A short 1-sentence dish summary ending with a period.
+  2. Metadata lines when available:
+     Prep Time: <time>
+     Cook Time: <time>
+     Total Time: <time>
+     Servings: <yield>
+  3. An exact "Ingredients:" heading followed by one "- <quantity> <unit> <ingredient>" bullet per line (de-columnized in proper reading order, using "For the <Component>:" sub-headings if grouped).
+  4. An exact "Instructions:" heading followed by numbered steps ("1. <step>", "2. <step>", ...) extracted from the recipe method paragraphs in chronological cooking order.
+  5. Optional "Tips:" heading with cook's notes at the end.
+- OTHERWISE (for non-recipe photos): Write natural prose, three to six sentences. Open by naming the subject in plain language — e.g. "This is the YYYY mushroom (Scientificus nameus), also known as XXXX..." or "This is the eastern bluebird (Sialia sialis), a small thrush native to..." Then cover, where relevant: notable visual characteristics; habitat, range, or season; edibility / toxicity / safety; species commonly confused with it; what specific features visible in this photo helped identify it; and any other interesting facts a curious naturalist would want to know.
+
+If GPS location or regional context is provided or visible, and there is near-equal probability between visually similar species or candidate species, use the location and regional native range to break the tie.
+
+For non-recipe natural subjects, you MUST include this extra information within NOTES:
+- Mushroom: Include edibility information, preparation info, poison vs. toxic distinction, species commonly confused with it, key visual features in this photo, and health benefits (if edible).
+- Insect: Include environmental benefits, what feeds on it, what it feeds on, and whether it is poisonous/venomous.
+- Plant: Include edibility information, preparation info, poison vs. toxic distinction, species commonly confused with it, and health benefits (if edible).
+- Tree: Include statistics like typical height range, crown characteristics, etc.>
+TRANSCRIPT: <for audio or video, transcribe the speech verbatim here. For images, if the photo contains readable text — printed, typed, OR handwritten (including cursive) — transcribe it verbatim here, preserving line breaks where they're meaningful. Cover the entire visible text, not just a sample. If no speech or text is present, write exactly NONE.>
+
+If you can't identify confidently, write TITLE: Unknown and explain your best guess and the reasoning in NOTES.
+"""
+
     /// Prepended to the user's prompt when multiple images travel
     /// in one identify request. Tells the model to treat the photos
     /// as the same subject from different angles instead of N
     /// unrelated items — fixes the "I can't tell which kind of
     /// Wild Rose without the stem / leaves / thorns" case.
     static func multiImageHint(count: Int) -> String {
-        "The following \(count) photos are of the same subject from different angles or states. Identify the subject using all photos together.\n\n"
+        "The following \(count) photos belong to the same capture (for example, a printed recipe page paired with a photo of the finished dish, multiple pages of a document, or multiple angles of a subject). Identify using all photos together. If any photo contains a recipe, format NOTES as a complete structured recipe with Ingredients: and numbered Instructions: steps.\n\n"
     }
 
     static let defaultTranscribe: String = """

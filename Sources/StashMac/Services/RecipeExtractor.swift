@@ -101,11 +101,11 @@ enum RecipeExtractor {
             options: .caseInsensitive
         )
         let numberedStepRegex = try? NSRegularExpression(
-            pattern: #"^(?:step\s*\d+[\s:.\-)+]+|\d+[\s.\)\-]+)\s*\S+"#,
+            pattern: #"^(?:step\s*\d+[\s:.\-)+]+|\d+\s*[.\)\-:]\s*)\S+"#,
             options: .caseInsensitive
         )
         let measuredIngRegex = try? NSRegularExpression(
-            pattern: #"^(?:[-*•▪◦▢]\s*)?(?:(?:\d+\s+)?\d+/\d+|\d+(?:\.\d+)?(?:\s*[-–]\s*\d+(?:\.\d+)?)?|[½⅓⅔¼¾⅛⅜⅝⅞])\s*(?:cups?|c\.|tbsp\.?|tablespoons?|tsp\.?|teaspoons?|oz\.?|ounces?|lbs?\.?|pounds?|g|grams?|kg|ml|l|liters?|pinch(?:es)?|dash(?:es)?|cloves?|cans?|slices?|pieces?|stalks?|bunches?|heads?|sprigs?|packages?|pkgs?|medium|large|small|fresh|whole)\b"#,
+            pattern: #"^(?:[-*•▪◦▢]\s*)?(?:(?:\d+\s+)?\d+/\d+|\d+(?:\.\d+)?(?:\s*[-–]\s*\d+(?:\.\d+)?)?|[½⅓⅔¼¾⅛⅜⅝⅞]+|\d+\s*[½⅓⅔¼¾⅛⅜⅝⅞])\s*(?:\([^)]+\)\s*)?(?:cups?|c\.|tbsp\.?|tablespoons?|tsp\.?|teaspoons?|oz\.?|ounces?|lbs?\.?|pounds?|g|grams?|kg|ml|l|liters?|pinch(?:es)?|dash(?:es)?|cloves?|cans?|slices?|pieces?|stalks?|bunches?|heads?|sprigs?|packages?|pkgs?|jars?|bottles?|boxes?|bags?|sticks?|ears?|fillets?|breasts?|thighs?|medium|large|small|fresh|whole)\b"#,
             options: .caseInsensitive
         )
         let saltOrOptionalRegex = try? NSRegularExpression(
@@ -995,7 +995,7 @@ enum RecipeExtractor {
 
     /// Strips leading step prefixes like "1. ", "Step 1: ", "1) ".
     static func stripStepNumberPrefix(_ str: String) -> String {
-        let pattern = #"^(?:Step\s*\d+[\s:.-]*|\d+[\s.)-]+\s*)"#
+        let pattern = #"^(?:Step\s*\d+[\s:.-]*|\d+\s*[.):-]\s*)"#
         return str.replacingOccurrences(of: pattern, with: "", options: [.regularExpression, .caseInsensitive])
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }

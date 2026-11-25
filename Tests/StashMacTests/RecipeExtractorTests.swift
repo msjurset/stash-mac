@@ -674,5 +674,29 @@ import Testing
     #expect(stagedURL?.lastPathComponent == "braised-short-ribs.pdf")
 }
 
+@Test func testExtractFromPlaintextDoesNotMisparseParentheticalCanIngredientsAsSteps() {
+    let cookbookOCR = """
+    ARKHAN THE CRUEL'S FLAME-ROASTED HALFLING CHILI
+    SERVES 4 TO 6
+    In a small bowl, mix together the cocoa powder, chili powder, cinnamon, oregano, cumin, allspice, cloves, cayenne, ½ teaspoon salt, and ½ teaspoon pepper. Set aside.
+    In a blender or food processor, purée half the kidney beans with about ½ cup of the broth until smooth and set aside.
+    INGREDIENTS
+    ½ cup unsweetened cocoa powder
+    1½ tablespoons chili powder
+    1 (15-ounce) can dark red kidney beans, undrained and rinsed
+    2 cups low-sodium chicken broth, divided
+    4 slices bacon
+    1 yellow onion, finely chopped
+    5 garlic cloves, finely chopped
+    1 (15-ounce) can tomato pureé
+    2 tablespoons thick and rich tomato paste
+    2 pounds ground turkey (or ground beef, pork, venison)
+    1 tablespoon cider vinegar
+    """
+
+    let extracted = RecipeExtractor.extractFromPlaintext(cookbookOCR, fallbackTitle: "Arkhan Chili")
+    #expect(extracted == nil)
+}
+
 
 
