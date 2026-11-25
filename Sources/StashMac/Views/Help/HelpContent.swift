@@ -144,7 +144,7 @@ enum HelpTopic: String, CaseIterable, Identifiable, Codable, Hashable {
                     "Example: link a PDF resume to the job posting URL it was submitted for",
                 ]),
                 .heading("Tag Graph — How do topics cluster?"),
-                .paragraph("The Tag Graph (in the Library section of the sidebar) reveals how your topics overlap. Tags that frequently co-occur on the same items form strong connections. Click a node to filter items by that tag. The graph helps you discover relationships between topics you might not have noticed."),
+                .paragraph("The Tag Graph (in the Tools section of the sidebar) reveals how your topics overlap. Tags that frequently co-occur on the same items form strong connections. Click a node to load its stashed items in the right-hand panel (⌘-click to combine multiple tags), double-click a node to pull it to the center with its 1st-degree connected tags arranged in a ring around it while pushing unrelated nodes out of the way, click empty space to unselect and reset the graph, or right-click a node for quick actions (focus ring, select cluster, open in full list view, rename, export, copy). Use the bottom-right corner watermark toggles (`#`, `Aa`, `2+`, orphan filter, and edge weights) to customize the graph display."),
                 .heading("Managing Tags on an Item"),
                 .paragraph("Open the Edit sheet (pencil icon or context menu) to add or remove individual tags. Existing tags are shown as removable capsules, and you can type new ones in the text field."),
             ]
@@ -203,6 +203,7 @@ enum HelpTopic: String, CaseIterable, Identifiable, Codable, Hashable {
                     ["Player", "Inline AVKit player for audio/video files and direct-stream URLs (video has fullscreen toggle)"],
                     ["Thumbnail", "128pt preview tile. Drop an image to override; menu offers Generate, Set from URL/file, and Clear"],
                     ["URL", "Clickable link (for URL items)"],
+                    ["Recipe Card", "Structured recipe card (times, servings, interactive ingredient checklist, numbered instructions) with a Start Cooking step-by-step wizard"],
                     ["Notes", "Your annotation text — double-click to open a popout editor"],
                     ["Tags", "Tag capsules with # prefix"],
                     ["Collections", "Folder labels for assigned collections"],
@@ -214,6 +215,8 @@ enum HelpTopic: String, CaseIterable, Identifiable, Codable, Hashable {
                 .heading("Actions"),
                 .bullet([
                     "Open — Launch the item in its default app (browser for links, Finder for files)",
+                    "Start Cooking — Launch the step-by-step Cooking Assistant on recipe items (press Spacebar to advance steps, Shift-Space or ← to go back)",
+                    "Extract Recipe — Extract structured ingredients and steps from recipe URLs or text without blog preamble",
                     "Edit — Modify title, notes, extracted text, tags, and collection",
                     "Delete — Permanently remove the item (with confirmation)",
                 ]),
@@ -253,6 +256,7 @@ enum HelpTopic: String, CaseIterable, Identifiable, Codable, Hashable {
                     ["stash search save/list/run/delete", "Saved searches"],
                     ["stash dupes", "Find duplicate items"],
                     ["stash thumbnail set/clear/path", "Manage per-item thumbnails (manual override + Mac-app pipeline)"],
+                    ["stash feeds list/show/add/edit/remove/refresh/candidates", "Manage RSS/Atom/YouTube feed subscriptions, health polling, and Inbox candidates"],
                 ]),
                 .heading("Binary Location"),
                 .paragraph("The app searches for the stash binary in these locations, using the first one found:"),
@@ -328,6 +332,8 @@ enum HelpTopic: String, CaseIterable, Identifiable, Codable, Hashable {
                     "Delete and Archive prune the row from the list immediately — no need to rerun the check.",
                     "Each section has a small clipboard button that copies the section's contents — handy for piping into an external tool (e.g. an LLM chat) for bulk-replacement suggestions.",
                 ]),
+                .heading("Feed Sources Health Inspector"),
+                .paragraph("From the Inbox header (or by right-clicking Inbox in the sidebar and choosing Manage Feeds…), open Feed Sources. Select any feed in the left list to inspect its health, view untruncated poll errors, run a single-source Poll Now check with live found/new entry counts, view candidate state breakdowns (unread, stashed, snoozed, dismissed), and edit the feed URL or settings in place."),
             ]
 
         case .clipboard:

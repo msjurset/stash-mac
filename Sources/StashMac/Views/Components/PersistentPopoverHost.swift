@@ -40,24 +40,28 @@ struct PersistentPopoverHost<Content: View>: NSViewRepresentable {
             if let popover = coordinator.popover {
                 // Already up — refresh content (lets the SwiftUI
                 // closure pick up the latest @State references).
-                popover.contentViewController = NSHostingController(rootView: content())
+                if let hosting = popover.contentViewController as? NSHostingController<Content> {
+                    hosting.rootView = content()
+                }
             } else {
                 // Defer until the next runloop tick so the source
                 // view has stable bounds when AppKit positions the
                 // popover. Showing during update() while geometry is
                 // still settling produces wrong arrow placement.
                 DispatchQueue.main.async {
-                    guard self.isPresented else { return }
+                    guard self.isPresented, coordinator.popover == nil else { return }
                     let popover = NSPopover()
                     popover.behavior = .semitransient
                     popover.contentViewController = NSHostingController(rootView: self.content())
                     popover.delegate = coordinator
                     coordinator.popover = popover
-                    popover.show(
-                        relativeTo: nsView.bounds,
-                        of: nsView,
-                        preferredEdge: self.preferredEdge
-                    )
+                    if nsView.window != nil {
+                        popover.show(
+                            relativeTo: nsView.bounds,
+                            of: nsView,
+                            preferredEdge: self.preferredEdge
+                        )
+                    }
                 }
             }
         } else if let popover = coordinator.popover {

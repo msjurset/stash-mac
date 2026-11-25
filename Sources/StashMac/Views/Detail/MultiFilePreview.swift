@@ -102,6 +102,14 @@ struct MultiFilePreview: View {
                 .padding()
                 .background(.quaternary.opacity(0.3))
                 .clipShape(RoundedRectangle(cornerRadius: 8))
+            } else if isVideoSlot(slot) {
+                DirectMediaPlayer(
+                    url: url,
+                    isVideo: true,
+                    mimeHint: slot.mimeType
+                )
+                .frame(maxWidth: .infinity)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
             } else {
                 ImagePreviewSection(fileURL: url, allURLs: allSlots.compactMap { $0.url })
             }
@@ -150,6 +158,13 @@ struct MultiFilePreview: View {
                         ZStack {
                             Rectangle().fill(.secondary.opacity(0.15))
                             Image(systemName: "waveform")
+                                .font(.title)
+                                .foregroundStyle(.secondary)
+                        }
+                    } else if isVideoSlot(slot) {
+                        ZStack {
+                            Rectangle().fill(.secondary.opacity(0.15))
+                            Image(systemName: "film")
                                 .font(.title)
                                 .foregroundStyle(.secondary)
                         }
@@ -290,6 +305,43 @@ struct MultiFilePreview: View {
         return false
     }
 
+    private func isVideoSlot(_ slot: Slot) -> Bool {
+        if let mime = slot.mimeType?.lowercased(), mime.hasPrefix("video/") { return true }
+        if let url = slot.url {
+            let ext = url.pathExtension.lowercased()
+            return ["mp4", "mov", "m4v", "webm", "mkv"].contains(ext)
+        }
+        return false
+    }
+
+    /// Returns false for text/plain snippet mirrors and text/html web archives so they
+    /// are not treated as media attachments in the image/audio/video preview carousel.
+    static func isPreviewableMedia(mimeType: String?, itemType: ItemType, isPrimary: Bool) -> Bool {
+        if isPrimary && (itemType == .snippet || itemType == .url || itemType == .email) {
+            return false
+        }
+        if let mime = mimeType?.lowercased() {
+            if mime.hasPrefix("text/plain") || mime.hasPrefix("text/html") || mime.hasPrefix("message/") {
+                return false
+            }
+        }
+        return true
+    }
+
+    /// True when the item has at least one previewable media attachment (or primary + attachment).
+    static func hasPreviewableSlots(for item: StashItem) -> Bool {
+        guard let files = item.files, !files.isEmpty else { return false }
+        let hasValidAttachment = files.contains { f in
+            isPreviewableMedia(mimeType: f.mimeType, itemType: item.type, isPrimary: false)
+        }
+        if hasValidAttachment { return true }
+        if let sp = item.storePath, !sp.isEmpty,
+           isPreviewableMedia(mimeType: item.mimeType, itemType: item.type, isPrimary: true) {
+            return true
+        }
+        return false
+    }
+
     private var activeSlot: Slot? {
         let slots = allSlots
         return slots.first { $0.id == selectedID }
@@ -297,7 +349,8 @@ struct MultiFilePreview: View {
 
     private var allSlots: [Slot] {
         var slots: [Slot] = []
-        if let sp = item.storePath, !sp.isEmpty {
+        if let sp = item.storePath, !sp.isEmpty,
+           Self.isPreviewableMedia(mimeType: item.mimeType, itemType: item.type, isPrimary: true) {
             slots.append(Slot(
                 id: "primary",
                 isPrimary: true,
@@ -315,6 +368,9 @@ struct MultiFilePreview: View {
                 return $0.position < $1.position
             }
             for (i, f) in sortedFiles.enumerated() {
+                guard Self.isPreviewableMedia(mimeType: f.mimeType, itemType: item.type, isPrimary: false) else {
+                    continue
+                }
                 slots.append(Slot(
                     id: "\(f.id)",
                     isPrimary: false,

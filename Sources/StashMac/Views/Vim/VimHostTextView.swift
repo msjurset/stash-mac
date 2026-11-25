@@ -249,21 +249,30 @@ class VimHostTextView: NSTextView {
 
     var onDoubleClickWhitespace: (() -> Void)?
 
-    private func isPointOnGlyph(_ point: NSPoint) -> Bool {
+    func isPointOnGlyph(_ point: NSPoint) -> Bool {
         let nsString = string as NSString
         if nsString.length == 0 { return false }
         guard let layoutManager = self.layoutManager, let textContainer = self.textContainer else { return false }
+        layoutManager.ensureLayout(for: textContainer)
+        guard layoutManager.numberOfGlyphs > 0 else { return false }
         
         let containerPoint = NSPoint(x: point.x - textContainerOrigin.x, y: point.y - textContainerOrigin.y)
-        let charIndex = self.characterIndexForInsertion(at: point)
+        let usedRect = layoutManager.usedRect(for: textContainer)
+        if !usedRect.insetBy(dx: -4, dy: -4).contains(containerPoint) {
+            return false
+        }
+        let glyphIndex = layoutManager.glyphIndex(for: containerPoint, in: textContainer, fractionOfDistanceThroughGlyph: nil)
+        guard glyphIndex < layoutManager.numberOfGlyphs else { return false }
+        let charIndex = layoutManager.characterIndexForGlyph(at: glyphIndex)
         
         guard charIndex < nsString.length else { return false }
+        let ch = nsString.character(at: charIndex)
+        if ch == 0x0A || ch == 0x0D || ch == 0x20 || ch == 0x09 {
+            return false
+        }
         
-        let glyphIndex = layoutManager.glyphIndexForCharacter(at: charIndex)
         let boundingRect = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyphIndex, length: 1), in: textContainer)
-        
-        // Expand the hit target by a few pixels for comfort
-        let hitRect = boundingRect.insetBy(dx: -4, dy: -4)
+        let hitRect = boundingRect.insetBy(dx: -2, dy: -2)
         return hitRect.contains(containerPoint)
     }
 

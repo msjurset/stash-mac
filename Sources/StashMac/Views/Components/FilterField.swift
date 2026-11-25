@@ -67,6 +67,11 @@ struct FilterField: NSViewRepresentable {
     var alignment: NSTextAlignment = .left
     /// Makes the field the window's first responder after it appears.
     var autoFocus: Bool = false
+    /// Bumping this integer requests that the field become first responder.
+    var focusTrigger: Int = 0
+    /// One-shot caret move request. When non-nil, positions the caret and clears the binding.
+    var pendingCursor: Binding<Int?> = .constant(nil)
+    var onSelectionChanged: ((Int) -> Void)? = nil
     var onSubmit: (() -> Void)?
     /// Return `true` to consume the key event; `false` to let AppKit
     /// handle it (e.g. default Tab focus navigation).
@@ -90,6 +95,7 @@ struct FilterField: NSViewRepresentable {
         field.cell?.isScrollable = true
         field.delegate = context.coordinator
         field.stringValue = text
+        context.coordinator.lastFocusTrigger = focusTrigger
         // Route the field's "I just became first responder" event through
         // the coordinator so callers' `onBeginEditing` fires on click-in
         // (focus arrival) — not just on the first text edit, which is
@@ -100,17 +106,90 @@ struct FilterField: NSViewRepresentable {
         if autoFocus {
             DispatchQueue.main.async { field.window?.makeFirstResponder(field) }
         }
+        context.coordinator.installCtrlJKMonitor(on: field)
         return field
     }
 
+    static func dismantleNSView(_ nsView: NoAutoFillTextField, coordinator: Coordinator) {
+        coordinator.removeCtrlJKMonitor()
+    }
+
     func updateNSView(_ nsView: NoAutoFillTextField, context: Context) {
+        context.coordinator.parent = self
         let isFocused = nsView.window?.firstResponder == nsView ||
             (nsView.currentEditor() != nil && nsView.window?.firstResponder == nsView.currentEditor())
 
-        if !isFocused && nsView.stringValue != text {
-            nsView.stringValue = text
+        if let editor = nsView.currentEditor() as? NSTextView,
+           let storage = editor.textStorage,
+           !editor.hasMarkedText() {
+            if storage.string != text {
+                context.coordinator.isProgrammaticEdit = true
+                storage.beginEditing()
+                storage.replaceCharacters(in: NSRange(location: 0, length: storage.length), with: text)
+                let fullRange = NSRange(location: 0, length: storage.length)
+                if let textColor = nsView.textColor {
+                    storage.addAttribute(.foregroundColor, value: textColor, range: fullRange)
+                }
+                if let font = nsView.font {
+                    storage.addAttribute(.font, value: font, range: fullRange)
+                }
+                storage.endEditing()
+                nsView.stringValue = text
+                context.coordinator.isProgrammaticEdit = false
+            }
+            if let cursor = pendingCursor.wrappedValue {
+                let target = cursor
+                let cursorBinding = pendingCursor
+                context.coordinator.isProgrammaticEdit = true
+                editor.selectedRange = NSRange(location: max(0, min(target, storage.length)), length: 0)
+                context.coordinator.isProgrammaticEdit = false
+                DispatchQueue.main.async {
+                    if let e = nsView.currentEditor() as? NSTextView,
+                       let s = e.textStorage {
+                        let clamped = max(0, min(target, s.length))
+                        context.coordinator.isProgrammaticEdit = true
+                        e.selectedRange = NSRange(location: clamped, length: 0)
+                        context.coordinator.isProgrammaticEdit = false
+                    }
+                    cursorBinding.wrappedValue = nil
+                }
+            }
+        } else {
+            if nsView.stringValue != text {
+                context.coordinator.isProgrammaticEdit = true
+                nsView.stringValue = text
+                context.coordinator.isProgrammaticEdit = false
+            }
+            if let cursor = pendingCursor.wrappedValue {
+                let target = cursor
+                let cursorBinding = pendingCursor
+                DispatchQueue.main.async {
+                    nsView.window?.makeFirstResponder(nsView)
+                    if let e = nsView.currentEditor() as? NSTextView,
+                       let s = e.textStorage {
+                        let clamped = max(0, min(target, s.length))
+                        context.coordinator.isProgrammaticEdit = true
+                        e.selectedRange = NSRange(location: clamped, length: 0)
+                        context.coordinator.isProgrammaticEdit = false
+                    }
+                    cursorBinding.wrappedValue = nil
+                }
+            }
         }
-        if autoFocus && !isFocused && nsView.window != nil {
+
+        if focusTrigger != context.coordinator.lastFocusTrigger {
+            context.coordinator.lastFocusTrigger = focusTrigger
+            let hasPendingCursor = (pendingCursor.wrappedValue != nil)
+            DispatchQueue.main.async {
+                if nsView.currentEditor() == nil {
+                    nsView.window?.makeFirstResponder(nsView)
+                }
+                if !hasPendingCursor {
+                    nsView.currentEditor()?.selectAll(nil)
+                }
+            }
+        } else if autoFocus && !isFocused && nsView.window != nil && !context.coordinator.didInitialAutoFocus {
+            context.coordinator.didInitialAutoFocus = true
             DispatchQueue.main.async {
                 let nowFocused = nsView.window?.firstResponder == nsView ||
                     (nsView.currentEditor() != nil && nsView.window?.firstResponder == nsView.currentEditor())
@@ -128,7 +207,6 @@ struct FilterField: NSViewRepresentable {
         if nsView.font != font {
             nsView.font = font
         }
-        context.coordinator.parent = self
     }
 
     func makeCoordinator() -> Coordinator {
@@ -136,21 +214,65 @@ struct FilterField: NSViewRepresentable {
     }
 
     @MainActor
-    final class Coordinator: NSObject, NSTextFieldDelegate {
+    final class Coordinator: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         var parent: FilterField
+        var lastFocusTrigger: Int = 0
+        var isProgrammaticEdit = false
+        var didInitialAutoFocus = false
+        private var eventMonitor: Any?
+        private weak var field: NSTextField?
 
         init(_ parent: FilterField) {
             self.parent = parent
         }
 
+        func installCtrlJKMonitor(on field: NSTextField) {
+            self.field = field
+            guard eventMonitor == nil else { return }
+            eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self else { return event }
+                guard event.modifierFlags.contains(.control) else { return event }
+                guard let field = self.field,
+                      let editor = field.currentEditor(),
+                      field.window?.firstResponder === editor else { return event }
+                let char = event.charactersIgnoringModifiers
+                let key: SuggestKey?
+                switch char {
+                case "j": key = .ctrlJ
+                case "k": key = .ctrlK
+                default: key = nil
+                }
+                guard let key else { return event }
+                let consumed = MainActor.assumeIsolated { self.parent.onKey?(key) ?? false }
+                return consumed ? nil : event
+            }
+        }
+
+        func removeCtrlJKMonitor() {
+            if let eventMonitor { NSEvent.removeMonitor(eventMonitor) }
+            eventMonitor = nil
+        }
+
         func controlTextDidChange(_ obj: Notification) {
+            guard !isProgrammaticEdit else { return }
             guard let field = obj.object as? NSTextField else { return }
-            parent.text = field.stringValue
+            let newValue = (field.currentEditor() as? NSTextView)?.string ?? field.stringValue
+            parent.text = newValue
+            if let editor = field.currentEditor() as? NSTextView {
+                parent.onSelectionChanged?(editor.selectedRange().location)
+            }
             reapPredictivePanels()
             for delay in [0.05, 0.15, 0.35, 0.7] {
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                     reapPredictivePanels()
                 }
+            }
+        }
+
+        func textViewDidChangeSelection(_ notification: Notification) {
+            guard !isProgrammaticEdit else { return }
+            if let textView = notification.object as? NSTextView {
+                parent.onSelectionChanged?(textView.selectedRange().location)
             }
         }
 

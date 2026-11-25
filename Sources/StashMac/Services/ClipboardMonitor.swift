@@ -42,6 +42,7 @@ final class ClipboardMonitor {
 
     func stashURL(_ pending: PendingURL) {
         pendingURLs.removeAll { $0.id == pending.id }
+        ToastCenter.shared.show("Stashing URL…", kind: .working)
         Task {
             do {
                 let item = try await cli.addURL(url: pending.url)
@@ -50,17 +51,27 @@ final class ClipboardMonitor {
                 if recentStashes.count > 10 {
                     recentStashes = Array(recentStashes.prefix(10))
                 }
+                ToastCenter.shared.show("Stashed URL", kind: .success)
+                DesktopNotifier.notify(
+                    title: "Stashed",
+                    message: item.title.isEmpty ? pending.url : item.title,
+                    link: pending.url
+                )
                 NotificationCenter.default.post(name: .stashDidIngest, object: nil)
             } catch {
                 // Put it back on failure
                 pendingURLs.insert(pending, at: 0)
+                ToastCenter.shared.show("Stash failed: \(error.localizedDescription)", kind: .error)
+                DesktopNotifier.notify(title: "Stash failed", message: error.localizedDescription)
             }
         }
     }
 
     func stashAll() {
         let all = pendingURLs
+        guard !all.isEmpty else { return }
         pendingURLs.removeAll()
+        ToastCenter.shared.show("Stashing \(all.count) URLs…", kind: .working)
         for pending in all {
             Task {
                 do {
@@ -71,6 +82,8 @@ final class ClipboardMonitor {
                 } catch {}
             }
         }
+        ToastCenter.shared.show("Stashed \(all.count) URLs", kind: .success)
+        DesktopNotifier.notify(title: "Stashed", message: "\(all.count) URLs added to your stash.")
     }
 
     func dismissURL(_ pending: PendingURL) {

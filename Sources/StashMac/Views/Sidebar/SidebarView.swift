@@ -36,6 +36,8 @@ struct SidebarView: View {
     /// row is the active drop target so we can highlight it during
     /// drag.
     @State private var hoveredTagName: String?
+    @State private var showAddFeedSheet = false
+    @State private var showManageFeedsSheet = false
 
     enum SmartCollectionSheetMode: Identifiable, Hashable {
         case create
@@ -98,6 +100,34 @@ struct SidebarView: View {
                         }
                     }
                     .tag(NavigationItem.inbox)
+                    .contextMenu {
+                        Button {
+                            showAddFeedSheet = true
+                        } label: {
+                            Label("Add Feed…", systemImage: "plus")
+                        }
+                        Button {
+                            showManageFeedsSheet = true
+                        } label: {
+                            Label("Manage Feeds…", systemImage: "antenna.radiowaves.left.and.right")
+                        }
+                        Button {
+                            store.pollFeeds()
+                        } label: {
+                            Label("Poll Feeds Now", systemImage: "arrow.clockwise")
+                        }
+                        Divider()
+                        Button {
+                            store.loadInbox()
+                        } label: {
+                            Label("Reload Inbox", systemImage: "arrow.triangle.2.circlepath")
+                        }
+                        Button {
+                            store.showReadWatchList()
+                        } label: {
+                            Label("Show Read & Watch Items in List", systemImage: "list.bullet.rectangle")
+                        }
+                    }
                     Label("All Items", systemImage: "tray.full")
                         .tag(NavigationItem.allItems)
                     Label("Starred", systemImage: "star")
@@ -254,6 +284,12 @@ struct SidebarView: View {
                     ) }
                 }
             )
+        }
+        .sheet(isPresented: $showAddFeedSheet) {
+            AddFeedSheet()
+        }
+        .sheet(isPresented: $showManageFeedsSheet) {
+            ManageFeedsSheet()
         }
     }
 
@@ -698,7 +734,7 @@ struct SidebarView: View {
 /// in a sheet so the input can use `FilterField` — the only macOS
 /// text-input that has the full five-layer autofill suppression
 /// stack the project requires.
-private struct RenameTagSheet: View {
+struct RenameTagSheet: View {
     let originalName: String
     @Binding var newName: String
     let onCommit: () -> Void

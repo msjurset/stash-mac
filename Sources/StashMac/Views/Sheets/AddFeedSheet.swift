@@ -22,6 +22,7 @@ struct AddFeedSheet: View {
     @State private var tagsInput = ""
     @State private var collection: String = ""
     @State private var autoStash = false
+    @State private var fetchContent = false
     @State private var intervalMinutes = 360
     @State private var saving = false
     @State private var errorMessage: String?
@@ -75,6 +76,10 @@ struct AddFeedSheet: View {
                 }
                 LabeledContent("Auto-stash") {
                     Toggle("Skip triage; stash new candidates with the defaults above", isOn: $autoStash)
+                        .toggleStyle(.checkbox)
+                }
+                LabeledContent("Full-text") {
+                    Toggle("Fetch full article body for each new candidate", isOn: $fetchContent)
                         .toggleStyle(.checkbox)
                 }
                 LabeledContent("Poll every") {
@@ -135,6 +140,7 @@ struct AddFeedSheet: View {
                 defaultTags: tags,
                 defaultCollection: collection.isEmpty ? nil : collection,
                 autoStash: autoStash,
+                fetchContent: fetchContent,
                 intervalMinutes: intervalMinutes
             )
             // Immediate poll so the inbox starts populating without

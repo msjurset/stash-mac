@@ -10,6 +10,7 @@ struct FetchURLTrigger: Identifiable {
 
 struct ContentView: View {
     @Environment(StashStore.self) private var store
+    @Environment(AIPrefsStore.self) private var aiPrefs
     @Environment(HelpOverlayModel.self) private var helpModel
     @Environment(\.openWindow) private var openWindow
     @State private var showAddItemSheet = false
@@ -70,13 +71,24 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .stashOpenImportBookmarks)) { _ in showImportBookmarksSheet = true }
         .onReceive(NotificationCenter.default.publisher(for: .stashOpenImportHistory)) { _ in showImportHistorySheet = true }
+        .onReceive(NotificationCenter.default.publisher(for: .stashOpenAddItem)) { _ in showAddItemSheet = true }
+        .onReceive(NotificationCenter.default.publisher(for: .stashOpenAddCollection)) { _ in showAddCollectionSheet = true }
+        .onReceive(NotificationCenter.default.publisher(for: .stashOpenEditItem)) { _ in showEditSheet = true }
         .onReceive(NotificationCenter.default.publisher(for: .stashOpenFetchURL)) { note in
             let seedURL = note.userInfo?["url"] as? String
             fetchURLTrigger = FetchURLTrigger(initialURL: seedURL)
         }
         .onAppear {
+            GlobalSearchController.shared.configure(store: store, aiPrefs: aiPrefs, helpModel: helpModel)
             store.loadAll()
             store.startFeedPollTimer()
+        }
+        .onChange(of: showQuickSearch) { _, show in
+            if show {
+                showQuickSearch = false
+                GlobalSearchController.shared.configure(store: store, aiPrefs: aiPrefs, helpModel: helpModel)
+                GlobalSearchController.shared.show()
+            }
         }
         .onChange(of: store.navigation) { _, newValue in
             let nav = newValue ?? .allItems
@@ -96,14 +108,20 @@ struct ContentView: View {
             }
         }
         .background {
-            Button("") { showQuickSearch = true }
-                .keyboardShortcut("k", modifiers: .command)
-                .hidden()
+            Button("") {
+                GlobalSearchController.shared.configure(store: store, aiPrefs: aiPrefs, helpModel: helpModel)
+                GlobalSearchController.shared.toggle()
+            }
+            .keyboardShortcut("f", modifiers: .command)
+            .hidden()
         }
         .background {
-            Button("") { showQuickSearch = true }
-                .keyboardShortcut("f", modifiers: .command)
-                .hidden()
+            Button("") {
+                GlobalSearchController.shared.configure(store: store, aiPrefs: aiPrefs, helpModel: helpModel)
+                GlobalSearchController.shared.toggle()
+            }
+            .keyboardShortcut("/", modifiers: .command)
+            .hidden()
         }
         .background {
             Button("") {
@@ -138,7 +156,9 @@ struct ContentView: View {
     @ViewBuilder
     private var detailContent: some View {
         switch store.navigation {
-        case .tagGraph, .stats:
+        case .tagGraph:
+            TagGraphDetailView(showEditSheet: $showEditSheet)
+        case .stats:
             EmptyView()
         case .rules:
             RuleDetailView()

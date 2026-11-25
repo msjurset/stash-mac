@@ -123,12 +123,21 @@ struct VimHostEditor: NSViewRepresentable {
         guard let tv = scrollView.documentView as? VimHostTextView else { return }
 
         let contentWidth = scrollView.contentSize.width
+        let contentHeight = scrollView.contentSize.height
         if contentWidth > 0 {
             if tv.frame.size.width != contentWidth {
                 tv.frame.size.width = contentWidth
             }
             if let tc = tv.textContainer, tc.containerSize.width != contentWidth {
                 tc.containerSize = NSSize(width: contentWidth, height: .greatestFiniteMagnitude)
+            }
+            let layoutHeight = tv.layoutManager?.usedRect(for: tv.textContainer!).height ?? 0
+            let targetHeight = max(contentHeight, layoutHeight + tv.textContainerInset.height * 2)
+            if tv.frame.size.height != targetHeight {
+                tv.frame.size.height = targetHeight
+            }
+            if tv.minSize.height != contentHeight {
+                tv.minSize = NSSize(width: 0, height: contentHeight)
             }
         }
 
@@ -516,14 +525,40 @@ enum ListPrefix {
     }
 }
 
-private class VimEditorScrollView: NSScrollView {
+class VimEditorScrollView: NSScrollView {
     override func tile() {
         super.tile()
+        syncDocumentViewSize()
+    }
+
+    override func layout() {
+        super.layout()
+        syncDocumentViewSize()
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        syncDocumentViewSize()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if let tv = documentView as? NSTextView {
+            window?.makeFirstResponder(tv)
+            tv.mouseDown(with: event)
+            return
+        }
+        super.mouseDown(with: event)
+    }
+
+    func syncDocumentViewSize() {
         let contentWidth = contentSize.width
         let contentHeight = contentSize.height
         guard contentWidth > 0, let tv = documentView as? NSTextView else { return }
         if tv.frame.size.width != contentWidth {
             tv.frame.size.width = contentWidth
+        }
+        if let container = tv.textContainer, container.containerSize.width != contentWidth {
+            container.containerSize = NSSize(width: contentWidth, height: .greatestFiniteMagnitude)
         }
         let layoutHeight = tv.layoutManager?.usedRect(for: tv.textContainer!).height ?? 0
         let targetHeight = max(contentHeight, layoutHeight + tv.textContainerInset.height * 2)
@@ -532,9 +567,6 @@ private class VimEditorScrollView: NSScrollView {
         }
         if tv.minSize.height != contentHeight {
             tv.minSize = NSSize(width: 0, height: contentHeight)
-        }
-        if let container = tv.textContainer, container.containerSize.width != contentWidth {
-            container.containerSize = NSSize(width: contentWidth, height: .greatestFiniteMagnitude)
         }
     }
 }

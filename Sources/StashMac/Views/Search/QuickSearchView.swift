@@ -1,53 +1,53 @@
+import AppKit
 import SwiftUI
+
+private let globalStashFieldTags = [
+    "tag", "!tag", "collection", "type", "is", "view", "action"
+]
 
 struct QuickSearchView: View {
     @Environment(StashStore.self) private var store
     @Environment(\.dismiss) private var dismiss
 
+    var onDismiss: (() -> Void)? = nil
+
     @State private var query = ""
     @State private var results: [StashItem] = []
+    @State private var matches: [SearchResult] = []
+    @State private var activeIndex = 0
+
+    @State private var searchFieldFocusTrigger = 0
+    @State private var pendingCursor: Int? = nil
+    @State private var cursorLocation: Int = 0
+    @State private var lastSetQuery: String? = nil
+
     @State private var searchTask: Task<Void, Never>?
-    @State private var suggestionTask: Task<Void, Never>?
-    @State private var tagMatches: [StashTag] = []
-    @State private var tagActiveIndex = 0
-    /// Parallel state for `collection:` chip completion. Only one of
-    /// `tagMatches` / `collectionMatches` is non-empty at a time —
-    /// the cursor can only be inside one chip context per keystroke,
-    /// so the dropdown and key handlers branch on whichever is
-    /// populated.
-    @State private var collectionMatches: [StashCollection] = []
-    @State private var collectionActiveIndex = 0
-    /// Regex mode: the query is sent through the CLI's `--regex` flag
-    /// (RE2, matched against title+notes+url+extracted text) instead
-    /// of the FTS-backed positional search. Tag filters still apply
-    /// to either; tag-completion suppresses while in regex mode since
-    /// `tag:` tokens look like regex literals.
     @State private var regexMode = false
-    /// Live status of the regex compile. `nil` = no error or not in
-    /// regex mode; otherwise a short message rendered under the
-    /// search field so the user knows their pattern won't match.
     @State private var regexError: String?
-    /// Cursor inside the results list, driven by ↑/↓ in the search
-    /// field. -1 means "no cursor yet" (Enter falls back to the
-    /// first row). Reset to 0 whenever results change so the user
-    /// can Enter to commit the top hit immediately.
-    @State private var resultActiveIndex = -1
-    /// Drives the regex-guide popover anchored to the `*` toggle.
-    /// Opens whenever regex mode is enabled (toggle click, ⌘R, etc.)
-    /// and closes when the user disables regex mode or clicks
-    /// outside the popover.
     @State private var regexGuideShown = false
-    /// Browse mode shown when the query is empty — Recent (most
-    /// recently committed queries first) or Frequent (most-clicked
-    /// first). Persisted in UserDefaults so reopening the panel
-    /// lands on the same view the user left on.
-    @State private var browseMode: BrowseMode = BrowseMode.load()
-    /// Rollup loaded from `stash search-history list`. Reloaded on
-    /// view appear and whenever `browseMode` flips.
-    @State private var history: [SearchHistoryEntry] = []
-    @State private var commandMatches: [GlobalCommand] = []
-    @State private var commandActiveIndex = 0
+    @State private var phoneHandoffShown = false
     @State private var searchError: String?
+
+    @State private var browseMode: BrowseMode = BrowseMode.load()
+    @State private var history: [SearchHistoryEntry] = []
+
+    struct Suggestion: Identifiable, Equatable {
+        let id: String
+        let label: String
+        let display: String
+        let subtitle: String?
+        let icon: String
+        let count: Int
+        let command: GlobalCommand?
+
+        static func == (lhs: Suggestion, rhs: Suggestion) -> Bool {
+            lhs.id == rhs.id && lhs.label == rhs.label && lhs.count == rhs.count
+        }
+    }
+
+    @State private var suggestions: [Suggestion] = []
+    @State private var suggestionIndex: Int = -1
+    @State private var dismissedSuggestionsQuery: String? = nil
 
     private let commandRegistry = GlobalCommandRegistry.shared
 
@@ -64,37 +64,105 @@ struct QuickSearchView: View {
         }
     }
 
+    enum ResultPayload {
+        case item(StashItem)
+        case history(SearchHistoryEntry)
+        case view(NavigationItem)
+        case action
+        case filter(String)
+    }
+
+    struct SearchResult: Identifiable {
+        let id: String
+        let title: String
+        let subtitle: String?
+        let typeBadge: String
+        let systemImage: String
+        let payload: ResultPayload
+        let action: () -> Void
+    }
+
+    private func closePanel() {
+        if let onDismiss {
+            onDismiss()
+        } else {
+            dismiss()
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
+            // Top search bar
+            HStack(spacing: 10) {
                 Image(systemName: "magnifyingglass")
+                    .font(.title2)
                     .foregroundStyle(.secondary)
+
                 FilterField(
-                    placeholder: "Search stash... (tag:, collection: to filter)",
+                    placeholder: regexMode
+                        ? "Regex search across stash... /pattern/ (! to negate)"
+                        : "Search stash, views, actions... (Tab/Enter for chips: tag: collection: type: is: /cmd)",
                     text: $query,
+                    font: .preferredFont(forTextStyle: .title3),
                     autoFocus: true,
+                    focusTrigger: searchFieldFocusTrigger,
+                    pendingCursor: $pendingCursor,
+                    onSelectionChanged: { loc in
+                        cursorLocation = loc
+                        updateSuggestions()
+                    },
                     onKey: { handleKey($0) },
-                    onBeginEditing: { recomputeSuggestions() }
+                    onBeginEditing: { updateSuggestions() }
                 )
-                regexToggle
-                Button("Done") { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-            }
-            .padding()
-            if let regexError {
-                HStack(spacing: 6) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
+                .frame(height: 28)
+
+                if let regexError {
                     Text(regexError)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.red)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.red.opacity(0.12), in: Capsule())
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 14)
-                .padding(.bottom, 6)
+
+                regexToggle
+
+                if !query.isEmpty {
+                    Button {
+                        query = ""
+                        suggestions = []
+                        suggestionIndex = -1
+                        regexError = nil
+                        searchError = nil
+                        cursorLocation = 0
+                        searchFieldFocusTrigger &+= 1
+                        rebuildMatches()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title3)
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .focusable(false)
+                    .pointingHandCursor()
+                    .help("Clear search")
+                }
+
+                Button("Esc") { closePanel() }
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 4))
+                    .buttonStyle(.plain)
+                    .focusable(false)
+                    .pointingHandCursor()
+                    .help("Close Global Search (Esc)")
             }
+            .padding(.horizontal, 16)
+            .padding(.top, 14)
+            .padding(.bottom, 10)
+
             if let searchError {
                 HStack(spacing: 6) {
                     Image(systemName: "exclamationmark.circle.fill")
@@ -104,241 +172,215 @@ struct QuickSearchView: View {
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 14)
+                .padding(.horizontal, 16)
                 .padding(.bottom, 6)
             }
 
-            // Tag suggestions
-            if !tagMatches.isEmpty {
+            // Interactive filter & scope chips bar
+            if !regexMode {
+                globalSearchChipsBar
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 8)
+            }
+
+            // Unified autocomplete dropdown
+            if !suggestions.isEmpty {
                 Divider()
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 0) {
-                            ForEach(Array(tagMatches.enumerated()), id: \.element.id) { idx, tag in
-                                Button {
-                                    commitTag(tag.name)
-                                } label: {
-                                    HStack {
-                                        Label("tag:\(tag.name)", systemImage: "tag")
-                                            .font(.body)
-                                        Spacer()
-                                        if let count = tag.count {
-                                            Text("\(count)")
-                                                .foregroundStyle(.secondary)
-                                                .font(.caption)
+                let visibleCount = min(suggestions.count, 8)
+                let rowHeight: CGFloat = 28
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack {
+                        Text(query.hasPrefix("/") ? "Global Commands" : "Autocomplete Filter Chip")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Text("Tab / ↑↓ to cycle • Enter to insert • Esc to dismiss")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 4)
+
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 0) {
+                                ForEach(Array(suggestions.enumerated()), id: \.element.id) { idx, suggestion in
+                                    Button {
+                                        acceptSuggestion(suggestion)
+                                    } label: {
+                                        HStack(spacing: 8) {
+                                            Image(systemName: suggestion.icon)
+                                                .foregroundStyle(idx == suggestionIndex ? Color.accentColor : .secondary)
+                                                .frame(width: 16)
+                                            Text(suggestion.display)
+                                                .font(.callout.weight(idx == suggestionIndex ? .semibold : .regular))
+                                            if let sub = suggestion.subtitle {
+                                                Text(sub)
+                                                    .font(.caption)
+                                                    .foregroundStyle(.secondary)
+                                                    .lineLimit(1)
+                                            }
+                                            Spacer()
+                                            if suggestion.count > 0 {
+                                                Text("\(suggestion.count)")
+                                                    .foregroundStyle(.tertiary)
+                                                    .font(.caption)
+                                            }
                                         }
+                                        .padding(.horizontal, 14)
+                                        .padding(.vertical, 4)
+                                        .frame(height: rowHeight)
+                                        .background(idx == suggestionIndex ? Color.accentColor.opacity(0.2) : .clear)
+                                        .contentShape(Rectangle())
                                     }
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 6)
-                                    .background(idx == tagActiveIndex ? Color.accentColor.opacity(0.2) : .clear)
-                                    .contentShape(Rectangle())
+                                    .buttonStyle(.plain)
+                                    .focusable(false)
+                                    .pointingHandCursor()
+                                    .id(idx)
                                 }
-                                .buttonStyle(.plain)
-                                .id(idx)
                             }
                         }
-                        .padding(.vertical, 4)
-                    }
-                    .frame(maxHeight: 280)
-                    .onChange(of: tagActiveIndex) { _, newIdx in
-                        // Keep the keyboard-active row visible when
-                        // the user arrows / Tabs past the bottom of
-                        // the visible window.
-                        withAnimation(.easeOut(duration: 0.12)) {
-                            proxy.scrollTo(newIdx, anchor: .center)
+                        .frame(height: CGFloat(visibleCount) * rowHeight)
+                        .onChange(of: suggestionIndex) { _, newIdx in
+                            guard newIdx >= 0 && newIdx < suggestions.count else { return }
+                            withAnimation(.easeInOut(duration: 0.1)) {
+                                proxy.scrollTo(newIdx, anchor: .center)
+                            }
                         }
                     }
                 }
-            }
-
-            // Global commands
-            if !commandMatches.isEmpty {
-                Divider()
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 0) {
-                            ForEach(Array(commandMatches.enumerated()), id: \.element.id) { idx, cmd in
-                                Button {
-                                    commitCommand(cmd)
-                                } label: {
-                                    HStack {
-                                        Label("/\(cmd.name)", systemImage: cmd.icon)
-                                            .font(.body)
-                                        Text(cmd.description)
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                        Spacer()
-                                    }
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 6)
-                                    .background(idx == commandActiveIndex ? Color.accentColor.opacity(0.2) : .clear)
-                                    .contentShape(Rectangle())
-                                }
-                                .buttonStyle(.plain)
-                                .id(idx)
-                            }
-                        }
-                        .padding(.vertical, 4)
-                    }
-                    .frame(maxHeight: 280)
-                    .onChange(of: commandActiveIndex) { _, newIdx in
-                        withAnimation(.easeOut(duration: 0.12)) {
-                            proxy.scrollTo(newIdx, anchor: .center)
-                        }
-                    }
-                }
-            }
-
-            // Collection suggestions — same shape as tag dropdown
-            // above; folder icon distinguishes the chip at a glance.
-            if !collectionMatches.isEmpty {
-                Divider()
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 0) {
-                            ForEach(Array(collectionMatches.enumerated()), id: \.element.id) { idx, col in
-                                Button {
-                                    commitCollection(col.name)
-                                } label: {
-                                    HStack {
-                                        Label("collection:\(col.name)", systemImage: "folder")
-                                            .font(.body)
-                                        Spacer()
-                                    }
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 6)
-                                    .background(idx == collectionActiveIndex ? Color.accentColor.opacity(0.2) : .clear)
-                                    .contentShape(Rectangle())
-                                }
-                                .buttonStyle(.plain)
-                                .id(idx)
-                            }
-                        }
-                        .padding(.vertical, 4)
-                    }
-                    .frame(maxHeight: 280)
-                    .onChange(of: collectionActiveIndex) { _, newIdx in
-                        withAnimation(.easeOut(duration: 0.12)) {
-                            proxy.scrollTo(newIdx, anchor: .center)
-                        }
-                    }
-                }
+                .background(Color(NSColor.controlBackgroundColor).opacity(0.65))
             }
 
             Divider()
 
-            // Browse-mode toggles — always visible just under the
-            // search divider. Greyed out while a search query is
-            // active because results take priority over history.
-            browseToggleBar
+            // Main Split Area: Results List (Left) + Live Preview Pane (Right)
+            if !matches.isEmpty {
+                HStack(spacing: 0) {
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 0) {
+                                resultsHeaderBar
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 6)
 
-            if query.isEmpty && !hasChipDropdown && results.isEmpty {
-                historyPane
-            } else if results.isEmpty && !query.isEmpty && !hasChipDropdown {
-                ContentUnavailableView.search(text: query)
-                    .frame(height: 200)
-            } else if !hasChipDropdown {
-                ScrollViewReader { proxy in
-                    List(Array(results.enumerated()), id: \.element.id) { idx, item in
-                        resultRow(idx: idx, item: item)
-                            .id(idx)
-                    }
-                    .listStyle(.plain)
-                    .frame(minHeight: 200, maxHeight: 400)
-                    .onChange(of: resultActiveIndex) { _, newIdx in
-                        // Keep the keyboard-active result visible when
-                        // arrows / Ctrl-J/K push it past the bottom edge.
-                        guard newIdx >= 0 else { return }
-                        withAnimation(.easeOut(duration: 0.12)) {
-                            proxy.scrollTo(newIdx, anchor: .center)
+                                ForEach(Array(matches.enumerated()), id: \.element.id) { idx, match in
+                                    resultRow(idx: idx, match: match)
+                                        .id(match.id)
+                                }
+                            }
+                            .padding(.vertical, 4)
+                        }
+                        .onChange(of: activeIndex) { _, newIdx in
+                            phoneHandoffShown = false
+                            withAnimation(.easeOut(duration: 0.12)) {
+                                if newIdx >= 0 && newIdx < matches.count {
+                                    proxy.scrollTo(matches[newIdx].id, anchor: .center)
+                                }
+                            }
                         }
                     }
-                }
-            }
-        }
-        .frame(width: 500)
-        .onChange(of: query) { _, newQuery in
-            // "//" auto-detection for regex mode.
-            // If the user starts a query with "//", we auto-enable regex mode,
-            // clear the commands dropdown, and replace the text with "/ /"
-            // (single slashes) with the cursor in the middle.
-            if newQuery == "//" && !regexMode {
-                regexMode = true
-                regexGuideShown = true
-                clearChipDropdown()
-                
-                // Set field to a pair of slashes for pattern entry
-                query = "//"
-                
-                // Position cursor between the slashes: /|/
-                DispatchQueue.main.async {
-                    for window in NSApplication.shared.windows where window.isVisible {
-                        if let field = findSearchField(in: window.contentView),
-                           let editor = field.currentEditor() {
-                            editor.selectedRange = NSRange(location: 1, length: 0)
-                            return
-                        }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                    if activeIndex >= 0 && activeIndex < matches.count {
+                        Divider()
+                        previewPane(for: matches[activeIndex])
+                            .frame(width: 360)
+                            .frame(maxHeight: .infinity)
+                            .background(Color(NSColor.windowBackgroundColor).opacity(0.5))
                     }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if !query.trimmingCharacters(in: .whitespaces).isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: regexError != nil ? "exclamationmark.triangle" : "magnifyingglass")
+                        .font(.system(size: 28))
+                        .foregroundStyle(.secondary)
+                    Text(regexError != nil ? "Fix the regular expression above to see matches." : "No matching items, views, or actions.")
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
-            recomputeSuggestions()
-            if !hasChipDropdown {
-                debounceSearch(newQuery)
-            } else {
-                searchTask?.cancel()
-                searchTask = nil
-                results = []
-            }
+            Spacer(minLength: 0)
         }
-        .onChange(of: regexMode) { _, _ in
-            // Toggle re-runs the search so the user sees results
-            // change immediately without re-typing the query.
-            tagMatches = []
-            debounceSearch(query)
-        }
-        .onChange(of: results) { _, _ in
-            // New result set → reset the cursor to the top so Enter
-            // commits the highest-relevance hit.
-            resultActiveIndex = results.isEmpty ? -1 : 0
+        .frame(minWidth: 720, idealWidth: 820, maxWidth: .infinity, minHeight: 420, idealHeight: 520, maxHeight: .infinity, alignment: .top)
+        .onAppear {
+            rebuildMatches()
         }
         .task {
             await reloadHistory()
+            rebuildMatches()
         }
         .onChange(of: browseMode) { _, mode in
             mode.save()
-            Task { await reloadHistory() }
+            Task {
+                await reloadHistory()
+                rebuildMatches()
+            }
+        }
+        .onChange(of: store.globalSearchTick) { _, _ in
+            searchFieldFocusTrigger &+= 1
+            Task {
+                await reloadHistory()
+                rebuildMatches()
+            }
+        }
+        .onChange(of: query) { _, newQuery in
+            if newQuery == "//" && !regexMode {
+                regexMode = true
+                regexGuideShown = true
+                suggestions = []
+                suggestionIndex = -1
+                pendingCursor = 1
+                cursorLocation = 1
+                debounceSearch(newQuery)
+                return
+            }
+
+            dismissedSuggestionsQuery = nil
+
+            if let last = lastSetQuery, last == newQuery {
+                lastSetQuery = nil
+                debounceSearch(newQuery)
+                return
+            }
+            lastSetQuery = nil
+            updateSuggestions()
+            debounceSearch(newQuery)
+        }
+        .onChange(of: regexMode) { _, _ in
+            suggestions = []
+            suggestionIndex = -1
+            debounceSearch(query)
+        }
+        .onChange(of: results) { _, _ in
+            rebuildMatches()
         }
     }
 
-    /// Pair of icon toggles in the upper-right of the panel, just
-    /// below the search-field divider. They flip `browseMode` between
-    /// `.recent` and `.frequent` and grey out (disabled) whenever the
-    /// search field has any text — results take priority over history
-    /// in that case.
+    // MARK: - Results Header & Browse Mode Toggle
+
     @ViewBuilder
-    private var browseToggleBar: some View {
-        HStack(spacing: 6) {
-            if !results.isEmpty {
-                Text("\(results.count) result\(results.count == 1 ? "" : "s")")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .padding(.leading, 12)
-            }
+    private var resultsHeaderBar: some View {
+        let isEmptyQuery = query.trimmingCharacters(in: .whitespaces).isEmpty
+        HStack(spacing: 8) {
+            Text(isEmptyQuery ? "Recent, Saved Searches & Actions" : "Results (\(matches.count))")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
             Spacer()
-            HStack(spacing: 6) {
-                browseToggleButton(mode: .recent,
-                                   icon: "clock",
-                                   tooltip: "Recent searches")
-                browseToggleButton(mode: .frequent,
-                                   icon: "chart.bar",
-                                   tooltip: "Frequent searches")
+            if isEmptyQuery {
+                HStack(spacing: 4) {
+                    browseToggleButton(mode: .recent, icon: "clock", tooltip: "Recent searches first")
+                    browseToggleButton(mode: .frequent, icon: "chart.bar", tooltip: "Frequent searches first")
+                }
+            } else if suggestions.isEmpty {
+                Text("Tab / ↑↓ to navigate • Enter to open")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
             }
-            .disabled(!query.isEmpty)
-            .opacity(query.isEmpty ? 1.0 : 0.4)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
     }
 
     private func browseToggleButton(mode: BrowseMode, icon: String, tooltip: String) -> some View {
@@ -346,189 +388,132 @@ struct QuickSearchView: View {
         return Button {
             browseMode = mode
         } label: {
-            Image(systemName: icon)
-                .font(.body.weight(.semibold))
-                .foregroundStyle(active ? Color.primary : Color.secondary)
-                .frame(width: 22, height: 22)
+            HStack(spacing: 3) {
+                Image(systemName: icon)
+                    .font(.caption2.weight(.semibold))
+                Text(mode.label)
+                    .font(.caption2.weight(active ? .semibold : .regular))
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(active ? Color.accentColor.opacity(0.2) : Color.primary.opacity(0.05), in: Capsule())
+            .foregroundStyle(active ? Color.accentColor : Color.secondary)
         }
         .buttonStyle(.plain)
+        .focusable(false)
+        .pointingHandCursor()
         .help(tooltip)
     }
 
-    /// Recent / Frequent panes shown when the search field is empty.
-    /// Same role as the Chrome extension's view-toggle: pick a
-    /// previously-committed query to re-run it. A row click populates
-    /// `query`, which kicks off `onChange(of: query)` → live search.
-    @ViewBuilder
-    private var historyPane: some View {
-        VStack(spacing: 0) {
-            if history.isEmpty {
-                Text("No saved searches yet — click a result to record one.")
-                    .font(.callout)
-                    .foregroundStyle(.tertiary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 24)
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(history) { entry in
-                            historyRow(entry)
-                        }
-                    }
-                }
-                .frame(minHeight: 160, maxHeight: 320)
-            }
-        }
+    // MARK: - Dynamic Chips Bar
+
+    private struct ChipItem: Identifiable {
+        let id: String
+        let token: String
+        let label: String
+        let icon: String
+        let isActive: Bool
     }
 
-    @ViewBuilder
-    private func historyRow(_ entry: SearchHistoryEntry) -> some View {
-        Button {
-            query = entry.query
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: browseMode == .recent ? "clock" : "chart.bar")
-                    .foregroundStyle(.secondary)
-                    .frame(width: 16)
-                Text(entry.query)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                Spacer()
-                Text(browseMode == .recent
-                     ? entry.lastUsedAt.formatted(.relative(presentation: .numeric))
-                     : "\(entry.count)×")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .monospacedDigit()
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .pointingHandCursor()
-        .contextMenu {
-            Button("Delete from history", role: .destructive) {
-                Task {
-                    try? await StashCLI.shared.deleteSearchHistoryEntry(query: entry.query)
-                    await reloadHistory()
-                }
-            }
-        }
-    }
+    private var globalSearchChipsBar: some View {
+        let knownSet = Set(["tag", "t", "collection", "col", "c", "type", "is", "view", "v", "action", "a"])
+        let activeTokens = SearchTokenHelper.extractStructuredTokens(from: query, knownKeys: knownSet)
+        let activeSet = Set(activeTokens.map { SearchTokenHelper.normalizeChip($0) })
 
-    private func reloadHistory() async {
-        do {
-            history = try await StashCLI.shared.listSearchHistory(
-                sort: browseMode.rawValue,
-                limit: 30
+        var chips: [ChipItem] = []
+        var seen = Set<String>()
+
+        func addChip(token: String, label: String, icon: String, active: Bool) {
+            let norm = SearchTokenHelper.normalizeChip(token)
+            guard !seen.contains(norm) else { return }
+            seen.insert(norm)
+            chips.append(ChipItem(id: norm, token: token, label: label, icon: icon, isActive: active))
+        }
+
+        // 1. Active structured tokens first so the user can see & click to remove them
+        for tok in activeTokens {
+            let keyPart = tok.split(separator: ":").first.map(String.init) ?? tok
+            let displayLabel = tok.replacingOccurrences(of: "\"", with: "")
+            addChip(
+                token: tok,
+                label: displayLabel,
+                icon: iconForTag("\(keyPart):"),
+                active: true
             )
-        } catch {
-            history = []
         }
-    }
 
-    /// Commit a result selection: focus the item, switch nav to All
-    /// Items if it's not visible in the current scope (so the row
-    /// is highlighted in the list), dismiss the panel. The query at
-    /// click time is logged so the Recent / Frequent panes have
-    /// something to populate next visit; empty queries are skipped
-    /// (clicking a result from the unfiltered "list everything" path
-    /// isn't a "search" worth replaying).
-    private func commitResult(_ item: StashItem) {
-        let committed = query.trimmingCharacters(in: .whitespaces)
-        if !committed.isEmpty {
-            Task {
-                try? await StashCLI.shared.recordSearchClick(query: committed, itemID: item.id)
-            }
+        // 2. Scope & high-frequency filter chips
+        let presets: [(token: String, label: String, icon: String)] = [
+            ("type:url", "URLs", "globe"),
+            ("type:snippet", "Snippets", "doc.text"),
+            ("type:image", "Images", "photo"),
+            ("type:file", "Files", "doc"),
+            ("type:audio", "Audio", "waveform"),
+            ("type:email", "Emails", "envelope"),
+            ("is:recipe", "Recipes", "fork.knife"),
+            ("is:unread", "Unread", "circle.fill"),
+            ("is:located", "Geotagged", "mappin.and.ellipse"),
+            ("type:view", "Views", "sidebar.left"),
+            ("type:action", "Actions", "bolt.fill")
+        ]
+        for p in presets {
+            let isAct = activeSet.contains(SearchTokenHelper.normalizeChip(p.token))
+            addChip(token: p.token, label: p.label, icon: p.icon, active: isAct)
         }
-        store.selectItemByID(item.id, revealInList: true)
-        dismiss()
-    }
 
-    /// Single result row. Factored out so the label closure stays
-    /// simple enough for Swift's type checker — inlining all the
-    /// foreground/background ternaries pushed it past its budget.
-    @ViewBuilder
-    private func resultRow(idx: Int, item: StashItem) -> some View {
-        let active = idx == resultActiveIndex
-        let primary: Color = active ? .white : .primary
-        let secondary: Color = active ? Color.white.opacity(0.85) : .secondary
-        let tertiary: Color = active ? Color.white.opacity(0.7) : Color.secondary.opacity(0.7)
-        Button {
-            commitResult(item)
-        } label: {
-            HStack {
-                Image(systemName: item.iconName)
-                    .foregroundStyle(secondary)
-                    .frame(width: 20)
-                VStack(alignment: .leading) {
-                    Text(item.title)
-                        .lineLimit(1)
-                        .foregroundStyle(primary)
-                    if let tags = item.tags, !tags.isEmpty {
-                        Text(tags.map { "#\($0.name)" }.joined(separator: " "))
-                            .kerning(0.5)
-                            .font(.caption)
-                            .foregroundStyle(secondary)
+        return ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(chips) { chip in
+                    Button {
+                        toggleChipToken(chip.token)
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: chip.icon)
+                                .font(.system(size: 10, weight: .semibold))
+                            Text(chip.label)
+                                .font(.caption.weight(chip.isActive ? .semibold : .regular))
+                                .lineLimit(1)
+                            if chip.isActive {
+                                Image(systemName: "xmark")
+                                    .font(.system(size: 8, weight: .bold))
+                                    .padding(.leading, 1)
+                            }
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(
+                            Capsule()
+                                .fill(chip.isActive ? Color.accentColor.opacity(0.22) : Color.primary.opacity(0.06))
+                        )
+                        .overlay(
+                            Capsule()
+                                .strokeBorder(chip.isActive ? Color.accentColor.opacity(0.6) : Color.primary.opacity(0.1), lineWidth: 1)
+                        )
+                        .foregroundStyle(chip.isActive ? Color.accentColor : .secondary)
                     }
+                    .buttonStyle(.plain)
+                    .focusable(false)
+                    .pointingHandCursor()
                 }
-                Spacer()
-                Text(item.type.label)
-                    .font(.caption)
-                    .foregroundStyle(tertiary)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(active ? Color.accentColor : Color.clear)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .pointingHandCursor()
-        .contextMenu { resultContextMenu(for: item) }
-    }
-
-    /// Right-click menu for a Quick Search result. Open launches the
-    /// item's default handler (URL → browser, file → Finder default)
-    /// the same way double-clicking or the items-list context menu
-    /// does — distinct from the left-click "commit" path, which
-    /// selects + reveals without launching.
-    @ViewBuilder
-    private func resultContextMenu(for item: StashItem) -> some View {
-        Button("Open") {
-            store.openItem(id: item.id)
-            dismiss()
-        }
-        if let url = item.url, !url.isEmpty {
-            Button("Copy URL") {
-                let pb = NSPasteboard.general
-                pb.clearContents()
-                pb.setString(url, forType: .string)
-            }
-        }
-        Button("Reveal in List") {
-            store.selectItemByID(item.id, revealInList: true)
-            dismiss()
-        }
-        Divider()
-        Button("Archive") {
-            store.archiveItems(ids: [item.id])
-        }
-        Button("Delete", role: .destructive) {
-            store.deleteItem(id: item.id)
         }
     }
 
-    /// `*` toggle next to the field. Click toggles regex mode and
-    /// pops the RE2 cheatsheet (with negation) when entering regex
-    /// mode. Cursor returns to the field after the click so the user
-    /// can keep typing without re-grabbing focus. ⌘R also toggles
-    /// (bound via a hidden keyboard shortcut button below).
-    ///
-    /// The popover is hosted by `PersistentPopoverHost` so it stays
-    /// open while the user types in the search field — the default
-    /// SwiftUI popover is `.transient`, which dismisses on any focus
-    /// change.
+    private func toggleChipToken(_ token: String) {
+        let updated = SearchTokenHelper.toggleChip(token, in: query)
+        let finalQuery = updated.isEmpty ? "" : (updated.hasSuffix(" ") ? updated : updated + " ")
+        lastSetQuery = finalQuery
+        query = finalQuery
+        suggestions = []
+        suggestionIndex = -1
+        pendingCursor = finalQuery.count
+        cursorLocation = finalQuery.count
+        searchFieldFocusTrigger &+= 1
+        debounceSearch(finalQuery)
+    }
+
+    // MARK: - Regex Toggle
+
     private var regexToggle: some View {
         Button {
             toggleRegex()
@@ -536,483 +521,812 @@ struct QuickSearchView: View {
             Image(systemName: "asterisk")
                 .font(.body.weight(.semibold))
                 .foregroundStyle(regexMode ? Color.white : Color.secondary)
-                .frame(width: 22, height: 22)
-                .background(regexMode ? Color.accentColor : Color.clear, in: RoundedRectangle(cornerRadius: 4))
+                .frame(width: 24, height: 24)
+                .background(regexMode ? Color.accentColor : Color.clear, in: RoundedRectangle(cornerRadius: 5))
         }
         .buttonStyle(.plain)
+        .focusable(false)
+        .pointingHandCursor()
         .help(regexMode
             ? "Regex search active — click to disable (⌘R)"
-            : "Search by RE2 regex pattern — click to enable (⌘R)")
+            : "Search by RE2 regex pattern — click to enable (⌘R or type //)")
         .background(
             PersistentPopoverHost(
                 isPresented: $regexGuideShown,
-                preferredEdge: .minY  // anchor below the toggle
+                preferredEdge: .minY
             ) {
                 RegexGuideView(context: .searchPanel)
             }
         )
         .background(
-            // ⌘R toggles regex mode globally while QuickSearch is up.
-            // Hidden Button so SwiftUI honors the shortcut without
-            // requiring focus on the toggle itself.
             Button("") { toggleRegex() }
                 .keyboardShortcut("r", modifiers: .command)
                 .hidden()
         )
+        .background(
+            Button("") { triggerPhoneHandoffForActiveMatch() }
+                .keyboardShortcut("o", modifiers: [.command, .shift])
+                .hidden()
+        )
     }
 
-    /// Flip regex mode and open/close the cheatsheet popover. Returns
-    /// first-responder to the search field so typing resumes without
-    /// the user clicking back into it. Walk every visible NSWindow
-    /// because after toggle the popover may take key status briefly;
-    /// we don't filter by isKeyWindow.
-    ///
-    /// `DispatchQueue.main.async` (twice) defers the focus-return
-    /// past both SwiftUI's body re-evaluation AND AppKit's popover
-    /// open animation — re-grabbing focus too early loses the race
-    /// to the popover, leaving the field unfocused.
+    private func triggerPhoneHandoffForActiveMatch() {
+        guard activeIndex >= 0 && activeIndex < matches.count else { return }
+        if case .item = matches[activeIndex].payload {
+            phoneHandoffShown.toggle()
+        }
+    }
+
     private func toggleRegex() {
         regexMode.toggle()
         regexGuideShown = regexMode
-        DispatchQueue.main.async {
-            DispatchQueue.main.async {
-                for window in NSApplication.shared.windows where window.isVisible {
-                    if let field = findSearchField(in: window.contentView) {
-                        window.makeFirstResponder(field)
-                        // Position cursor at end of any existing query.
-                        if let editor = field.currentEditor() {
-                            editor.selectedRange = NSRange(location: field.stringValue.count, length: 0)
-                        }
-                        return
-                    }
-                }
-            }
+        if regexMode {
+            suggestions = []
+            suggestionIndex = -1
+        } else {
+            regexError = nil
+            updateSuggestions()
         }
+        searchFieldFocusTrigger &+= 1
     }
 
-    /// DFS the view hierarchy for the search field (a
-    /// `NoAutoFillTextField` whose placeholder starts with "Search").
-    /// Cheap because the panel is small — at most a few dozen views.
-    private func findSearchField(in view: NSView?) -> NSTextField? {
-        guard let view else { return nil }
-        if let tf = view as? NSTextField,
-           (tf.placeholderString ?? "").lowercased().contains("search") {
-            return tf
-        }
-        for sub in view.subviews {
-            if let f = findSearchField(in: sub) { return f }
-        }
-        return nil
-    }
-
-    // MARK: - Key handling
+    // MARK: - Key Handling
 
     private func handleKey(_ key: SuggestKey) -> Bool {
         switch key {
-        case .tab, .shiftTab:
-            if !commandMatches.isEmpty {
-                advanceCommand(key == .tab ? .down : .up)
-                return true
-            }
-            if !tagMatches.isEmpty {
-                if tagMatches.count == 1 {
-                    tabInsertSingle(tagMatches[0].name)
-                    return true
-                }
-                advance(key == .tab ? .down : .up)
-                return true
-            }
-            if !collectionMatches.isEmpty {
-                if collectionMatches.count == 1 {
-                    tabInsertSingleCollection(collectionMatches[0].name)
-                    return true
-                }
-                advanceCollection(key == .tab ? .down : .up)
-                return true
-            }
-            openDropdownIfPossible()
+        case .tab:
+            handleTab(shift: false)
+            return true
+        case .shiftTab:
+            handleTab(shift: true)
             return true
         case .arrowDown, .ctrlJ:
-            if !commandMatches.isEmpty {
-                advanceCommand(.down)
-                return true
-            }
-            if !tagMatches.isEmpty {
-                advance(.down)
-                return true
-            }
-            if !collectionMatches.isEmpty {
-                advanceCollection(.down)
-                return true
-            }
-            advanceResult(.down)
+            handleDownArrow()
             return true
         case .arrowUp, .ctrlK:
-            if !commandMatches.isEmpty {
-                advanceCommand(.up)
-                return true
-            }
-            if !tagMatches.isEmpty {
-                advance(.up)
-                return true
-            }
-            if !collectionMatches.isEmpty {
-                advanceCollection(.up)
-                return true
-            }
-            advanceResult(.up)
+            handleUpArrow()
             return true
         case .enter:
-            if !commandMatches.isEmpty {
-                let idx = max(commandActiveIndex, 0)
-                if idx < commandMatches.count {
-                    commitCommand(commandMatches[idx])
-                }
-                return true
-            }
-            if !tagMatches.isEmpty {
-                let idx = max(tagActiveIndex, 0)
-                if idx < tagMatches.count {
-                    commitTag(tagMatches[idx].name)
-                }
-                return true
-            }
-            if !collectionMatches.isEmpty {
-                let idx = max(collectionActiveIndex, 0)
-                if idx < collectionMatches.count {
-                    commitCollection(collectionMatches[idx].name)
-                }
-                return true
-            }
-            // No dropdown — commit the highlighted result, falling
-            // back to the first hit when the user hasn't moved the
-            // cursor yet.
-            let idx = resultActiveIndex >= 0 ? resultActiveIndex : 0
-            if idx < results.count {
-                commitResult(results[idx])
-                return true
-            }
-            return false
+            handleEnter()
+            return true
         case .escape:
-            if hasChipDropdown {
-                clearChipDropdown()
+            if phoneHandoffShown {
+                phoneHandoffShown = false
                 return true
             }
-            if !query.isEmpty {
+            if regexGuideShown {
+                regexGuideShown = false
+                return true
+            }
+            if !suggestions.isEmpty {
+                suggestions = []
+                suggestionIndex = -1
+                dismissedSuggestionsQuery = query
+                return true
+            }
+            if !query.isEmpty || regexMode {
                 query = ""
+                cursorLocation = 0
+                regexMode = false
+                regexError = nil
+                searchError = nil
+                rebuildMatches()
                 return true
             }
-            dismiss()
+            closePanel()
             return true
         }
     }
 
-    private func advanceCommand(_ direction: Direction) {
-        guard !commandMatches.isEmpty else { return }
-        switch direction {
-        case .down: commandActiveIndex = min(commandActiveIndex + 1, commandMatches.count - 1)
-        case .up:   commandActiveIndex = max(commandActiveIndex - 1, 0)
+    private func handleUpArrow() {
+        if !suggestions.isEmpty {
+            if suggestionIndex > 0 {
+                suggestionIndex -= 1
+            } else {
+                suggestionIndex = suggestions.count - 1
+            }
+        } else if activeIndex > 0 {
+            activeIndex -= 1
+        } else if !matches.isEmpty {
+            activeIndex = matches.count - 1
         }
     }
 
-    private func advanceCollection(_ direction: Direction) {
-        guard !collectionMatches.isEmpty else { return }
-        switch direction {
-        case .down: collectionActiveIndex = min(collectionActiveIndex + 1, collectionMatches.count - 1)
-        case .up:   collectionActiveIndex = max(collectionActiveIndex - 1, 0)
+    private func handleDownArrow() {
+        if !suggestions.isEmpty {
+            if suggestionIndex < suggestions.count - 1 {
+                suggestionIndex += 1
+            } else {
+                suggestionIndex = 0
+            }
+        } else if activeIndex < matches.count - 1 {
+            activeIndex += 1
+        } else if !matches.isEmpty {
+            activeIndex = 0
         }
     }
 
-    private func advanceResult(_ direction: Direction) {
-        guard !results.isEmpty else { return }
-        switch direction {
-        case .down:
-            resultActiveIndex = min(resultActiveIndex + 1, results.count - 1)
-        case .up:
-            resultActiveIndex = max(resultActiveIndex - 1, 0)
-        }
-    }
-
-    private enum Direction { case up, down }
-
-    private func advance(_ direction: Direction) {
-        guard !tagMatches.isEmpty else { return }
-        switch direction {
-        case .down: tagActiveIndex = min(tagActiveIndex + 1, tagMatches.count - 1)
-        case .up:   tagActiveIndex = max(tagActiveIndex - 1, 0)
-        }
-    }
-
-    // MARK: - Tag suggestions
-
-    private func recomputeSuggestions() {
-        suggestionTask?.cancel()
-        
-        // Cheap synchronous check: if not potentially in a chip context, clear immediately
-        // This avoids main-thread lag for normal typing.
-        if regexMode || (!query.contains(":") && !query.hasPrefix("/")) {
-            clearChipDropdown()
+    private func handleTab(shift: Bool) {
+        if !suggestions.isEmpty {
+            if !shift && suggestions.count == 1 {
+                acceptSuggestion(suggestions[0])
+                return
+            }
+            if shift {
+                handleUpArrow()
+            } else {
+                handleDownArrow()
+            }
             return
         }
 
-        suggestionTask = Task {
-            // Short debounce to let fast typing through
-            try? await Task.sleep(for: .milliseconds(50))
-            guard !Task.isCancelled else { return }
-
-            // Global commands start with /
-            if query.hasPrefix("/") && !query.contains(" ") {
-                let matches = commandRegistry.match(prefix: query)
-                await MainActor.run {
-                    commandMatches = matches
-                    commandActiveIndex = 0
-                    tagMatches = []
-                    collectionMatches = []
+        if !regexMode && dismissedSuggestionsQuery != query {
+            if requestSuggestions() {
+                if shift {
+                    suggestionIndex = max(0, suggestions.count - 1)
                 }
                 return
             }
+        }
 
-            // `collection:` check
-            if let match = query.range(
-                of: #"(?:^|\s)collection:(\S*)$"#,
-                options: .regularExpression
-            ) {
-                let token = query[match]
-                guard let colonIdx = token.firstIndex(of: ":") else {
-                    await MainActor.run { clearChipDropdown() }
+        if shift {
+            handleUpArrow()
+        } else {
+            handleDownArrow()
+        }
+    }
+
+    private func handleEnter() {
+        if !suggestions.isEmpty && suggestionIndex >= 0 && suggestionIndex < suggestions.count {
+            acceptSuggestion(suggestions[suggestionIndex])
+            return
+        }
+        commitSelectedMatch()
+    }
+
+    private func acceptSuggestion(_ suggestion: Suggestion) {
+        if let cmd = suggestion.command {
+            if cmd.action == .sendToPhone {
+                suggestions = []
+                suggestionIndex = -1
+                query = ""
+                cursorLocation = 0
+                rebuildMatches()
+                if activeIndex >= 0 && activeIndex < matches.count,
+                   case .item = matches[activeIndex].payload {
+                    phoneHandoffShown = true
                     return
                 }
-                let partial = String(token[token.index(after: colonIdx)...]).lowercased()
-                let matches = store.collections
-                    .filter { partial.isEmpty || $0.name.lowercased().contains(partial) }
-                    .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-                
-                await MainActor.run {
-                    collectionMatches = matches
-                    collectionActiveIndex = 0
-                    tagMatches = []
-                    tagActiveIndex = 0
-                    commandMatches = []
+            }
+            store.handleGlobalAction(cmd.action)
+            closePanel()
+            return
+        }
+        completeSuggestion(suggestion.label)
+    }
+
+    // MARK: - Token Autocomplete Engine
+
+    private func tokenRanges(in text: String) -> [Range<String.Index>] {
+        var ranges: [Range<String.Index>] = []
+        var i = text.startIndex
+        while i < text.endIndex {
+            while i < text.endIndex && text[i].isWhitespace {
+                i = text.index(after: i)
+            }
+            if i >= text.endIndex { break }
+            let start = i
+            var inQuotes = false
+            while i < text.endIndex {
+                let c = text[i]
+                if c == "\"" { inQuotes.toggle() }
+                else if c.isWhitespace && !inQuotes { break }
+                i = text.index(after: i)
+            }
+            ranges.append(start..<i)
+        }
+        return ranges
+    }
+
+    private func canonicalTagName(_ raw: String) -> String {
+        switch raw {
+        case "t", "tags": return "tag"
+        case "-tag", "^tag", "!t": return "!tag"
+        case "col", "c", "collections", "folder": return "collection"
+        case "v", "views", "nav": return "view"
+        case "a", "actions", "cmd": return "action"
+        default: return raw
+        }
+    }
+
+    private func parseToken(at location: Int, in text: String) -> (tag: String?, partial: String, range: Range<String.Index>)? {
+        let clampedOffset = max(0, min(location, text.count))
+        let cursorIndex = text.index(text.startIndex, offsetBy: clampedOffset)
+        let ranges = tokenRanges(in: text)
+
+        var activeRange: Range<String.Index>? = nil
+        for r in ranges {
+            if r.lowerBound <= cursorIndex && cursorIndex <= r.upperBound {
+                activeRange = r
+                break
+            }
+        }
+
+        let tokenRange = activeRange ?? (cursorIndex..<cursorIndex)
+        let token = String(text[tokenRange])
+
+        if let colonIdx = token.firstIndex(of: ":") {
+            let rawTag = String(token[token.startIndex..<colonIdx]).lowercased()
+            let canonicalTag = canonicalTagName(rawTag)
+            var partial = String(token[token.index(after: colonIdx)...]).lowercased()
+            if partial.hasPrefix("\"") { partial.removeFirst() }
+            if partial.hasSuffix("\"") { partial.removeLast() }
+            if globalStashFieldTags.contains(canonicalTag) {
+                return (canonicalTag, partial, tokenRange)
+            }
+        }
+
+        var unquoted = token.lowercased()
+        if unquoted.hasPrefix("\"") { unquoted.removeFirst() }
+        if unquoted.hasSuffix("\"") { unquoted.removeLast() }
+        return (nil, unquoted, tokenRange)
+    }
+
+    private func usedSingleValueKeys(in text: String) -> Set<String> {
+        var used = Set<String>()
+        let multiAllowed: Set<String> = ["tag", "!tag", "is"]
+        for r in tokenRanges(in: text) {
+            let token = text[r]
+            if let colon = token.firstIndex(of: ":") {
+                let rawKey = String(token[token.startIndex..<colon]).lowercased()
+                let key = canonicalTagName(rawKey)
+                if globalStashFieldTags.contains(key) && !multiAllowed.contains(key) {
+                    used.insert(key)
                 }
-                return
+            }
+        }
+        return used
+    }
+
+    private func showAllUnusedKeys(in text: String, partial: String = "") {
+        let used = usedSingleValueKeys(in: text)
+        let matchingKeys = globalStashFieldTags.filter {
+            !used.contains($0) && (partial.isEmpty || ($0.hasPrefix(partial) && $0 != partial))
+        }
+        suggestions = matchingKeys.map { key in
+            Suggestion(
+                id: "key:\(key)",
+                label: "\(key):",
+                display: "\(key):",
+                subtitle: tagDescription(key),
+                icon: iconForTag("\(key):"),
+                count: 0,
+                command: nil
+            )
+        }
+        suggestionIndex = suggestions.isEmpty ? -1 : 0
+    }
+
+    @discardableResult
+    private func requestSuggestions() -> Bool {
+        if regexMode { return false }
+        if query.hasPrefix("/") && !query.contains(" ") {
+            populateCommandSuggestions(prefix: query)
+            return !suggestions.isEmpty
+        }
+
+        let effectiveCursor = max(0, min(cursorLocation, query.count))
+        guard let parsed = parseToken(at: effectiveCursor, in: query) else {
+            showAllUnusedKeys(in: query)
+            return !suggestions.isEmpty
+        }
+
+        if let tag = parsed.tag {
+            populateTagValues(tag, partial: parsed.partial)
+            return !suggestions.isEmpty
+        } else {
+            showAllUnusedKeys(in: query, partial: parsed.partial)
+            return !suggestions.isEmpty
+        }
+    }
+
+    private func updateSuggestions() {
+        if regexMode {
+            suggestions = []
+            suggestionIndex = -1
+            return
+        }
+
+        if query.hasPrefix("/") && !query.contains(" ") {
+            populateCommandSuggestions(prefix: query)
+            return
+        }
+
+        let effectiveCursor = max(0, min(cursorLocation, query.count))
+        guard let parsed = parseToken(at: effectiveCursor, in: query) else {
+            suggestions = []
+            suggestionIndex = -1
+            return
+        }
+
+        if let tag = parsed.tag {
+            populateTagValues(tag, partial: parsed.partial)
+            return
+        }
+
+        if !parsed.partial.isEmpty {
+            showAllUnusedKeys(in: query, partial: parsed.partial)
+            return
+        }
+
+        suggestions = []
+        suggestionIndex = -1
+    }
+
+    private func populateCommandSuggestions(prefix: String) {
+        let cmds = commandRegistry.match(prefix: prefix)
+        suggestions = cmds.map { cmd in
+            Suggestion(
+                id: "cmd:\(cmd.name)",
+                label: "/\(cmd.name)",
+                display: "/\(cmd.name)",
+                subtitle: cmd.description,
+                icon: cmd.icon,
+                count: 0,
+                command: cmd
+            )
+        }
+        suggestionIndex = suggestions.isEmpty ? -1 : 0
+    }
+
+    private func tagDescription(_ key: String) -> String {
+        switch key {
+        case "tag": return "Filter items by tag"
+        case "!tag": return "Exclude items with tag"
+        case "collection": return "Scope search to a collection or smart collection"
+        case "type": return "Filter by item type (url, snippet, image, file, audio, email, view, action)"
+        case "is": return "Filter by status (recipe, unread, starred, located, annotated, archived)"
+        case "view": return "Jump to a Stash sidebar view"
+        case "action": return "Run a Stash quick action or command"
+        default: return ""
+        }
+    }
+
+    private func populateTagValues(_ tag: String, partial: String) {
+        struct Candidate {
+            let key: String
+            let display: String
+            let subtitle: String?
+            let icon: String
+            let count: Int
+        }
+        var candidates: [Candidate] = []
+
+        switch tag {
+        case "tag", "!tag":
+            let existing = Set(
+                tokenRanges(in: query).compactMap { r -> String? in
+                    let tok = String(query[r])
+                    guard let colon = tok.firstIndex(of: ":") else { return nil }
+                    let k = canonicalTagName(String(tok[..<colon]).lowercased())
+                    guard k == "tag" || k == "!tag" else { return nil }
+                    let v = String(tok[tok.index(after: colon)...]).replacingOccurrences(of: "\"", with: "").lowercased()
+                    return v == partial ? nil : v
+                }
+            )
+            candidates = store.tags
+                .filter { !existing.contains($0.name.lowercased()) }
+                .map { t in
+                    Candidate(
+                        key: t.name,
+                        display: t.name,
+                        subtitle: nil,
+                        icon: tag == "!tag" ? "tag.slash" : "tag",
+                        count: t.count ?? 0
+                    )
+                }
+
+        case "collection":
+            for col in store.collections {
+                candidates.append(Candidate(
+                    key: col.name,
+                    display: col.name,
+                    subtitle: col.description ?? "Collection",
+                    icon: "folder",
+                    count: 0
+                ))
             }
 
-            // `tag:` check
-            if let match = query.range(of: #"(?:^|\s)tag:(\S*)$"#, options: .regularExpression) {
-                let token = query[match]
-                guard let colonIdx = token.firstIndex(of: ":") else {
-                    await MainActor.run { clearChipDropdown() }
-                    return
-                }
-                let partial = String(token[token.index(after: colonIdx)...]).lowercased()
+        case "type":
+            for itemType in ItemType.allCases {
+                let keyName = itemType == .url ? "url" : itemType.rawValue
+                let count = store.items.filter { $0.type == itemType }.count
+                candidates.append(Candidate(
+                    key: keyName,
+                    display: keyName,
+                    subtitle: itemType.tooltip,
+                    icon: itemType.icon,
+                    count: count
+                ))
+            }
+            candidates.append(Candidate(key: "view", display: "view", subtitle: "Sidebar navigation views", icon: "sidebar.left", count: navigationViewsList.count))
+            candidates.append(Candidate(key: "action", display: "action", subtitle: "Quick actions & commands", icon: "bolt.fill", count: quickActionsList.count))
 
-                let existing = Set(
-                    query.matches(of: /tag:(\S+)/).map { String($0.output.1).lowercased() }
-                )
-                
-                let matches = store.tags
-                    .filter { tag in
-                        let lower = tag.name.lowercased()
-                        let isMatch = partial.isEmpty || lower.contains(partial)
-                        return isMatch && !existing.contains(lower)
+        case "is":
+            let seenIDs = store.seenItemIDs
+            candidates = [
+                Candidate(key: "recipe", display: "recipe", subtitle: "Items with recipe cards or #recipe", icon: "fork.knife", count: store.items.filter(\.isRecipe).count),
+                Candidate(key: "unread", display: "unread", subtitle: "Unseen items", icon: "circle.fill", count: store.items.filter { !seenIDs.contains($0.id) }.count),
+                Candidate(key: "starred", display: "starred", subtitle: "Starred items (#fav)", icon: "star.fill", count: store.items.filter { $0.tags?.contains(where: { $0.name.lowercased() == "fav" }) ?? false }.count),
+                Candidate(key: "located", display: "located", subtitle: "Geotagged items with map coordinates", icon: "mappin.and.ellipse", count: store.items.filter { $0.location != nil }.count),
+                Candidate(key: "annotated", display: "annotated", subtitle: "Items with notes", icon: "note.text", count: store.items.filter { !($0.notes?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) }.count),
+                Candidate(key: "archived", display: "archived", subtitle: "Archived items", icon: "archivebox", count: 0)
+            ]
+
+        case "view":
+            candidates = navigationViewsList.map { v in
+                Candidate(key: v.title, display: v.title, subtitle: v.subtitle, icon: v.icon, count: 0)
+            }
+
+        case "action":
+            candidates = quickActionsList.map { a in
+                Candidate(key: a.title, display: a.title, subtitle: a.subtitle, icon: a.icon, count: 0)
+            }
+
+        default:
+            suggestions = []
+            suggestionIndex = -1
+            return
+        }
+
+        let filtered = candidates
+            .filter { c in
+                partial.isEmpty || c.key.lowercased().contains(partial) || c.display.lowercased().contains(partial)
+            }
+            .sorted { a, b in
+                if !partial.isEmpty {
+                    let aPre = a.display.lowercased().hasPrefix(partial)
+                    let bPre = b.display.lowercased().hasPrefix(partial)
+                    if aPre != bPre { return aPre }
+                }
+                if a.count != b.count { return a.count > b.count }
+                return a.display.localizedCaseInsensitiveCompare(b.display) == .orderedAscending
+            }
+            .prefix(25)
+
+        suggestions = filtered.map { c in
+            let safeKey = (c.key.contains(" ") || c.key.contains(",")) ? "\"\(c.key)\"" : c.key
+            return Suggestion(
+                id: "val:\(tag):\(c.key.lowercased())",
+                label: "\(tag):\(safeKey)",
+                display: "\(tag):\(c.display)",
+                subtitle: c.subtitle,
+                icon: c.icon,
+                count: c.count,
+                command: nil
+            )
+        }
+        suggestionIndex = suggestions.isEmpty ? -1 : 0
+    }
+
+    private func completeSuggestion(_ label: String) {
+        let effectiveCursor = max(0, min(cursorLocation, query.count))
+        guard let parsed = parseToken(at: effectiveCursor, in: query) else { return }
+
+        let trailingSpace = label.hasSuffix(":") ? "" : " "
+        var newQuery = query
+        newQuery.replaceSubrange(parsed.range, with: label + trailingSpace)
+
+        lastSetQuery = newQuery
+        query = newQuery
+
+        let prefix = query[query.startIndex..<parsed.range.lowerBound]
+        let newCursor = prefix.count + label.count + trailingSpace.count
+        pendingCursor = newCursor
+        cursorLocation = newCursor
+
+        suggestions = []
+        suggestionIndex = -1
+
+        if label.hasSuffix(":") {
+            let tag = canonicalTagName(String(label.dropLast()))
+            populateTagValues(tag, partial: "")
+        } else {
+            debounceSearch(newQuery)
+        }
+    }
+
+    private func iconForTag(_ label: String) -> String {
+        let rawKey = label.split(separator: ":").first.map(String.init)?.lowercased() ?? label.lowercased()
+        let key = canonicalTagName(rawKey)
+        switch key {
+        case "tag": return "tag"
+        case "!tag": return "tag.slash"
+        case "collection": return "folder"
+        case "type": return "square.grid.2x2"
+        case "is": return "sparkles"
+        case "view": return "sidebar.left"
+        case "action": return "bolt.fill"
+        default: return "tag"
+        }
+    }
+
+    // MARK: - Built-in Views & Quick Actions Catalog
+
+    private struct ViewDescriptor {
+        let id: String
+        let title: String
+        let subtitle: String
+        let icon: String
+        let nav: NavigationItem
+    }
+
+    private var navigationViewsList: [ViewDescriptor] {
+        var list: [ViewDescriptor] = [
+            ViewDescriptor(id: "allItems", title: "All Items", subtitle: "Browse all stashed items", icon: "tray.full", nav: .allItems),
+            ViewDescriptor(id: "inbox", title: "Inbox", subtitle: "Feed candidates, reading queue & resurfaced items", icon: "tray.and.arrow.down", nav: .inbox),
+            ViewDescriptor(id: "starred", title: "Starred", subtitle: "Favorite items tagged #fav", icon: "star", nav: .starred),
+            ViewDescriptor(id: "moments", title: "Moments", subtitle: "Photo & location clusters", icon: "photo.on.rectangle.angled", nav: .moments),
+            ViewDescriptor(id: "tagGraph", title: "Tag Graph", subtitle: "Interactive tag co-occurrence graph", icon: "point.3.connected.trianglepath.dotted", nav: .tagGraph),
+            ViewDescriptor(id: "rules", title: "Rules", subtitle: "Automated ingestion & tagging rules", icon: "slider.horizontal.3", nav: .rules),
+            ViewDescriptor(id: "ruleActivity", title: "Rule Activity", subtitle: "Recent rule execution logs", icon: "list.bullet.clipboard", nav: .ruleActivity),
+            ViewDescriptor(id: "dupes", title: "Duplicates", subtitle: "Find and merge duplicate items", icon: "rectangle.on.rectangle", nav: .dupes),
+            ViewDescriptor(id: "check", title: "Health Check", subtitle: "Broken links, missing files & orphans", icon: "checkmark.shield", nav: .check),
+            ViewDescriptor(id: "stats", title: "Statistics", subtitle: "Library size, item breakdown & growth", icon: "chart.bar", nav: .stats),
+            ViewDescriptor(id: "archive", title: "Archive", subtitle: "Archived items", icon: "archivebox", nav: .archive)
+        ]
+        for col in store.collections {
+            list.append(ViewDescriptor(
+                id: "col-\(col.name)",
+                title: col.name,
+                subtitle: "Open Collection",
+                icon: "folder",
+                nav: .collection(col)
+            ))
+        }
+        for saved in store.savedSearches {
+            list.append(ViewDescriptor(
+                id: "smart-\(saved.name)",
+                title: saved.name,
+                subtitle: "Smart Collection (\(saved.query))",
+                icon: "sparkles",
+                nav: .savedSearch(saved)
+            ))
+        }
+        return list
+    }
+
+    private struct ActionDescriptor {
+        let id: String
+        let title: String
+        let subtitle: String
+        let icon: String
+        let perform: () -> Void
+    }
+
+    private var quickActionsList: [ActionDescriptor] {
+        [
+            ActionDescriptor(
+                id: "add-item",
+                title: "Add Item…",
+                subtitle: "Add a URL, file, or snippet to Stash (A)",
+                icon: "plus.circle.fill",
+                perform: { NotificationCenter.default.post(name: .stashOpenAddItem, object: nil) }
+            ),
+            ActionDescriptor(
+                id: "fetch-url",
+                title: "Fetch Files from URL…",
+                subtitle: "Discover and import images, videos, or recipes from a web page (⇧⌘U)",
+                icon: "link.badge.plus",
+                perform: { NotificationCenter.default.post(name: .stashOpenFetchURL, object: nil) }
+            ),
+            ActionDescriptor(
+                id: "new-collection",
+                title: "New Collection…",
+                subtitle: "Create a new static collection",
+                icon: "folder.badge.plus",
+                perform: { NotificationCenter.default.post(name: .stashOpenAddCollection, object: nil) }
+            ),
+            ActionDescriptor(
+                id: "import-bookmarks",
+                title: "Import Bookmarks…",
+                subtitle: "Import browser bookmarks from Chrome or Firefox",
+                icon: "book.circle",
+                perform: { NotificationCenter.default.post(name: .stashOpenImportBookmarks, object: nil) }
+            ),
+            ActionDescriptor(
+                id: "import-history",
+                title: "Import Browser History…",
+                subtitle: "Import browsing history entries",
+                icon: "clock.arrow.circlepath",
+                perform: { NotificationCenter.default.post(name: .stashOpenImportHistory, object: nil) }
+            ),
+            ActionDescriptor(
+                id: "check",
+                title: "Run Health Check",
+                subtitle: "Verify blobs, broken URLs, and orphaned files (/check)",
+                icon: "checkmark.shield",
+                perform: { store.handleGlobalAction(.showCheck) }
+            ),
+            ActionDescriptor(
+                id: "dupes",
+                title: "Find Duplicate Items",
+                subtitle: "Scan library for near-duplicate items (/dupes)",
+                icon: "rectangle.on.rectangle",
+                perform: { store.handleGlobalAction(.showDupes) }
+            ),
+            ActionDescriptor(
+                id: "stats",
+                title: "Show Library Statistics",
+                subtitle: "View counts, storage usage, and tag distribution (/stats)",
+                icon: "chart.bar",
+                perform: { store.handleGlobalAction(.showStats) }
+            ),
+            ActionDescriptor(
+                id: "backup",
+                title: "Trigger Immediate Backup",
+                subtitle: "Create a database backup snapshot (/backup)",
+                icon: "externaldrive.badge.checkmark",
+                perform: { store.handleGlobalAction(.backup) }
+            ),
+            ActionDescriptor(
+                id: "reindex",
+                title: "Rebuild Search Index",
+                subtitle: "Reindex full-text search table (/reindex)",
+                icon: "arrow.clockwise.circle",
+                perform: { store.handleGlobalAction(.reindex) }
+            ),
+            ActionDescriptor(
+                id: "data-dir",
+                title: "Open Data Directory in Finder",
+                subtitle: "Reveal ~/.stash in Finder (/data)",
+                icon: "folder",
+                perform: { store.handleGlobalAction(.openDataDir) }
+            )
+        ]
+    }
+
+    // MARK: - Search & Match Computation
+
+    private enum SearchScope: Equatable {
+        case all
+        case itemType(ItemType)
+        case view
+        case action
+    }
+
+    private struct ParsedStashQuery {
+        var scope: SearchScope
+        var textQuery: String
+        var tagTokens: [String]
+        var excludeTagTokens: [String]
+        var collectionToken: String?
+        var isPredicates: [String]
+        var archived: Bool
+    }
+
+    private func parseStashQuery(_ input: String) -> ParsedStashQuery {
+        let trimmed = input.trimmingCharacters(in: .whitespaces)
+        if regexMode {
+            return ParsedStashQuery(
+                scope: .all,
+                textQuery: trimmed,
+                tagTokens: [],
+                excludeTagTokens: [],
+                collectionToken: nil,
+                isPredicates: [],
+                archived: false
+            )
+        }
+
+        var scope: SearchScope = .all
+        var tagTokens: [String] = []
+        var excludeTagTokens: [String] = []
+        var collectionToken: String? = nil
+        var isPredicates: [String] = []
+        var archived = false
+        var freeWords: [String] = []
+
+        for r in tokenRanges(in: trimmed) {
+            let token = String(trimmed[r])
+            if let colon = token.firstIndex(of: ":") {
+                let rawKey = String(token[..<colon]).lowercased()
+                let key = canonicalTagName(rawKey)
+                var val = String(token[token.index(after: colon)...])
+                if val.hasPrefix("\"") { val.removeFirst() }
+                if val.hasSuffix("\"") { val.removeLast() }
+
+                if globalStashFieldTags.contains(key) {
+                    switch key {
+                    case "tag":
+                        if !val.isEmpty { tagTokens.append(val) }
+                    case "!tag":
+                        if !val.isEmpty { excludeTagTokens.append(val) }
+                    case "collection":
+                        if !val.isEmpty { collectionToken = val }
+                    case "type":
+                        let lowerVal = val.lowercased()
+                        if lowerVal == "view" || lowerVal == "views" {
+                            scope = .view
+                        } else if lowerVal == "action" || lowerVal == "actions" {
+                            scope = .action
+                        } else if let resolved = StashStore.resolveItemType(from: lowerVal) {
+                            scope = .itemType(resolved)
+                        }
+                    case "view":
+                        scope = .view
+                        if !val.isEmpty { freeWords.append(val) }
+                    case "action":
+                        scope = .action
+                        if !val.isEmpty { freeWords.append(val) }
+                    case "is":
+                        let lowerVal = val.lowercased()
+                        if lowerVal == "archived" {
+                            archived = true
+                        } else if lowerVal == "fav" || lowerVal == "starred" {
+                            tagTokens.append("fav")
+                        } else if !lowerVal.isEmpty {
+                            isPredicates.append(lowerVal)
+                        }
+                    default:
+                        break
                     }
-                
-                await MainActor.run {
-                    tagMatches = matches
-                    tagActiveIndex = 0
-                    collectionMatches = []
-                    collectionActiveIndex = 0
-                    commandMatches = []
+                    continue
                 }
-                return
             }
-
-            await MainActor.run { clearChipDropdown() }
-        }
-    }
-
-    private func clearChipDropdown() {
-        tagMatches = []
-        tagActiveIndex = 0
-        collectionMatches = []
-        collectionActiveIndex = 0
-        commandMatches = []
-        commandActiveIndex = 0
-    }
-
-    /// Number of items in whichever chip dropdown is active (at most
-    /// one is non-empty at a time). Backs the key handlers'
-    /// "is there a dropdown to navigate?" check.
-    private var chipDropdownCount: Int {
-        if !commandMatches.isEmpty { return commandMatches.count }
-        return !tagMatches.isEmpty ? tagMatches.count : collectionMatches.count
-    }
-
-    /// Whether any chip dropdown is open right now.
-    private var hasChipDropdown: Bool { chipDropdownCount > 0 }
-
-    /// Tab-opens-dropdown: if we're already in a `tag:` value context,
-    /// `recomputeSuggestions` has it covered. Otherwise treat the trailing
-    /// bare word as a key partial and, if it's a prefix of the sole key
-    /// (`tag:`), replace it with `tag:` — no trailing space — chaining into
-    /// value completion.
-    private func openDropdownIfPossible() {
-        // Already inside a chip-completion context — recompute
-        // covers it.
-        if query.range(of: #"(?:^|\s)tag:\S*$"#, options: .regularExpression) != nil { return }
-        if query.range(of: #"(?:^|\s)collection:\S*$"#, options: .regularExpression) != nil { return }
-
-        let partial: String
-        if let wsIdx = query.lastIndex(where: { $0.isWhitespace }) {
-            partial = String(query[query.index(after: wsIdx)...])
-        } else {
-            partial = query
+            freeWords.append(token)
         }
 
-        // Pick whichever chip key the trailing bare word is a prefix
-        // of. Both are valid prefixes of "c…" → only "collection:"
-        // matches; "t…" → only "tag:". An ambiguous empty partial
-        // (Tab on whitespace) defaults to tag: since that's the
-        // original behavior and the more common operation.
-        let lowered = partial.lowercased()
-        let key: String
-        if "collection:".hasPrefix(lowered) && !lowered.isEmpty && lowered.first == "c" {
-            key = "collection:"
-        } else if "tag:".hasPrefix(lowered) {
-            key = "tag:"
-        } else {
-            return
-        }
-
-        let end = query.endIndex
-        let start = query.index(end, offsetBy: -partial.count)
-        var updated = query
-        updated.replaceSubrange(start..<end, with: key)
-        query = updated
+        return ParsedStashQuery(
+            scope: scope,
+            textQuery: freeWords.joined(separator: " ").trimmingCharacters(in: .whitespaces),
+            tagTokens: tagTokens,
+            excludeTagTokens: excludeTagTokens,
+            collectionToken: collectionToken,
+            isPredicates: isPredicates,
+            archived: archived
+        )
     }
 
-    private func commitCommand(_ cmd: GlobalCommand) {
-        store.handleGlobalAction(cmd.action)
-        dismiss()
-    }
-
-    private func commitTag(_ tagName: String) {
-        guard let range = query.range(of: #"(?:^|\s)tag:\S*$"#, options: .regularExpression) else { return }
-        let before = query[query.startIndex..<range.lowerBound]
-        let prefix = query[range].hasPrefix(" ") ? " " : ""
-        query = "\(before)\(prefix)tag:\(tagName) "
-        tagMatches = []
-        tagActiveIndex = 0
-        debounceSearch(query)
-    }
-
-    private func tabInsertSingle(_ tagName: String) {
-        guard let range = query.range(of: #"(?:^|\s)tag:\S*$"#, options: .regularExpression) else { return }
-        let before = query[query.startIndex..<range.lowerBound]
-        let prefix = query[range].hasPrefix(" ") ? " " : ""
-        query = "\(before)\(prefix)tag:\(tagName)"
-    }
-
-    private func commitCollection(_ name: String) {
-        guard let range = query.range(of: #"(?:^|\s)collection:\S*$"#, options: .regularExpression) else { return }
-        let before = query[query.startIndex..<range.lowerBound]
-        let prefix = query[range].hasPrefix(" ") ? " " : ""
-        query = "\(before)\(prefix)collection:\(quotedIfNeeded(name)) "
-        clearChipDropdown()
-        debounceSearch(query)
-    }
-
-    private func tabInsertSingleCollection(_ name: String) {
-        guard let range = query.range(of: #"(?:^|\s)collection:\S*$"#, options: .regularExpression) else { return }
-        let before = query[query.startIndex..<range.lowerBound]
-        let prefix = query[range].hasPrefix(" ") ? " " : ""
-        query = "\(before)\(prefix)collection:\(quotedIfNeeded(name))"
-    }
-
-    /// Wrap a value in double quotes when it contains whitespace
-    /// (collection names like "Mark's Favorite Fishing"). Single
-    /// words pass through bare. The parse-out side accepts both
-    /// shapes — see extractCollectionToken in debounceSearch.
-    private func quotedIfNeeded(_ value: String) -> String {
-        if value.contains(where: { $0.isWhitespace }) {
-            return "\"\(value)\""
-        }
-        return value
-    }
-
-    /// Pull the first `collection:` value out of the query, handling
-    /// both quoted ("Mark's Favorite Fishing") and bare (singleword)
-    /// forms. Returns nil when no collection chip is present.
-    /// "First" rather than "last" because the search filter is
-    /// single-target — surfacing the first one matches how users
-    /// read left-to-right.
-    private func extractCollectionToken(from q: String) -> String? {
-        if let m = q.firstMatch(of: /collection:"([^"]+)"/) {
-            return String(m.output.1)
-        }
-        if let m = q.firstMatch(of: /collection:(\S+)/) {
-            return String(m.output.1)
-        }
-        return nil
-    }
-
-    /// Parse `tag:xxx` tokens out of the query and pass them as CLI
-    /// `--tag` flags. In regex mode the remainder of the query is the
-    /// RE2 pattern; in free-text mode it's the FTS query. Tag tokens
-    /// apply in either mode so the user can scope a regex by tag.
-    private func debounceSearch(_ query: String) {
+    private func debounceSearch(_ currentQuery: String) {
         searchTask?.cancel()
-        guard !query.isEmpty else {
+        let trimmed = currentQuery.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else {
             results = []
             regexError = nil
+            searchError = nil
+            rebuildMatches()
             return
         }
-        // Tag tokens are only honored in non-regex mode — treating
-        // `tag:` as a tag filter inside an arbitrary regex would
-        // mangle patterns the user actually meant to match (e.g.
-        // "tag:.+" intending "literal `tag:` then anything").
-        let tagTokens: [String]
-        let collectionToken: String?
-        let textQuery: String
-        if regexMode {
-            tagTokens = []
-            collectionToken = nil
-            textQuery = query
-        } else {
-            tagTokens = query.matches(of: /tag:(\S+)/).map { String($0.output.1) }
-            collectionToken = extractCollectionToken(from: query)
-            textQuery = query
-                .replacing(/tag:\S*/, with: "")
-                // Strip both quoted ("name with spaces") and bare
-                // (singleword) collection tokens before passing
-                // the remainder as FTS query.
-                .replacing(/collection:"[^"]*"/, with: "")
-                .replacing(/collection:\S*/, with: "")
-                .trimmingCharacters(in: .whitespaces)
+
+        let parsed = parseStashQuery(trimmed)
+        if parsed.scope == .view || parsed.scope == .action {
+            results = []
+            regexError = nil
+            searchError = nil
+            rebuildMatches()
+            return
         }
 
+        let textQuery = parsed.textQuery
         let isSemantic = !regexMode && textQuery.hasPrefix("~")
         var finalQuery = isSemantic ? String(textQuery.dropFirst()).trimmingCharacters(in: .whitespaces) : textQuery
 
-        // For regex mode, strip exactly one pair of wrapping slashes (e.g. /pattern/ -> pattern)
-        // and validate the pattern.
         if regexMode {
             if finalQuery.hasPrefix("/") && finalQuery.hasSuffix("/") && finalQuery.count >= 2 {
                 finalQuery = String(finalQuery.dropFirst().dropLast())
             }
-            
-            // Block searches on empty patterns (avoids matching everything)
-            if finalQuery.isEmpty {
+            let patternToValidate = finalQuery.hasPrefix("!") ? String(finalQuery.dropFirst()) : finalQuery
+            if patternToValidate.isEmpty {
                 results = []
                 regexError = nil
+                rebuildMatches()
                 return
             }
-
-            // Pre-validate the regex client-side so the user gets fast
-            // feedback on syntax errors instead of an empty result list.
-            if (try? NSRegularExpression(pattern: finalQuery)) == nil {
-                regexError = "Invalid regex pattern"
+            if (try? NSRegularExpression(pattern: patternToValidate)) == nil {
+                regexError = "Invalid regex"
                 results = []
+                rebuildMatches()
                 return
             }
             regexError = nil
@@ -1020,8 +1334,17 @@ struct QuickSearchView: View {
             regexError = nil
         }
 
+        let itemTypeFilter: ItemType? = {
+            if case .itemType(let t) = parsed.scope { return t }
+            return nil
+        }()
+        let seenIDs = store.seenItemIDs
+
+        // Rebuild view/action matches immediately while CLI search is in flight
+        rebuildMatches()
+
         searchTask = Task {
-            try? await Task.sleep(for: .milliseconds(200))
+            try? await Task.sleep(for: .milliseconds(140))
             guard !Task.isCancelled else { return }
             do {
                 let found: [StashItem]
@@ -1031,143 +1354,683 @@ struct QuickSearchView: View {
                         limit: 50,
                         regex: finalQuery
                     )
-                } else if finalQuery.isEmpty && (!tagTokens.isEmpty || collectionToken != nil) {
+                } else if finalQuery.isEmpty {
                     found = try await StashCLI.shared.listItems(
-                        tags: tagTokens,
-                        collection: collectionToken,
-                        limit: 20
+                        type: itemTypeFilter,
+                        tags: parsed.tagTokens,
+                        excludeTags: parsed.excludeTagTokens,
+                        collection: parsed.collectionToken,
+                        archived: parsed.archived,
+                        limit: 40
                     )
                 } else {
                     found = try await StashCLI.shared.searchItems(
                         query: finalQuery,
-                        tags: tagTokens,
-                        collection: collectionToken,
-                        limit: 20,
+                        type: itemTypeFilter,
+                        tags: parsed.tagTokens,
+                        excludeTags: parsed.excludeTagTokens,
+                        collection: parsed.collectionToken,
+                        archived: parsed.archived,
+                        limit: 40,
                         semantic: isSemantic
                     )
                 }
-                if !Task.isCancelled {
-                    results = found
+                guard !Task.isCancelled else { return }
+                let filtered = parsed.isPredicates.isEmpty
+                    ? found
+                    : found.filter { StashStore.matchesIsPredicates($0, predicates: parsed.isPredicates, seenIDs: seenIDs) }
+                await MainActor.run {
+                    results = filtered
                     searchError = nil
+                    rebuildMatches()
                 }
             } catch {
-                if !Task.isCancelled {
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
                     searchError = error.localizedDescription
                     results = []
+                    rebuildMatches()
                 }
             }
         }
+    }
+
+    private func rebuildMatches() {
+        var built: [SearchResult] = []
+        let trimmed = query.trimmingCharacters(in: .whitespaces)
+
+        if trimmed.isEmpty {
+            // 1. Saved Search History (Recent or Frequent based on browseMode)
+            if browseMode == .frequent {
+                for entry in history.prefix(8) {
+                    built.append(makeHistoryResult(entry))
+                }
+            }
+
+            // 2. Recent Items from navigationHistory (plus top recent items from store)
+            var seenItemIDs = Set<String>()
+            for snap in store.navigationHistory.reversed() {
+                if let itemID = snap.selectedItemID,
+                   !seenItemIDs.contains(itemID),
+                   let item = store.items.first(where: { $0.id == itemID }) {
+                    seenItemIDs.insert(itemID)
+                    built.append(makeItemResult(item, badgeOverride: "Recent"))
+                }
+                if seenItemIDs.count >= 4 { break }
+            }
+            if seenItemIDs.count < 3 {
+                for item in store.items.prefix(4) where !seenItemIDs.contains(item.id) {
+                    seenItemIDs.insert(item.id)
+                    built.append(makeItemResult(item, badgeOverride: "Recent"))
+                    if seenItemIDs.count >= 4 { break }
+                }
+            }
+
+            // 3. Recent Saved Searches (when browseMode == .recent)
+            if browseMode == .recent {
+                for entry in history.prefix(6) {
+                    built.append(makeHistoryResult(entry))
+                }
+            }
+
+            // 4. Quick Actions
+            for act in quickActionsList.prefix(5) {
+                built.append(SearchResult(
+                    id: "action-\(act.id)",
+                    title: act.title,
+                    subtitle: act.subtitle,
+                    typeBadge: "Action",
+                    systemImage: act.icon,
+                    payload: .action,
+                    action: {
+                        act.perform()
+                        closePanel()
+                    }
+                ))
+            }
+
+            // 5. Filter Starters
+            let starters: [(id: String, title: String, subtitle: String, icon: String, token: String)] = [
+                ("starter-tag", "Filter by Tag", "Scope search by tag with tag:", "tag", "tag:"),
+                ("starter-col", "Filter by Collection", "Scope search to a collection with collection:", "folder", "collection:"),
+                ("starter-recipe", "Filter by Recipes", "Show stashed recipes with is:recipe", "fork.knife", "is:recipe "),
+                ("starter-type", "Filter by Item Type", "Scope search by item type with type:", "square.grid.2x2", "type:")
+            ]
+            for s in starters {
+                built.append(SearchResult(
+                    id: s.id,
+                    title: s.title,
+                    subtitle: s.subtitle,
+                    typeBadge: "Filter",
+                    systemImage: s.icon,
+                    payload: .filter(s.token),
+                    action: {
+                        cursorLocation = s.token.count
+                        pendingCursor = s.token.count
+                        query = s.token
+                    }
+                ))
+            }
+
+            matches = built
+            activeIndex = built.isEmpty ? -1 : min(max(activeIndex, 0), built.count - 1)
+            return
+        }
+
+        let parsed = parseStashQuery(trimmed)
+        let lowerTerm = parsed.textQuery.lowercased()
+        let hasItemOnlyFilters = !parsed.tagTokens.isEmpty || !parsed.excludeTagTokens.isEmpty || parsed.collectionToken != nil || !parsed.isPredicates.isEmpty || parsed.archived
+
+        // Include matching Quick Actions when scope is .all or .action
+        if !regexMode && !hasItemOnlyFilters && (parsed.scope == .all || parsed.scope == .action) {
+            for act in quickActionsList {
+                if parsed.scope == .action && lowerTerm.isEmpty {
+                    built.append(SearchResult(
+                        id: "action-\(act.id)",
+                        title: act.title,
+                        subtitle: act.subtitle,
+                        typeBadge: "Action",
+                        systemImage: act.icon,
+                        payload: .action,
+                        action: {
+                            act.perform()
+                            closePanel()
+                        }
+                    ))
+                } else if !lowerTerm.isEmpty && (act.title.lowercased().contains(lowerTerm) || act.subtitle.lowercased().contains(lowerTerm)) {
+                    built.append(SearchResult(
+                        id: "action-\(act.id)",
+                        title: act.title,
+                        subtitle: act.subtitle,
+                        typeBadge: "Action",
+                        systemImage: act.icon,
+                        payload: .action,
+                        action: {
+                            act.perform()
+                            closePanel()
+                        }
+                    ))
+                }
+            }
+        }
+
+        // Include matching Navigation Views when scope is .all or .view
+        if !regexMode && !hasItemOnlyFilters && (parsed.scope == .all || parsed.scope == .view) {
+            for v in navigationViewsList {
+                if parsed.scope == .view && lowerTerm.isEmpty {
+                    built.append(SearchResult(
+                        id: "view-\(v.id)",
+                        title: v.title,
+                        subtitle: v.subtitle,
+                        typeBadge: "View",
+                        systemImage: v.icon,
+                        payload: .view(v.nav),
+                        action: {
+                            store.navigation = v.nav
+                            closePanel()
+                        }
+                    ))
+                } else if !lowerTerm.isEmpty && (v.title.lowercased().contains(lowerTerm) || v.subtitle.lowercased().contains(lowerTerm)) {
+                    built.append(SearchResult(
+                        id: "view-\(v.id)",
+                        title: v.title,
+                        subtitle: v.subtitle,
+                        typeBadge: "View",
+                        systemImage: v.icon,
+                        payload: .view(v.nav),
+                        action: {
+                            store.navigation = v.nav
+                            closePanel()
+                        }
+                    ))
+                }
+            }
+        }
+
+        // Stash Items from CLI search/list
+        if parsed.scope != .view && parsed.scope != .action {
+            for item in results {
+                built.append(makeItemResult(item))
+            }
+        }
+
+        matches = built
+        activeIndex = built.isEmpty ? -1 : 0
+    }
+
+    private func makeItemResult(_ item: StashItem, badgeOverride: String? = nil) -> SearchResult {
+        let tagLine = (item.tags ?? []).isEmpty
+            ? nil
+            : item.tags!.map { "#\($0.name)" }.joined(separator: " ")
+        let sub = tagLine ?? item.url ?? item.notes?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return SearchResult(
+            id: "\(badgeOverride ?? "item")-\(item.id)",
+            title: item.title,
+            subtitle: sub,
+            typeBadge: badgeOverride ?? (item.isRecipe ? "Recipe" : item.type.label),
+            systemImage: item.isRecipe ? "fork.knife" : item.iconName,
+            payload: .item(item),
+            action: {
+                commitItemResult(item)
+            }
+        )
+    }
+
+    private func makeHistoryResult(_ entry: SearchHistoryEntry) -> SearchResult {
+        let sub = browseMode == .recent
+            ? "Saved search • \(entry.lastUsedAt.formatted(.relative(presentation: .numeric)))"
+            : "Saved search • Used \(entry.count)×"
+        return SearchResult(
+            id: "history-\(entry.query)",
+            title: entry.query,
+            subtitle: sub,
+            typeBadge: "History",
+            systemImage: browseMode == .recent ? "clock" : "chart.bar",
+            payload: .history(entry),
+            action: {
+                cursorLocation = entry.query.count
+                pendingCursor = entry.query.count
+                query = entry.query
+            }
+        )
+    }
+
+    private func commitSelectedMatch() {
+        guard activeIndex >= 0 && activeIndex < matches.count else { return }
+        let selected = matches[activeIndex]
+        selected.action()
+    }
+
+    private func commitItemResult(_ item: StashItem) {
+        let committed = query.trimmingCharacters(in: .whitespaces)
+        if !committed.isEmpty {
+            Task {
+                try? await StashCLI.shared.recordSearchClick(query: committed, itemID: item.id)
+            }
+        }
+        store.selectItemByID(item.id, revealInList: true)
+        closePanel()
+    }
+
+    private func reloadHistory() async {
+        do {
+            history = try await StashCLI.shared.listSearchHistory(
+                sort: browseMode.rawValue,
+                limit: 25
+            )
+        } catch {
+            history = []
+        }
+    }
+
+    // MARK: - Result Row & Context Menu
+
+    @ViewBuilder
+    private func resultRow(idx: Int, match: SearchResult) -> some View {
+        let active = idx == activeIndex
+        Button {
+            activeIndex = idx
+            match.action()
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: match.systemImage)
+                    .foregroundStyle(active ? Color.accentColor : .secondary)
+                    .frame(width: 20)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(match.title)
+                        .font(.body.weight(active ? .medium : .regular))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    if let sub = match.subtitle, !sub.isEmpty {
+                        Text(sub)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer()
+                Text(match.typeBadge)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.secondary.opacity(0.14), in: RoundedRectangle(cornerRadius: 4))
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background(active ? Color.accentColor.opacity(0.2) : Color.clear)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .pointingHandCursor()
+        .contextMenu {
+            resultContextMenu(for: match)
+        }
+    }
+
+    @ViewBuilder
+    private func resultContextMenu(for match: SearchResult) -> some View {
+        switch match.payload {
+        case .item(let item):
+            Button("Open") {
+                store.openItem(id: item.id)
+                closePanel()
+            }
+            Button("Reveal in List") {
+                commitItemResult(item)
+            }
+            Button("Send to Phone (⌘⇧O)") {
+                if let idx = matches.firstIndex(where: { $0.id == match.id }) {
+                    activeIndex = idx
+                }
+                phoneHandoffShown = true
+            }
+            if let url = item.url, !url.isEmpty {
+                Button("Copy URL") {
+                    let pb = NSPasteboard.general
+                    pb.clearContents()
+                    pb.setString(url, forType: .string)
+                }
+            }
+            Button("Edit…") {
+                store.selectItemByID(item.id, revealInList: true)
+                NotificationCenter.default.post(name: .stashOpenEditItem, object: nil)
+                closePanel()
+            }
+            Divider()
+            Button("Archive") {
+                store.archiveItems(ids: [item.id])
+            }
+            Button("Delete", role: .destructive) {
+                store.deleteItem(id: item.id)
+            }
+        case .history(let entry):
+            Button("Run Search") {
+                match.action()
+            }
+            Divider()
+            Button("Delete from History", role: .destructive) {
+                Task {
+                    try? await StashCLI.shared.deleteSearchHistoryEntry(query: entry.query)
+                    await reloadHistory()
+                    rebuildMatches()
+                }
+            }
+        default:
+            Button("Select") {
+                match.action()
+            }
+        }
+    }
+
+    // MARK: - Right-Hand Live Preview Pane
+
+    @ViewBuilder
+    private func previewPane(for match: SearchResult) -> some View {
+        switch match.payload {
+        case .item(let item):
+            itemPreview(for: item)
+        case .history(let entry):
+            historyPreview(for: entry)
+        case .view:
+            genericPreview(for: match, hint: "Press Enter or Return to navigate to view")
+        case .action:
+            genericPreview(for: match, hint: "Press Enter or Return to run action")
+        case .filter:
+            genericPreview(for: match, hint: "Press Enter or Return to insert filter chip")
+        }
+    }
+
+    @ViewBuilder
+    private func itemPreview(for item: StashItem) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                // Thumbnail / Image preview banner
+                if let thumbRel = item.thumbnailPath {
+                    AsyncThumbnailImage(relativePath: thumbRel) {
+                        EmptyView()
+                    } configure: { img in
+                        AnyView(
+                            img.resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 150)
+                                .clipped()
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                        )
+                    }
+                }
+
+                // Title & badges
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(item.title)
+                        .font(.title3.bold())
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    HStack(spacing: 6) {
+                        Label(item.type.label, systemImage: item.iconName)
+                            .font(.caption2.weight(.semibold))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.accentColor.opacity(0.15), in: Capsule())
+                            .foregroundStyle(Color.accentColor)
+
+                        if item.isRecipe {
+                            Label("Recipe", systemImage: "fork.knife")
+                                .font(.caption2.weight(.semibold))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.orange.opacity(0.18), in: Capsule())
+                                .foregroundStyle(.orange)
+                        }
+
+                        if !store.seenItemIDs.contains(item.id) {
+                            Text("Unread")
+                                .font(.caption2.weight(.semibold))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.blue.opacity(0.15), in: Capsule())
+                                .foregroundStyle(.blue)
+                        }
+                    }
+                }
+
+                // Metadata rows
+                VStack(alignment: .leading, spacing: 6) {
+                    if let url = item.url, !url.isEmpty {
+                        Label(url, systemImage: "link")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                            .truncationMode(.middle)
+                    }
+                    if let from = item.fromName {
+                        Label(from, systemImage: "person")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    if let size = item.humanFileSize {
+                        Label("\(size)\(item.mimeType.map { " • \($0)" } ?? "")", systemImage: "doc")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Label("Added \(item.createdAt.formatted(date: .abbreviated, time: .shortened))", systemImage: "calendar")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    if let loc = item.location {
+                        Label(String(format: "%.4f, %.4f", loc.lat, loc.lon), systemImage: "mappin.and.ellipse")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                // Tags & Collections
+                if let tags = item.tags, !tags.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 4) {
+                            ForEach(tags) { tag in
+                                Button {
+                                    toggleChipToken("tag:\(tag.name)")
+                                } label: {
+                                    Text("#\(tag.name)")
+                                        .font(.caption2.weight(.medium))
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(Color.secondary.opacity(0.14), in: Capsule())
+                                        .foregroundStyle(.secondary)
+                                }
+                                .buttonStyle(.plain)
+                                .focusable(false)
+                                .pointingHandCursor()
+                                .help("Click to filter by tag:\(tag.name)")
+                            }
+                        }
+                    }
+                }
+
+                if let cols = item.collections, !cols.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 4) {
+                            ForEach(cols) { col in
+                                Button {
+                                    let safe = col.name.contains(" ") ? "\"\(col.name)\"" : col.name
+                                    toggleChipToken("collection:\(safe)")
+                                } label: {
+                                    Label(col.name, systemImage: "folder")
+                                        .font(.caption2.weight(.medium))
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(Color.accentColor.opacity(0.12), in: Capsule())
+                                        .foregroundStyle(Color.accentColor)
+                                }
+                                .buttonStyle(.plain)
+                                .focusable(false)
+                                .pointingHandCursor()
+                                .help("Click to filter by collection:\(col.name)")
+                            }
+                        }
+                    }
+                }
+
+                // Recipe card preview
+                if let recipe = item.recipe {
+                    Divider()
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 10) {
+                            if let yld = recipe.yield, !yld.isEmpty {
+                                Label(yld, systemImage: "person.2")
+                            }
+                            if let total = recipe.totalTime, !total.isEmpty {
+                                Label(total, systemImage: "clock")
+                            }
+                        }
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+
+                        if !recipe.ingredients.isEmpty {
+                            Text("\(recipe.ingredients.count) ingredients • \(recipe.instructions.count) steps")
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(.primary)
+                        }
+                    }
+                }
+
+                // Notes / Extracted text snippet
+                let bodyText = (item.notes?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 }
+                    ?? (item.extractedText?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 }
+                if let bodyText {
+                    Divider()
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(item.notes?.isEmpty == false ? "Notes" : "Content Preview")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        Text(bodyText)
+                            .font(.caption)
+                            .foregroundStyle(.primary.opacity(0.85))
+                            .lineLimit(6)
+                    }
+                }
+
+                Divider()
+
+                // Quick action buttons
+                HStack(spacing: 8) {
+                    Button {
+                        store.openItem(id: item.id)
+                        closePanel()
+                    } label: {
+                        Label("Open", systemImage: "arrow.up.forward.app")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .focusable(false)
+                    .pointingHandCursor()
+
+                    Button {
+                        commitItemResult(item)
+                    } label: {
+                        Label("Reveal", systemImage: "sidebar.left")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .focusable(false)
+                    .pointingHandCursor()
+
+                    PhoneHandoffButton(
+                        payload: .from(item: item),
+                        controlSize: .small,
+                        externalIsPresented: $phoneHandoffShown
+                    )
+
+                    if let url = item.url, !url.isEmpty {
+                        Button {
+                            let pb = NSPasteboard.general
+                            pb.clearContents()
+                            pb.setString(url, forType: .string)
+                        } label: {
+                            Label("Copy URL", systemImage: "doc.on.doc")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .focusable(false)
+                        .pointingHandCursor()
+                    }
+                }
+            }
+            .padding(14)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    @ViewBuilder
+    private func historyPreview(for entry: SearchHistoryEntry) -> some View {
+        VStack(spacing: 12) {
+            Image(systemName: browseMode == .recent ? "clock.arrow.circlepath" : "chart.bar.xaxis")
+                .font(.system(size: 38))
+                .foregroundStyle(Color.accentColor)
+            Text(entry.query)
+                .font(.headline)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
+            Text("Used \(entry.count) time\(entry.count == 1 ? "" : "s") • Last used \(entry.lastUsedAt.formatted(.relative(presentation: .named)))")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                Button {
+                    cursorLocation = entry.query.count
+                    pendingCursor = entry.query.count
+                    query = entry.query
+                } label: {
+                    Label("Run Search", systemImage: "magnifyingglass")
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .focusable(false)
+                .pointingHandCursor()
+
+                Button(role: .destructive) {
+                    Task {
+                        try? await StashCLI.shared.deleteSearchHistoryEntry(query: entry.query)
+                        await reloadHistory()
+                        rebuildMatches()
+                    }
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .focusable(false)
+                .pointingHandCursor()
+            }
+            .padding(.top, 4)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    @ViewBuilder
+    private func genericPreview(for match: SearchResult, hint: String) -> some View {
+        VStack(spacing: 12) {
+            Image(systemName: match.systemImage)
+                .font(.system(size: 40))
+                .foregroundStyle(Color.accentColor)
+            Text(match.title)
+                .font(.headline)
+            if let sub = match.subtitle {
+                Text(sub)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+            }
+            Text(hint)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .padding(.top, 8)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
-
-// MARK: - TagAwareSearchField
-
-/// NSTextField that funnels Tab, Shift-Tab, arrows, Enter, Escape, and
-/// Ctrl-J/K through a single `onKey` callback.
-struct TagAwareSearchField: NSViewRepresentable {
-    @Binding var query: String
-    @Binding var tagMatches: [StashTag]
-    /// Returns true if the event was consumed.
-    let onKey: (SuggestKey) -> Bool
-
-    func makeNSView(context: Context) -> NSTextField {
-        let field = NoAutoFillTextField()
-        field.placeholderString = "Search stash... (tag:, collection: to filter)"
-        field.isBordered = false
-        field.backgroundColor = .clear
-        field.drawsBackground = false
-        field.font = .preferredFont(forTextStyle: .title3)
-        field.focusRingType = .none
-        field.delegate = context.coordinator
-        field.isAutomaticTextCompletionEnabled = false  // NSView-level suppression
-        context.coordinator.installCtrlJKMonitor(on: field)
-        // Layer-5 interceptor wiring is handled by
-        // NoAutoFillTextField.viewDidMoveToWindow itself — no per
-        // call-site install or DispatchQueue.main.async race needed.
-        // We just need to focus the field once SwiftUI has attached
-        // it to the sheet's window.
-        DispatchQueue.main.async {
-            field.window?.makeFirstResponder(field)
-        }
-        return field
-    }
-
-    func updateNSView(_ nsView: NSTextField, context: Context) {
-        if nsView.stringValue != query {
-            nsView.stringValue = query
-            if let editor = nsView.currentEditor() {
-                editor.selectedRange = NSRange(location: nsView.stringValue.count, length: 0)
-            }
-        }
-    }
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(self)
-    }
-
-    static func dismantleNSView(_ nsView: NSTextField, coordinator: Coordinator) {
-        coordinator.removeCtrlJKMonitor()
-    }
-
-    @MainActor class Coordinator: NSObject, NSTextFieldDelegate {
-        var parent: TagAwareSearchField
-        private var eventMonitor: Any?
-        private weak var field: NSTextField?
-
-        init(_ parent: TagAwareSearchField) {
-            self.parent = parent
-        }
-
-        func controlTextDidChange(_ obj: Notification) {
-            guard let field = obj.object as? NSTextField else { return }
-            parent.query = field.stringValue
-            reapPredictivePanels()
-            for delay in [0.05, 0.15, 0.35, 0.7] {
-                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                    reapPredictivePanels()
-                }
-            }
-        }
-
-        func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-            let key: SuggestKey?
-            switch commandSelector {
-            case #selector(NSResponder.insertTab(_:)):         key = .tab
-            case #selector(NSResponder.insertBacktab(_:)):     key = .shiftTab
-            case #selector(NSResponder.moveDown(_:)):          key = .arrowDown
-            case #selector(NSResponder.moveUp(_:)):            key = .arrowUp
-            case #selector(NSResponder.insertNewline(_:)):     key = .enter
-            case #selector(NSResponder.cancelOperation(_:)):   key = .escape
-            default: key = nil
-            }
-            guard let key else { return false }
-            return parent.onKey(key)
-        }
-
-        func installCtrlJKMonitor(on field: NSTextField) {
-            self.field = field
-            // Ctrl-J/K don't map to AppKit selectors — intercept via NSEvent.
-            eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-                guard let self else { return event }
-                guard event.modifierFlags.contains(.control) else { return event }
-                guard let field = self.field, field.window?.firstResponder is NSTextView else { return event }
-                let char = event.charactersIgnoringModifiers
-                let key: SuggestKey?
-                switch char {
-                case "j": key = .ctrlJ
-                case "k": key = .ctrlK
-                default: key = nil
-                }
-                guard let key else { return event }
-                let consumed = self.parent.onKey(key)
-                return consumed ? nil : event
-            }
-        }
-
-        func removeCtrlJKMonitor() {
-            if let eventMonitor { NSEvent.removeMonitor(eventMonitor) }
-            eventMonitor = nil
-        }
-    }
-}
-

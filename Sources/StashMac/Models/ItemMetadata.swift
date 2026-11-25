@@ -17,6 +17,27 @@ struct ItemMetadata: Codable, Equatable, Hashable {
     /// Camera-EXIF subset surfaced as "Capture device" rows in the
     /// detail Info table. nil = no EXIF or non-image item.
     var camera: CameraInfo?
+    /// Structured recipe metadata extracted from a recipe URL or note.
+    var recipe: RecipeData?
+
+    enum CodingKeys: String, CodingKey {
+        case language
+        case camera
+        case recipe
+    }
+
+    init(language: String? = nil, camera: CameraInfo? = nil, recipe: RecipeData? = nil) {
+        self.language = language
+        self.camera = camera
+        self.recipe = recipe
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.language = try? container.decodeIfPresent(String.self, forKey: .language)
+        self.camera = try? container.decodeIfPresent(CameraInfo.self, forKey: .camera)
+        self.recipe = try? container.decodeIfPresent(RecipeData.self, forKey: .recipe)
+    }
 
     struct CameraInfo: Codable, Equatable, Hashable {
         var make: String?

@@ -52,6 +52,14 @@ private func configureNoAutoFill(_ editor: NSTextView) {
     }
 }
 
+/// Returns the shared pre-configured field editor for custom `NSWindow`/`NSPanel`
+/// subclasses that override `fieldEditor(_:for:)` directly.
+@MainActor
+func sharedFieldEditor(for object: Any?) -> NSText? {
+    configureNoAutoFill(sharedNoAutoFillFieldEditor)
+    return sharedNoAutoFillFieldEditor
+}
+
 /// Forwarding NSObject that wraps an existing NSWindowDelegate and
 /// adds `windowWillReturnFieldEditor`. All other delegate calls are
 /// forwarded transparently so SwiftUI's window machinery (drag, key

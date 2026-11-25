@@ -14,6 +14,7 @@ struct ImagePreviewSection: View {
     let fileURL: URL
     var allURLs: [URL] = []
     @State private var image: NSImage?
+    @State private var loadCompleted = false
 
     var body: some View {
         Group {
@@ -44,6 +45,15 @@ struct ImagePreviewSection: View {
                             }
                         }
                     }
+            } else if loadCompleted {
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(.quaternary)
+                    .frame(maxWidth: 500, minHeight: 80, maxHeight: 120)
+                    .overlay(
+                        Text("Preview not available")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    )
             } else {
                 // Skeleton-ish placeholder while the decode runs.
                 // Same maxWidth/maxHeight as the loaded image so the
@@ -61,11 +71,8 @@ struct ImagePreviewSection: View {
         // when the user taps from one strip thumbnail to another.
         .animation(.easeInOut(duration: 0.18), value: image)
         .task(id: fileURL.path) {
-            do {
-                await load()
-            } catch {
-                // Task was cancelled, do nothing
-            }
+            loadCompleted = false
+            await load()
         }
     }
 
@@ -78,5 +85,6 @@ struct ImagePreviewSection: View {
         // mid-decode.
         guard fileURL == url else { return }
         if img != nil { image = img }
+        loadCompleted = true
     }
 }

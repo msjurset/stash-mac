@@ -99,6 +99,32 @@ enum ClipboardComposer {
         return writeText(combined)
     }
 
+    /// Renders a publication-quality Recipe Card PDF and copies both the
+    /// `.pdf` data and a staged `<recipe-slug>.pdf` file URL to the clipboard.
+    @discardableResult
+    static func copyRecipePDF(item: StashItem) -> Bool {
+        guard let recipe = RecipePDFGenerator.resolveRecipe(for: item) else { return false }
+        return RecipePDFGenerator.copyPDFToClipboard(for: recipe, item: item)
+    }
+
+    /// Copies the full formatted Recipe Markdown to the clipboard.
+    @discardableResult
+    static func copyRecipeMarkdown(item: StashItem) -> Bool {
+        guard let recipe = RecipePDFGenerator.resolveRecipe(for: item) else { return false }
+        let md = recipe.formattedMarkdown.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !md.isEmpty else { return false }
+        return writeText(md)
+    }
+
+    /// Copies the recipe's plaintext Ingredients list to the clipboard.
+    @discardableResult
+    static func copyRecipeIngredients(item: StashItem) -> Bool {
+        guard let recipe = RecipePDFGenerator.resolveRecipe(for: item) else { return false }
+        let list = recipe.formattedIngredientsPlaintext.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !list.isEmpty else { return false }
+        return writeText(list)
+    }
+
     // MARK: - Internals
 
     private static func primaryImage(for item: StashItem) -> NSImage? {

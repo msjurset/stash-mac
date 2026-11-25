@@ -22,6 +22,16 @@ enum SharePayload {
     static func build(for item: StashItem) -> [Any] {
         var payload: [Any] = []
 
+        // For recipe items, generate and stage a publication-quality Recipe Card PDF
+        // (`<recipe-title>.pdf`) as the sole share attachment.
+        // IMPORTANT: Do not mix a `file://` URL and an `https://` URL in the same
+        // payload — macOS AirDrop (`sharingd`) treats mixed file + web URLs as a
+        // URL-only ASK transfer and closes the connection before the file UPLOAD phase.
+        if let recipe = RecipePDFGenerator.resolveRecipe(for: item),
+           let pdfURL = RecipePDFGenerator.stagePDFFile(for: recipe, item: item) {
+            return [pdfURL]
+        }
+
         // File URL for image / file items. Resolved through the
         // existing FilePathResolver so the path lives under the
         // user's configured files-dir regardless of where the
@@ -50,10 +60,10 @@ enum SharePayload {
             }
         }
 
-        // External URL for link items. The Mail / Messages / Signal
-        // share services treat this as either an attachment link or
-        // plain text depending on their preference.
-        if let raw = item.url,
+        // External URL for link items (only when no local file URL is already
+        // present, so AirDrop never sees mixed file:// + https:// URLs).
+        if payload.isEmpty,
+           let raw = item.url,
            !raw.isEmpty,
            let url = URL(string: raw) {
             payload.append(url)

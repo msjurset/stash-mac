@@ -482,7 +482,7 @@ private struct SelectableMarkdownView: NSViewRepresentable {
     }
 }
 
-private final class ClickAwareTextView: NSTextView {
+final class ClickAwareTextView: NSTextView {
     var onSingleClick: ((Int?) -> Void)?
     var onDoubleClick: (() -> Void)?
     var attributedText: NSAttributedString = NSAttributedString() {
@@ -493,20 +493,38 @@ private final class ClickAwareTextView: NSTextView {
     private var pendingSingleClick: DispatchWorkItem?
     private var isDragging = false
 
-    private func isPointOnGlyph(_ point: NSPoint) -> Bool {
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let localPoint = convert(point, from: superview)
+        if bounds.contains(localPoint) {
+            return self
+        }
+        return super.hitTest(point)
+    }
+
+    func isPointOnGlyph(_ point: NSPoint) -> Bool {
         let nsString = string as NSString
         if nsString.length == 0 { return false }
         guard let layoutManager = self.layoutManager, let textContainer = self.textContainer else { return false }
+        layoutManager.ensureLayout(for: textContainer)
+        guard layoutManager.numberOfGlyphs > 0 else { return false }
         
         let containerPoint = NSPoint(x: point.x - textContainerOrigin.x, y: point.y - textContainerOrigin.y)
-        let charIndex = self.characterIndexForInsertion(at: point)
+        let usedRect = layoutManager.usedRect(for: textContainer)
+        if !usedRect.insetBy(dx: -4, dy: -4).contains(containerPoint) {
+            return false
+        }
+        let glyphIndex = layoutManager.glyphIndex(for: containerPoint, in: textContainer, fractionOfDistanceThroughGlyph: nil)
+        guard glyphIndex < layoutManager.numberOfGlyphs else { return false }
+        let charIndex = layoutManager.characterIndexForGlyph(at: glyphIndex)
         
         guard charIndex < nsString.length else { return false }
+        let ch = nsString.character(at: charIndex)
+        if ch == 0x0A || ch == 0x0D || ch == 0x20 || ch == 0x09 {
+            return false
+        }
         
-        let glyphIndex = layoutManager.glyphIndexForCharacter(at: charIndex)
         let boundingRect = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyphIndex, length: 1), in: textContainer)
-        
-        let hitRect = boundingRect.insetBy(dx: -4, dy: -4)
+        let hitRect = boundingRect.insetBy(dx: -2, dy: -2)
         return hitRect.contains(containerPoint)
     }
 
@@ -515,8 +533,7 @@ private final class ClickAwareTextView: NSTextView {
             pendingSingleClick?.cancel()
             pendingSingleClick = nil
             
-            let point = convert(event.locationInWindow, from: nil)
-            if !isPointOnGlyph(point), let onDoubleClick {
+            if let onDoubleClick {
                 onDoubleClick()
                 return
             } else {
@@ -538,9 +555,11 @@ private final class ClickAwareTextView: NSTextView {
             var clickedIndex: Int? = nil
             if let layoutManager = self.layoutManager, let textContainer = self.textContainer {
                 let point = self.convert(event.locationInWindow, from: nil)
+                let containerPoint = NSPoint(x: point.x - textContainerOrigin.x, y: point.y - textContainerOrigin.y)
                 var fraction: CGFloat = 0.0
-                let index = layoutManager.characterIndex(for: point, in: textContainer, fractionOfDistanceBetweenInsertionPoints: &fraction)
-                if index < self.string.count {
+                let index = layoutManager.characterIndex(for: containerPoint, in: textContainer, fractionOfDistanceBetweenInsertionPoints: &fraction)
+                let nsLength = (self.string as NSString).length
+                if index < nsLength {
                     clickedIndex = index
                 }
             }
@@ -552,7 +571,9 @@ private final class ClickAwareTextView: NSTextView {
             pendingSingleClick?.cancel()
             pendingSingleClick = work
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
-            super.mouseDown(with: event)
+            if window != nil {
+                super.mouseDown(with: event)
+            }
             return
         }
 

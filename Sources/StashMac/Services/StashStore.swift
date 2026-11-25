@@ -243,6 +243,7 @@ final class StashStore {
     private var feedPollTimer: Timer?
 
     var searchQuery = ""
+    var globalSearchTick: Int = 0
     var filterType: ItemType?
     var filterTags: Set<String> = []
     var filterCollection: String?
@@ -937,19 +938,27 @@ final class StashStore {
         }
     }
 
+    private var refreshTask: Task<Void, Never>?
+
     func refresh() {
-        guard !disableCLIFetch, !isLoading else { return }
+        guard !disableCLIFetch else { return }
         itemsCache.removeAll()
-        Task {
+        refreshTask?.cancel()
+        refreshTask = Task {
             isLoading = true
             error = nil
             do {
-                items = try await fetchFilteredItems()
+                let fetched = try await fetchFilteredItems()
+                guard !Task.isCancelled else { return }
+                items = fetched
                 applySortMode()
             } catch {
+                guard !Task.isCancelled else { return }
                 self.error = error.localizedDescription
             }
-            isLoading = false
+            if !Task.isCancelled {
+                isLoading = false
+            }
         }
     }
 
@@ -961,7 +970,7 @@ final class StashStore {
     /// `loadAll()` (items + tags/collections/saved-searches/graph).
     private func fetchFilteredItems() async throws -> [StashItem] {
         // If searching, we cannot use the simple type-filter cache
-        if !searchQuery.isEmpty || !filterTags.isEmpty || filterCollection != nil || navigation == .archive {
+        if regexMode || !searchQuery.isEmpty || !filterTags.isEmpty || filterCollection != nil || navigation == .archive {
             return try await performFetch()
         }
         
@@ -974,12 +983,50 @@ final class StashStore {
         return fetched
     }
     
+    nonisolated static func resolveItemType(from raw: String) -> ItemType? {
+        switch raw.lowercased() {
+        case "url", "urls", "link", "links": return .url
+        case "snippet", "snippets", "note", "notes", "text": return .snippet
+        case "file", "files", "pdf", "doc", "docs": return .file
+        case "image", "images", "photo", "photos", "img": return .image
+        case "audio", "voice", "sound", "music": return .audio
+        case "email", "emails", "mail": return .email
+        default: return nil
+        }
+    }
+
+    nonisolated static func matchesIsPredicates(_ item: StashItem, predicates: [String], seenIDs: Set<String>) -> Bool {
+        for raw in predicates {
+            let p = raw.lowercased()
+            switch p {
+            case "recipe", "recipes":
+                if !item.isRecipe { return false }
+            case "unread", "unseen", "new":
+                if seenIDs.contains(item.id) { return false }
+            case "read", "seen":
+                if !seenIDs.contains(item.id) { return false }
+            case "located", "geotagged", "map", "location":
+                if item.location == nil { return false }
+            case "annotated", "notes", "noted":
+                if item.notes?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true { return false }
+            case "archived":
+                if item.archived != true { return false }
+            case "fav", "starred", "favorite":
+                if !(item.tags?.contains(where: { $0.name.lowercased() == "fav" }) ?? false) { return false }
+            default:
+                break
+            }
+        }
+        return true
+    }
+
     private func performFetch() async throws -> [StashItem] {
         let currentQuery = searchQuery
         let currentFilterType = filterType
         var currentFilterTags = filterTags
         let currentFilterCollection = filterCollection
         let currentArchived = navigation == .archive
+        let currentSeenIDs = seenItemIDs
         
         if navigation == .starred {
             currentFilterTags.insert("fav")
@@ -992,21 +1039,53 @@ final class StashStore {
 
             var allTags = Array(currentFilterTags)
             var excludeTags: [String] = []
-            var textQuery = currentQuery
+            var effectiveFilterType = currentFilterType
+            var effectiveCollection = currentFilterCollection
+            var effectiveArchived = currentArchived
+            var isPredicates: [String] = []
+            var textQuery = currentQuery.trimmingCharacters(in: .whitespaces)
 
-            if !currentQuery.isEmpty {
-                // Negative tags (!tag:foo, -tag:foo, ^tag:foo)
-                let excludeMatches = currentQuery.matches(of: /[!^-]tag:(\S+)/)
-                excludeTags = excludeMatches.map { String($0.output.1) }
-
-                // Positive tags (strip negative ones first to avoid overlap)
-                let tempQuery = currentQuery.replacing(/[!^-]tag:?\S*/, with: "")
-                let inlineMatches = tempQuery.matches(of: /tag:(\S+)/)
-                allTags += inlineMatches.map { String($0.output.1) }
-
-                textQuery = currentQuery
-                    .replacing(/[!^-]?tag:?\S*/, with: "")
-                    .trimmingCharacters(in: .whitespaces)
+            if !currentRegexMode && !currentQuery.isEmpty {
+                var freeTokens: [String] = []
+                for token in SearchTokenHelper.extractTokens(from: currentQuery) {
+                    if let colon = token.firstIndex(of: ":") {
+                        let rawKey = String(token[token.startIndex..<colon]).lowercased()
+                        var val = String(token[token.index(after: colon)...])
+                        if val.hasPrefix("\"") { val.removeFirst() }
+                        if val.hasSuffix("\"") { val.removeLast() }
+                        if ["!tag", "-tag", "^tag"].contains(rawKey) {
+                            if !val.isEmpty { excludeTags.append(val) }
+                            continue
+                        }
+                        switch rawKey {
+                        case "tag", "t":
+                            if !val.isEmpty { allTags.append(val) }
+                            continue
+                        case "collection", "col", "c":
+                            if !val.isEmpty { effectiveCollection = val }
+                            continue
+                        case "type":
+                            if let resolved = Self.resolveItemType(from: val) {
+                                effectiveFilterType = resolved
+                            }
+                            continue
+                        case "is":
+                            let lowerVal = val.lowercased()
+                            if lowerVal == "archived" {
+                                effectiveArchived = true
+                            } else if lowerVal == "fav" || lowerVal == "starred" {
+                                allTags.append("fav")
+                            } else if !lowerVal.isEmpty {
+                                isPredicates.append(lowerVal)
+                            }
+                            continue
+                        default:
+                            break
+                        }
+                    }
+                    freeTokens.append(token)
+                }
+                textQuery = freeTokens.joined(separator: " ").trimmingCharacters(in: .whitespaces)
             }
 
             let isSemantic = !currentRegexMode && textQuery.hasPrefix("~")
@@ -1014,47 +1093,70 @@ final class StashStore {
                 textQuery = String(textQuery.dropFirst()).trimmingCharacters(in: .whitespaces)
             }
 
+            let fetched: [StashItem]
             // For regex mode, strip exactly one pair of wrapping slashes
             if currentRegexMode {
                 if textQuery.hasPrefix("/") && textQuery.hasSuffix("/") && textQuery.count >= 2 {
                     textQuery = String(textQuery.dropFirst().dropLast())
                 }
+                let rawPattern = textQuery.hasPrefix("!")
+                    ? String(textQuery.dropFirst()).trimmingCharacters(in: .whitespaces)
+                    : textQuery.trimmingCharacters(in: .whitespaces)
 
-                return try await self.cli.searchItems(
-                    query: "",
-                    type: currentFilterType,
+                // Empty pattern (e.g. just toggled * or typed //) falls back to listItems
+                if rawPattern.isEmpty {
+                    fetched = try await self.cli.listItems(
+                        type: effectiveFilterType,
+                        tags: allTags,
+                        excludeTags: excludeTags,
+                        collection: effectiveCollection,
+                        archived: effectiveArchived,
+                        limit: 10000
+                    )
+                } else if (try? NSRegularExpression(pattern: rawPattern)) == nil {
+                    // Client-side syntax check so an incomplete regex mid-typing (e.g. "[")
+                    // returns empty rather than all 10,000 items.
+                    return []
+                } else {
+                    fetched = try await self.cli.searchItems(
+                        query: "",
+                        type: effectiveFilterType,
+                        tags: allTags,
+                        excludeTags: excludeTags,
+                        collection: effectiveCollection,
+                        archived: effectiveArchived,
+                        limit: 10000,
+                        regex: textQuery,
+                        semantic: false
+                    )
+                }
+            } else if textQuery.isEmpty {
+                fetched = try await self.cli.listItems(
+                    type: effectiveFilterType,
                     tags: allTags,
                     excludeTags: excludeTags,
-                    collection: currentFilterCollection,
-                    archived: currentArchived,
+                    collection: effectiveCollection,
+                    archived: effectiveArchived,
+                    limit: 10000
+                )
+            } else {
+                fetched = try await self.cli.searchItems(
+                    query: textQuery,
+                    type: effectiveFilterType,
+                    tags: allTags,
+                    excludeTags: excludeTags,
+                    collection: effectiveCollection,
+                    archived: effectiveArchived,
                     limit: 10000,
-                    regex: textQuery,
+                    regex: nil,
                     semantic: isSemantic
                 )
             }
 
-            if textQuery.isEmpty {
-
-                return try await self.cli.listItems(
-                    type: currentFilterType,
-                    tags: allTags,
-                    excludeTags: excludeTags,
-                    collection: currentFilterCollection,
-                    archived: currentArchived,
-                    limit: 10000
-                )
+            if isPredicates.isEmpty {
+                return fetched
             }
-            return try await self.cli.searchItems(
-                query: textQuery,
-                type: currentFilterType,
-                tags: allTags,
-                excludeTags: excludeTags,
-                collection: currentFilterCollection,
-                archived: currentArchived,
-                limit: 10000,
-                regex: nil,
-                semantic: isSemantic
-            )
+            return fetched.filter { Self.matchesIsPredicates($0, predicates: isPredicates, seenIDs: currentSeenIDs) }
         }.value
 
     }
@@ -1101,6 +1203,14 @@ final class StashStore {
                 // failures (no og:image, network hiccup, paywall) are
                 // silent; user can re-trigger via the detail view.
                 _ = try? await cli.thumbnailImport(id: item.id)
+
+                // Opportunistic recipe extraction on URL capture:
+                // if the URL hosts a recipe (JSON-LD / Microdata / WPRM),
+                // automatically attach the structured recipe card and tag #recipe.
+                if let u = URL(string: url),
+                   let recipe = try? await RecipeExtractor.extract(from: u) {
+                    await saveRecipe(recipe, for: item.id)
+                }
                 loadAll()
             } catch {
                 self.error = error.localizedDescription
@@ -1180,7 +1290,8 @@ final class StashStore {
         collection: String? = nil,
         location: ItemLocation? = nil,
         clearLocation: Bool = false,
-        speakerMap: [String: String]? = nil
+        speakerMap: [String: String]? = nil,
+        metadataJSON: String? = nil
     ) {
         Task {
             do {
@@ -1195,7 +1306,8 @@ final class StashStore {
                     collection: collection,
                     location: location,
                     clearLocation: clearLocation,
-                    speakerMap: speakerMap
+                    speakerMap: speakerMap,
+                    metadataJSON: metadataJSON
                 )
             } catch {
                 await MainActor.run { self.error = error.localizedDescription }
@@ -1214,7 +1326,8 @@ final class StashStore {
         collection: String? = nil,
         location: ItemLocation? = nil,
         clearLocation: Bool = false,
-        speakerMap: [String: String]? = nil
+        speakerMap: [String: String]? = nil,
+        metadataJSON: String? = nil
     ) async throws {
         let updated = try await cli.editItem(
             id: id,
@@ -1227,7 +1340,8 @@ final class StashStore {
             collection: collection,
             location: location,
             clearLocation: clearLocation,
-            speakerMap: speakerMap
+            speakerMap: speakerMap,
+            metadataJSON: metadataJSON
         )
         
         await MainActor.run {
@@ -1247,6 +1361,197 @@ final class StashStore {
            bru.contains(where: { $0.id == id }) {
             await recheckBrokenURLAndPrune(id: id)
         }
+    }
+
+    /// Attaches structured recipe metadata to an item and ensures it is tagged #recipe.
+    func saveRecipe(_ recipe: RecipeData, for itemID: String, extraTags: [String] = [], collection: String? = nil) async {
+        do {
+            let enc = JSONEncoder()
+            let data = try enc.encode(["recipe": recipe])
+            guard let metaStr = String(data: data, encoding: .utf8) else { return }
+            var allTags = extraTags
+            if !allTags.contains(where: { $0.lowercased() == "recipe" }) {
+                allTags.append("recipe")
+            }
+            try await editItem(
+                id: itemID,
+                title: recipe.title.isEmpty ? nil : recipe.title,
+                addTags: allTags,
+                collection: collection,
+                metadataJSON: metaStr
+            )
+        } catch {
+            await MainActor.run { self.error = "Failed to save recipe: \(error.localizedDescription)" }
+        }
+    }
+
+    /// Appends a cook session entry to a recipe's `cookHistory`, saves the updated recipe metadata,
+    /// and tags the item with `#cooked` and `#recipe`.
+    func logRecipeCooked(for itemID: String, recipe: RecipeData, rating: Int? = nil, note: String? = nil) async {
+        var updatedRecipe = recipe
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        let cleanRating = (rating ?? 0) >= 1 && (rating ?? 0) <= 5 ? rating : nil
+        let trimmedNote = note?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanNote = (trimmedNote?.isEmpty == false) ? trimmedNote : nil
+        let entry = RecipeCookEntry(
+            cookedAt: formatter.string(from: Date()),
+            rating: cleanRating,
+            note: cleanNote
+        )
+        updatedRecipe.cookHistory.append(entry)
+        await saveRecipe(updatedRecipe, for: itemID, extraTags: ["cooked"])
+        await MainActor.run {
+            self.flashMessage = "Logged as cooked ✓"
+        }
+    }
+
+    /// Removes recipe metadata from an item.
+    func removeRecipe(for itemID: String) async {
+        do {
+            // Setting recipe key to null in metadata removes it
+            let metaStr = "{\"recipe\":null}"
+            try await editItem(
+                id: itemID,
+                removeTags: ["recipe"],
+                metadataJSON: metaStr
+            )
+        } catch {
+            await MainActor.run { self.error = "Failed to remove recipe: \(error.localizedDescription)" }
+        }
+    }
+
+    /// Stashes or enriches a URL item with extracted recipe data from `FetchURLSheet`.
+    func stashRecipeFromURL(
+        pageURL: String,
+        recipe: RecipeData,
+        linkedItemID: String?,
+        extraTags: [String],
+        collection: String?
+    ) async -> StashItem? {
+        do {
+            let targetID: String
+            if let linked = linkedItemID, !linked.isEmpty {
+                targetID = linked
+            } else if let existing = items.first(where: { $0.url == pageURL }) {
+                targetID = existing.id
+            } else {
+                var tags = extraTags
+                if !tags.contains(where: { $0.lowercased() == "recipe" }) {
+                    tags.append("recipe")
+                }
+                let created = try await cli.addURL(
+                    url: pageURL,
+                    title: recipe.title,
+                    tags: tags,
+                    note: nil,
+                    collection: collection
+                )
+                targetID = created.id
+            }
+
+            await saveRecipe(recipe, for: targetID, extraTags: extraTags, collection: collection)
+            if let imgURL = recipe.imageURL, !imgURL.isEmpty {
+                _ = try? await cli.thumbnailSet(id: targetID, url: imgURL)
+            } else {
+                _ = try? await cli.thumbnailImport(id: targetID)
+            }
+            let updated = try await getItem(id: targetID)
+            loadAll()
+            return updated
+        } catch {
+            await MainActor.run {
+                self.error = "Failed to stash recipe: \(error.localizedDescription)"
+            }
+            return nil
+        }
+    }
+
+    /// Extracts a recipe for an existing item using on-device deterministic extraction first
+    /// (URL HTML -> Plaintext heuristics), falling back to AI only if needed and available.
+    func extractRecipeForItem(_ item: StashItem, prefs: AIPrefsStore) async -> RecipeData? {
+        identifyingItemIDs.insert(item.id)
+        defer { identifyingItemIDs.remove(item.id) }
+
+        let existingCookHistory = item.recipe?.cookHistory ?? []
+
+        // 1. Try deterministic URL extraction if the item has a URL
+        if let urlStr = item.url, !urlStr.isEmpty, let u = URL(string: urlStr) {
+            if var recipe = try? await RecipeExtractor.extract(from: u) {
+                if recipe.cookHistory.isEmpty && !existingCookHistory.isEmpty {
+                    recipe.cookHistory = existingCookHistory
+                }
+                await saveRecipe(recipe, for: item.id)
+                if item.thumbnailPath == nil, let imgURL = recipe.imageURL, !imgURL.isEmpty {
+                    _ = try? await cli.thumbnailSet(id: item.id, url: imgURL)
+                    loadAll()
+                }
+                flashMessage = "Recipe extracted ✓"
+                return recipe
+            }
+        }
+
+        // 2. Try deterministic plaintext heuristics on notes first, then extractedText,
+        //    then combined (avoiding duplicate ingredients/steps when notes & extractedText mirror each other).
+        let trimmedNotes = item.notes?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let trimmedExtracted = item.extractedText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let combinedText = [trimmedNotes, trimmedExtracted]
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n\n")
+
+        let textCandidates = [trimmedNotes, trimmedExtracted, combinedText].filter { !$0.isEmpty }
+        for candidate in textCandidates {
+            if var recipe = RecipeExtractor.extractFromPlaintext(
+                candidate,
+                fallbackTitle: item.title,
+                sourceURL: item.url
+            ) {
+                if recipe.cookHistory.isEmpty && !existingCookHistory.isEmpty {
+                    recipe.cookHistory = existingCookHistory
+                }
+                await saveRecipe(recipe, for: item.id)
+                flashMessage = "Recipe extracted ✓"
+                return recipe
+            }
+        }
+
+        // 3. Fallback to AI extraction if user has an API key configured
+        if !combinedText.isEmpty && prefs.hasKey {
+            do {
+                if var recipe = try await RecipeExtractor.extractWithAI(
+                    text: combinedText,
+                    fallbackTitle: item.title,
+                    sourceURL: item.url,
+                    prefs: prefs
+                ) {
+                    if recipe.cookHistory.isEmpty && !existingCookHistory.isEmpty {
+                        recipe.cookHistory = existingCookHistory
+                    }
+                    await saveRecipe(recipe, for: item.id)
+                    flashMessage = "Recipe extracted with AI ✓"
+                    return recipe
+                }
+            } catch let failoverErr as GeminiFailoverApprovalRequiredError {
+                self.pendingFailover = PendingFailover(
+                    operation: failoverErr.operation,
+                    itemID: item.id,
+                    durationHours: failoverErr.durationHours,
+                    retryAction: { [weak self] in
+                        _ = await self?.extractRecipeForItem(item, prefs: prefs)
+                    }
+                )
+                return nil
+            } catch {
+                self.error = friendlyIdentifyErrorMessage(
+                    provider: prefs.activeProvider.displayName,
+                    error: error
+                )
+                return nil
+            }
+        }
+
+        self.error = "Couldn't extract a structured recipe from this item."
+        return nil
     }
 
     /// Re-check a single broken-URL row on demand. Wired to the
@@ -1419,6 +1724,20 @@ final class StashStore {
                     flashMessage = "Deleted \(count) orphaned file(s) ✓"
                 } catch {
                     self.error = "Cleanup failed: \(error.localizedDescription)"
+                }
+            }
+        case .sendToPhone:
+            guard let item = selectedItem else {
+                self.error = "Select an item first to send to phone"
+                return
+            }
+            flashMessage = "Sending \"\(item.title)\" to phone…"
+            Task {
+                let res = await PhoneHandoffService.shared.send(payload: .from(item: item), push: true)
+                if res.pushSent {
+                    flashMessage = "Sent \"\(item.title)\" to phone ✓"
+                } else {
+                    flashMessage = "Mobile reader ready for \"\(item.title)\""
                 }
             }
         }
@@ -1853,6 +2172,10 @@ final class StashStore {
         Task {
             do {
                 try await cli.renameTag(old: old, new: new)
+                if filterTags.contains(old) {
+                    filterTags.remove(old)
+                    filterTags.insert(new)
+                }
                 loadAll()
             } catch {
                 self.error = error.localizedDescription
@@ -3375,6 +3698,14 @@ final class StashStore {
             }
             if fetchedItem?.id == itemID {
                 fetchedItem = updated
+            }
+            if updated.recipe == nil,
+               let recipe = RecipeExtractor.extractFromPlaintext(
+                   combinedNotes,
+                   fallbackTitle: updated.title,
+                   sourceURL: updated.url
+               ) {
+                await saveRecipe(recipe, for: itemID)
             }
             flashMessage = "Identified ✓"
             refresh()

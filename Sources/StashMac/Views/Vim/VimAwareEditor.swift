@@ -155,6 +155,11 @@ struct VimAwareEditor: View {
         .onChange(of: slashPrefix) { _, _ in
             slashSelectedIndex = 0
         }
+        .onChange(of: initialFocusCursor) { _, newValue in
+            if let newValue {
+                pendingCursor = newValue
+            }
+        }
         .onAppear {
             controller.onSubmit = onSubmit
         }

@@ -179,7 +179,8 @@ actor StashCLI {
         collection: String? = nil,
         location: ItemLocation? = nil,
         clearLocation: Bool = false,
-        speakerMap: [String: String]? = nil
+        speakerMap: [String: String]? = nil,
+        metadataJSON: String? = nil
     ) async throws -> StashItem {
         var args = ["edit", "--json", id]
         if let title { args += ["-t", title] }
@@ -199,6 +200,9 @@ actor StashCLI {
             if let jsonString = String(data: data, encoding: .utf8) {
                 args += ["--speaker-map", jsonString]
             }
+        }
+        if let metadataJSON {
+            args += ["--metadata", metadataJSON]
         }
         return try await captureJSON(args: args)
     }
@@ -1518,6 +1522,11 @@ actor StashCLI {
         try await captureJSON(args: ["feeds", "list", "--json"])
     }
 
+    /// `stash feeds show <id> --json`
+    func showFeedSource(id: Int64) async throws -> FeedSource {
+        try await captureJSON(args: ["feeds", "show", "--json", "\(id)"])
+    }
+
     /// `stash feeds add NAME URL ...`
     @discardableResult
     func addFeedSource(name: String,
@@ -1526,12 +1535,68 @@ actor StashCLI {
                        defaultTags: [String] = [],
                        defaultCollection: String? = nil,
                        autoStash: Bool = false,
+                       fetchContent: Bool = false,
                        intervalMinutes: Int = 360) async throws -> FeedSource {
         var args = ["feeds", "add", "--json", "--kind", kind, "--interval", "\(intervalMinutes)"]
         for t in defaultTags { args += ["-T", t] }
         if let c = defaultCollection, !c.isEmpty { args += ["-c", c] }
         if autoStash { args.append("--auto-stash") }
+        if fetchContent { args.append("--fetch-content") }
         args += [name, url]
+        return try await captureJSON(args: args)
+    }
+
+    /// `stash feeds edit ID ... --json`
+    @discardableResult
+    func editFeedSource(id: Int64,
+                        name: String? = nil,
+                        url: String? = nil,
+                        kind: String? = nil,
+                        defaultTags: [String]? = nil,
+                        defaultCollection: String? = nil,
+                        autoStash: Bool? = nil,
+                        fetchContent: Bool? = nil,
+                        intervalMinutes: Int? = nil,
+                        enabled: Bool? = nil) async throws -> FeedSource {
+        var args = ["feeds", "edit", "--json"]
+        if let name, !name.isEmpty {
+            args += ["--name", name]
+        }
+        if let url, !url.isEmpty {
+            args += ["--url", url]
+        }
+        if let kind, !kind.isEmpty {
+            args += ["--kind", kind]
+        }
+        if let defaultTags {
+            if defaultTags.isEmpty {
+                args.append("--clear-tags")
+            } else {
+                for t in defaultTags {
+                    args += ["-T", t]
+                }
+            }
+        }
+        if let defaultCollection {
+            if defaultCollection.isEmpty {
+                args.append("--clear-collection")
+            } else {
+                args += ["--collection", defaultCollection]
+            }
+        }
+        if let autoStash {
+            args.append(autoStash ? "--auto-stash" : "--no-auto-stash")
+        }
+        if let fetchContent {
+            args.append(fetchContent ? "--fetch-content" : "--no-fetch-content")
+        }
+        if let intervalMinutes, intervalMinutes > 0 {
+            args += ["--interval", "\(intervalMinutes)"]
+        }
+        if let enabled {
+            args.append(enabled ? "--enable" : "--disable")
+        }
+        args.append("\(id)")
         return try await captureJSON(args: args)
     }
 
@@ -1543,19 +1608,26 @@ actor StashCLI {
     /// `stash feeds refresh` — runs the poller across all enabled
     /// sources (or one if `sourceID` given). Returns success/failure
     /// per source via the embedded result map.
-    func refreshFeeds(sourceID: Int64? = nil) async throws {
+    @discardableResult
+    func refreshFeeds(sourceID: Int64? = nil) async throws -> FeedRefreshResponse {
         var args = ["feeds", "refresh", "--json"]
         if let id = sourceID { args += ["--source", "\(id)"] }
-        _ = try await captureOutput(args: args)
+        return try await captureJSON(args: args)
     }
 
-    /// `stash feeds candidates --json` — Inbox view data.
-    func listFeedCandidates(state: String = "unread", limit: Int = 100) async throws -> [FeedCandidate] {
-        try await captureJSON(args: [
+    /// `stash feeds candidates --json` — Inbox view data and per-source candidate history.
+    func listFeedCandidates(state: String = "unread",
+                            sourceID: Int64? = nil,
+                            limit: Int = 100) async throws -> [FeedCandidate] {
+        var args = [
             "feeds", "candidates", "--json",
             "--state", state,
             "-l", "\(limit)",
-        ])
+        ]
+        if let sourceID {
+            args += ["--source", "\(sourceID)"]
+        }
+        return try await captureJSON(args: args)
     }
 
     func stashFeedCandidate(id: Int64,

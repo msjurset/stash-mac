@@ -13,6 +13,7 @@ struct NotesView: View {
     @State private var originalText = ""
     @State private var editingItemID: String? = nil
     @State private var isFocused = false
+    @State private var focusCursor: Int? = nil
     @State private var isShowingAIChat = false
     @State private var aiQuestion = ""
     @FocusState private var isAIChatFocused: Bool
@@ -80,10 +81,17 @@ struct NotesView: View {
                                 Text("Click to add notes...")
                                     .font(.system(size: 13))
                                     .foregroundStyle(.tertiary)
-                                    .padding(.leading, 10),
+                                    .padding(.leading, 10)
+                                    .allowsHitTesting(false),
                                 alignment: .leading
                             )
-                            .onTapGesture {
+                            .onTapGesture(count: 2) {
+                                store.markSeen(itemID)
+                                openEditor()
+                            }
+                            .onTapGesture(count: 1) {
+                                store.markSeen(itemID)
+                                focusCursor = 0
                                 withAnimation(.easeInOut(duration: 0.18)) {
                                     isFocused = true
                                 }
@@ -93,18 +101,36 @@ struct NotesView: View {
                             MarkdownText(
                                 displayText,
                                 isSelectable: true,
-                                onSingleClick: { _ in
+                                onSingleClick: { clickedIndex in
                                     store.markSeen(itemID)
+                                    focusCursor = clickedIndex ?? (editedText as NSString).length
                                     withAnimation(.easeInOut(duration: 0.18)) {
                                         isFocused = true
                                     }
                                 },
-                                onDoubleClick: openEditor
+                                onDoubleClick: {
+                                    store.markSeen(itemID)
+                                    openEditor()
+                                }
                             )
                             .padding(10)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .frame(maxHeight: isExpanded ? nil : 250)
-                            .background(Color.primary.opacity(0.04))
+                            .background(
+                                Color.primary.opacity(0.04)
+                                    .contentShape(Rectangle())
+                                    .onTapGesture(count: 2) {
+                                        store.markSeen(itemID)
+                                        openEditor()
+                                    }
+                                    .onTapGesture(count: 1) {
+                                        store.markSeen(itemID)
+                                        focusCursor = (editedText as NSString).length
+                                        withAnimation(.easeInOut(duration: 0.18)) {
+                                            isFocused = true
+                                        }
+                                    }
+                            )
                             .clipShape(RoundedRectangle(cornerRadius: 6))
 
                             if isTruncated {
@@ -135,6 +161,7 @@ struct NotesView: View {
                         textContainerInset: NSSize(width: 10, height: 10),
                         drawsBackground: false,
                         monospaced: false,
+                        initialFocusCursor: focusCursor ?? (editedText as NSString).length,
                         onDoubleClickWhitespace: openEditor
                     )
                     .frame(minHeight: isExpanded ? 350 : 150, maxHeight: isExpanded ? nil : 350)
@@ -415,7 +442,8 @@ private struct NotesTextEditor: View {
             font: .systemFont(ofSize: 13),
             textContainerInset: NSSize(width: 12, height: 12),
             drawsBackground: false,
-            monospaced: true
+            monospaced: true,
+            initialFocusCursor: (text as NSString).length
         )
     }
 }

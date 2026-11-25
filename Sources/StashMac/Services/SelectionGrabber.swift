@@ -33,6 +33,8 @@ final class SelectionGrabber {
 
         guard let frontApp = NSWorkspace.shared.frontmostApplication else {
             status = "No active app"
+            ToastCenter.shared.show("No active app", kind: .error)
+            DesktopNotifier.notify(title: "Stash", message: "No active application found.")
             log("ERROR: No frontmost application")
             return
         }
@@ -95,13 +97,14 @@ final class SelectionGrabber {
             } else {
                 self.log("Cmd+C failed — pasteboard unchanged")
                 self.status = "No text selected"
+                ToastCenter.shared.show("No text selected", kind: .error)
+                DesktopNotifier.notify(title: "Stash", message: "No text selected.")
             }
         }
     }
 
-    func stashClipboard() {
+    func stashClipboard(from pasteboard: NSPasteboard = .general) {
         status = nil
-        let pasteboard = NSPasteboard.general
 
         // Try text first
         if let text = pasteboard.string(forType: .string), !text.isEmpty {
@@ -116,6 +119,8 @@ final class SelectionGrabber {
         }
 
         status = "Clipboard is empty"
+        ToastCenter.shared.show("Clipboard is empty", kind: .error)
+        DesktopNotifier.notify(title: "Stash", message: "Clipboard is empty.")
     }
 
     private func imageFromPasteboard(_ pasteboard: NSPasteboard) -> NSImage? {
@@ -154,6 +159,7 @@ final class SelectionGrabber {
         }
 
         status = "Stashing image..."
+        ToastCenter.shared.show("Stashing clipboard image…", kind: .working)
         let capturedCLI = cli
 
         Task.detached {
@@ -162,12 +168,16 @@ final class SelectionGrabber {
                 try? FileManager.default.removeItem(at: tempURL)
                 await MainActor.run {
                     self.status = "Stashed!"
+                    ToastCenter.shared.show("Stashed clipboard image", kind: .success)
+                    DesktopNotifier.notify(title: "Stashed", message: "Clipboard image added to your stash.")
                     NotificationCenter.default.post(name: .stashDidIngest, object: nil)
                 }
             } catch {
                 try? FileManager.default.removeItem(at: tempURL)
                 await MainActor.run { [weak self] in
                     self?.status = "Failed: \(error.localizedDescription)"
+                    ToastCenter.shared.show("Stash failed: \(error.localizedDescription)", kind: .error)
+                    DesktopNotifier.notify(title: "Stash failed", message: error.localizedDescription)
                 }
             }
         }
@@ -177,6 +187,7 @@ final class SelectionGrabber {
         let title = "\(appName) (selection)"
         let capturedCLI = cli
         status = "Stashing..."
+        ToastCenter.shared.show("Stashing from \(appName)…", kind: .working)
         log("Calling CLI addSnippet, title=\(title)")
 
         Task.detached {
@@ -185,12 +196,18 @@ final class SelectionGrabber {
                 await MainActor.run {
                     self.status = "Stashed!"
                     self.log("CLI success")
+                    let toastMsg = appName == "Clipboard" ? "Stashed from Clipboard" : "Stashed selection from \(appName)"
+                    let bodyMsg = appName == "Clipboard" ? "Clipboard text added to your stash." : "Selection from \(appName)"
+                    ToastCenter.shared.show(toastMsg, kind: .success)
+                    DesktopNotifier.notify(title: "Stashed", message: bodyMsg)
                     NotificationCenter.default.post(name: .stashDidIngest, object: nil)
                 }
             } catch {
                 await MainActor.run { [weak self] in
                     self?.status = "Failed: \(error.localizedDescription)"
                     self?.log("CLI error: \(error.localizedDescription)")
+                    ToastCenter.shared.show("Stash failed: \(error.localizedDescription)", kind: .error)
+                    DesktopNotifier.notify(title: "Stash failed", message: error.localizedDescription)
                 }
             }
         }

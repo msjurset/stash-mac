@@ -30,6 +30,9 @@ struct ItemDetailView: View {
     /// inline-edit convention).
     @State private var isEditingTitle = false
     @State private var titleDraft = ""
+    @State private var showRecipeCardPopover = false
+    @State private var showCookingWizard = false
+    @State private var isExtractingRecipe = false
 
     private var pinnedViews: PinnedScrollableViews {
         if hasScrolledSincePin { return [] }
@@ -104,6 +107,7 @@ struct ItemDetailView: View {
                                 }
                             }
                             Spacer()
+                            PhoneHandoffButton(payload: .from(item: item))
                             ContextualHelpButton(topic: .itemTypes)
                         }
 
@@ -112,14 +116,16 @@ struct ItemDetailView: View {
                         // Unified media area — switches between embed-only,
                         // audio-beside-thumb, video tap-to-play, plain
                         // thumbnail, or hidden, based on item shape.
-                        if item.files?.isEmpty != false {
+                        let hasPreviewSlots = MultiFilePreview.hasPreviewableSlots(for: item)
+                        if !hasPreviewSlots {
                             MediaSection(item: item)
                         }
                     }
                     .padding(.bottom, 8)
 
                     // Media preview (Image, Multi-file, or Blob fallback).
-                    if item.type == .image || (item.files?.isEmpty == false) {
+                    let hasPreviewSlots = MultiFilePreview.hasPreviewableSlots(for: item)
+                    if item.type == .image || hasPreviewSlots {
                         DetailSection(title: "Preview") {
                             let primaryURL = item.storePath
                                 .flatMap { FilePathResolver.resolve(storePath: $0) }
@@ -132,7 +138,7 @@ struct ItemDetailView: View {
                                     FileManager.default.fileExists(atPath: url.path)
                                         ? url : nil
                                 }
-                            if let files = item.files, !files.isEmpty {
+                            if hasPreviewSlots {
                                 MultiFilePreview(item: item)
                             } else if let primary = primaryURL {
                                 ImagePreviewSection(fileURL: primary)
@@ -155,16 +161,79 @@ struct ItemDetailView: View {
                         DetailSection(title: "URL") {
                             VStack(alignment: .leading, spacing: 8) {
                                 ClickableURLText(urlString: urlString)
+                                HStack(spacing: 8) {
+                                    Button {
+                                        NotificationCenter.default.post(
+                                            name: .stashOpenFetchURL,
+                                            object: nil,
+                                            userInfo: ["url": urlString]
+                                        )
+                                    } label: {
+                                        Label("Fetch Files from this URL…", systemImage: "tray.and.arrow.down")
+                                    }
+                                    .controlSize(.small)
+
+                                    if item.recipe == nil {
+                                        Button {
+                                            isExtractingRecipe = true
+                                            Task {
+                                                let extracted = await store.extractRecipeForItem(item, prefs: aiPrefs)
+                                                isExtractingRecipe = false
+                                                if extracted != nil {
+                                                    showRecipeCardPopover = true
+                                                }
+                                            }
+                                        } label: {
+                                            if isExtractingRecipe {
+                                                HStack(spacing: 4) {
+                                                    ProgressView().controlSize(.mini)
+                                                    Text("Extracting Recipe…")
+                                                }
+                                            } else {
+                                                Label("Extract Recipe", systemImage: "fork.knife")
+                                            }
+                                        }
+                                        .controlSize(.small)
+                                        .disabled(isExtractingRecipe)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Native Recipe summary row + Recipe Card popover launcher
+                    if let recipe = item.recipe {
+                        DetailSection(title: "Recipe") {
+                            recipeSummaryRow(recipe: recipe)
+                        }
+                        .id("recipe-card-section")
+                    } else if item.canExtractRecipeFromText && (item.url == nil || item.url?.isEmpty == true) {
+                        DetailSection(title: "Recipe") {
+                            HStack(spacing: 10) {
+                                Image(systemName: "fork.knife")
+                                    .foregroundStyle(.secondary)
+                                Text(item.isRecipe ? "Tagged as recipe — extract a Recipe Card from text/notes?" : "Recipe detected in text/notes — extract a Recipe Card?")
+                                    .font(.callout)
+                                    .foregroundStyle(.secondary)
+                                Spacer()
                                 Button {
-                                    NotificationCenter.default.post(
-                                        name: .stashOpenFetchURL,
-                                        object: nil,
-                                        userInfo: ["url": urlString]
-                                    )
+                                    isExtractingRecipe = true
+                                    Task {
+                                        let extracted = await store.extractRecipeForItem(item, prefs: aiPrefs)
+                                        isExtractingRecipe = false
+                                        if extracted != nil {
+                                            showRecipeCardPopover = true
+                                        }
+                                    }
                                 } label: {
-                                    Label("Fetch Files from this URL…", systemImage: "tray.and.arrow.down")
+                                    if isExtractingRecipe {
+                                        ProgressView().controlSize(.small)
+                                    } else {
+                                        Label("Extract Recipe Card", systemImage: "fork.knife")
+                                    }
                                 }
                                 .controlSize(.small)
+                                .disabled(isExtractingRecipe)
                             }
                         }
                     }
@@ -399,8 +468,28 @@ struct ItemDetailView: View {
             }
         }
         .onAppear { store.markSeen(item.id) }
+        .onChange(of: item.id) { _, _ in
+            showRecipeCardPopover = false
+        }
         .toolbar {
             ToolbarItemGroup {
+                if let recipe = item.recipe {
+                    Button {
+                        showRecipeCardPopover.toggle()
+                    } label: {
+                        Label("Recipe Card", systemImage: "fork.knife")
+                    }
+                    .help("Open Recipe Card")
+
+                    if !recipe.instructions.isEmpty {
+                        Button {
+                            showCookingWizard = true
+                        } label: {
+                            Label("Start Cooking", systemImage: "flame.fill")
+                        }
+                        .help("Open Cooking Assistant (advance steps with Spacebar)")
+                    }
+                }
                 Button { showLinkSheet = true } label: {
                     Label("Link...", systemImage: "link")
                 }
@@ -446,6 +535,20 @@ struct ItemDetailView: View {
         .sheet(isPresented: $showLinkSheet) {
             LinkItemSheet(sourceItemID: item.id)
         }
+        .sheet(isPresented: $showCookingWizard) {
+            if let recipe = item.recipe {
+                CookingWizardView(recipe: recipe) { rating, note in
+                    Task {
+                        await store.logRecipeCooked(
+                            for: item.id,
+                            recipe: recipe,
+                            rating: rating,
+                            note: note
+                        )
+                    }
+                }
+            }
+        }
         .dropDestination(for: String.self) { items, _ in
             let rawIds = items.flatMap { $0.split(separator: ",").map(String.init) }
             let filteredIds = rawIds.filter { id in
@@ -466,7 +569,7 @@ struct ItemDetailView: View {
 
     @ViewBuilder
     private func tagsSection(proxy: ScrollViewProxy) -> some View {
-        Section {
+        DetailSection(title: "Tags") {
             FlowLayout(spacing: 6) {
                 if let tags = item.tags {
                     ForEach(tags) { tag in
@@ -482,6 +585,7 @@ struct ItemDetailView: View {
                                 .clipShape(Capsule())
                         }
                         .buttonStyle(.plain)
+                        .focusable(false)
                         .onHover { hovering in
                             if hovering { NSCursor.pointingHand.push() }
                             else { NSCursor.pop() }
@@ -526,28 +630,17 @@ struct ItemDetailView: View {
                             .clipShape(Capsule())
                     }
                     .buttonStyle(.plain)
+                    .focusable(false)
                     .foregroundStyle(.secondary)
                 }
             }
-            .padding(.leading, 14)
-            .padding(.bottom, 8)
-            .background(Color(NSColor.windowBackgroundColor))
-        } header: {
-            HStack(spacing: 4) {
-                Text("Tags")
-                    .font(.headline)
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.vertical, 8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(NSColor.windowBackgroundColor))
         }
         .id("tags-section")
     }
 
     @ViewBuilder
     private func collectionsSection(proxy: ScrollViewProxy) -> some View {
-        Section {
+        DetailSection(title: "Collections") {
             FlowLayout(spacing: 6) {
                 if let cols = item.collections {
                     ForEach(cols) { col in
@@ -597,23 +690,106 @@ struct ItemDetailView: View {
                             .clipShape(Capsule())
                     }
                     .buttonStyle(.plain)
+                    .focusable(false)
                     .foregroundStyle(.secondary)
                 }
             }
-            .padding(.leading, 14)
-            .padding(.bottom, 8)
-            .background(Color(NSColor.windowBackgroundColor))
-        } header: {
-            HStack(spacing: 4) {
-                Text("Collections")
-                    .font(.headline)
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.vertical, 8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(NSColor.windowBackgroundColor))
         }
         .id("collections-section")
+    }
+
+    private func recipeSummaryRow(recipe: RecipeData) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Image(systemName: "fork.knife")
+                    .foregroundStyle(.secondary)
+                Text("\(recipe.ingredients.count) ingredients \u{2022} \(recipe.instructions.count) steps")
+                    .font(.callout)
+                    .foregroundStyle(.primary)
+
+                if let prep = recipe.prepTime, !prep.isEmpty {
+                    recipePill("Prep: \(prep)")
+                }
+                if let cook = recipe.cookTime, !cook.isEmpty {
+                    recipePill("Cook: \(cook)")
+                }
+                if let total = recipe.totalTime, !total.isEmpty {
+                    recipePill("Total: \(total)")
+                }
+                if let yld = recipe.yield, !yld.isEmpty {
+                    recipePill(yld)
+                }
+                if let lastCook = recipe.cookHistory.last {
+                    let count = recipe.cookHistory.count
+                    recipePill(count == 1 ? "Cooked \(lastCook.formattedDate)" : "Cooked \(count)× (last \(lastCook.formattedDate))")
+                }
+
+                Spacer()
+            }
+
+            HStack(spacing: 8) {
+                Button {
+                    showRecipeCardPopover.toggle()
+                } label: {
+                    Label("Recipe Card", systemImage: "menucard")
+                }
+                .controlSize(.small)
+                .focusable(false)
+                .popover(isPresented: $showRecipeCardPopover, arrowEdge: .bottom) {
+                    RecipeCardView(
+                        item: item,
+                        recipe: recipe,
+                        onStartCooking: {
+                            showRecipeCardPopover = false
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                showCookingWizard = true
+                            }
+                        },
+                        onClose: {
+                            showRecipeCardPopover = false
+                        }
+                    )
+                    .frame(width: 840, height: 680)
+                }
+
+                if !recipe.instructions.isEmpty {
+                    Button {
+                        showCookingWizard = true
+                    } label: {
+                        Label("Start Cooking", systemImage: "flame.fill")
+                    }
+                    .controlSize(.small)
+                    .focusable(false)
+                }
+
+                Button {
+                    isExtractingRecipe = true
+                    Task {
+                        _ = await store.extractRecipeForItem(item, prefs: aiPrefs)
+                        isExtractingRecipe = false
+                    }
+                } label: {
+                    if isExtractingRecipe {
+                        ProgressView().controlSize(.mini)
+                    } else {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                }
+                .controlSize(.small)
+                .focusable(false)
+                .disabled(isExtractingRecipe)
+                .help("Re-extract Recipe")
+            }
+        }
+    }
+
+    private func recipePill(_ text: String) -> some View {
+        Text(text)
+            .font(.caption2)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(.secondary.opacity(0.15), in: Capsule())
+            .foregroundStyle(.secondary)
     }
 
     private func locationRow(loc: ItemLocation) -> some View {

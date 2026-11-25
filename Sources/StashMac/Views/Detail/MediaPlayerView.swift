@@ -127,8 +127,23 @@ struct MediaSection: View {
         // be redundant. The auto-generated canonical thumbnail still
         // exists on disk so the list-row hover popover and (future)
         // grid view can reuse it.
-        if item.type == .snippet || item.type == .email || item.type == .image {
+        if item.type == .email || item.type == .image {
             return .none
+        }
+        if item.type == .snippet {
+            switch kind {
+            case .embed(let url):
+                return .embed(url)
+            case .directAudio(let url):
+                return .audioBesideThumbnail(url)
+            case .directVideo(let url):
+                return .videoTapToPlay(url)
+            case .none:
+                if let thumb = item.thumbnailPath, !thumb.isEmpty {
+                    return .thumbnailOnly
+                }
+                return .none
+            }
         }
         switch kind {
         case .embed(let url):

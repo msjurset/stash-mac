@@ -40,7 +40,7 @@ private struct ClickOutsideMonitorInternal: NSViewRepresentable {
             super.viewDidMoveToWindow()
             guard monitor == nil else { return }
             monitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
-                guard let self else { return event }
+                guard let self, let window = self.window, event.window === window else { return event }
                 let locationInWindow = event.locationInWindow
                 let locationInView = self.convert(locationInWindow, from: nil)
                 if !self.bounds.contains(locationInView) {

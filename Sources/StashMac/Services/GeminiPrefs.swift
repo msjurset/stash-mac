@@ -137,7 +137,14 @@ final class AIPrefsStore {
         for id in AIProviderID.allCases {
             keys[id] = UserDefaults.standard.string(forKey: "ai.\(id.rawValue).apiKey") ?? ""
             paidKeys[id] = UserDefaults.standard.string(forKey: "ai.\(id.rawValue).paidApiKey") ?? ""
-            prompts[id] = UserDefaults.standard.string(forKey: "ai.\(id.rawValue).prompt") ?? ""
+            let storedPrompt = UserDefaults.standard.string(forKey: "ai.\(id.rawValue).prompt") ?? ""
+            if storedPrompt.trimmingCharacters(in: .whitespacesAndNewlines) ==
+                AIPrompts.legacyDefaultIdentifyV1.trimmingCharacters(in: .whitespacesAndNewlines) {
+                UserDefaults.standard.removeObject(forKey: "ai.\(id.rawValue).prompt")
+                prompts[id] = ""
+            } else {
+                prompts[id] = storedPrompt
+            }
         }
         self.apiKeys = keys
         self.paidApiKeys = paidKeys

@@ -12,12 +12,67 @@ struct FeedSource: Codable, Identifiable, Hashable {
     var defaultTags: [String]?
     var defaultCollection: String?
     var autoStash: Bool?
+    var fetchContent: Bool?
     var pollIntervalMinutes: Int
     var enabled: Bool
     var lastPolledAt: Date?
     var lastError: String?
     var createdAt: Date
     var updatedAt: Date
+
+    var hasError: Bool {
+        guard let err = lastError else { return false }
+        return !err.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var isHealthy: Bool {
+        enabled && !hasError && lastPolledAt != nil
+    }
+}
+
+/// JSON payload returned by `stash feeds refresh --json`.
+struct FeedRefreshResponse: Codable, Hashable {
+    var snoozedExpired: Int?
+    var sources: [FeedRefreshSourceSummary]
+}
+
+/// Per-source outcome reported by `stash feeds refresh --json`.
+struct FeedRefreshSourceSummary: Codable, Hashable {
+    var source: String
+    var found: Int
+    var new: Int
+    var enriched: Int?
+    var autoStashed: Int?
+    var error: String?
+}
+
+/// Aggregated candidate counts by triage state for a single feed source.
+struct FeedCandidateStats: Equatable {
+    var unread: Int = 0
+    var stashed: Int = 0
+    var snoozed: Int = 0
+    var dismissed: Int = 0
+
+    var total: Int {
+        unread + stashed + snoozed + dismissed
+    }
+
+    init(candidates: [FeedCandidate] = []) {
+        for c in candidates {
+            switch c.state {
+            case FeedCandidateState.unread.rawValue:
+                unread += 1
+            case FeedCandidateState.stashed.rawValue:
+                stashed += 1
+            case FeedCandidateState.snoozed.rawValue:
+                snoozed += 1
+            case FeedCandidateState.dismissed.rawValue:
+                dismissed += 1
+            default:
+                break
+            }
+        }
+    }
 }
 
 /// One candidate entry pulled from a feed source, awaiting triage.

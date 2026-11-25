@@ -41,6 +41,34 @@ struct StashItem: Codable, Identifiable, Hashable {
         collections?.map(\.name) ?? []
     }
 
+    /// True if this item has structured recipe metadata or is tagged with 'recipe' / 'recipes'.
+    var isRecipe: Bool {
+        if metadata?.recipe != nil { return true }
+        guard let tags else { return false }
+        return tags.contains {
+            let lower = $0.name.lowercased()
+            return lower == "recipe" || lower == "recipes" || lower == "cooking" || lower == "food"
+        }
+    }
+
+    /// True if deterministic plaintext extraction detects a recipe in `notes` or `extractedText`,
+    /// or if the item is tagged as a recipe.
+    var canExtractRecipeFromText: Bool {
+        if isRecipe { return true }
+        if let notes, !notes.isEmpty, RecipeExtractor.extractFromPlaintext(notes, fallbackTitle: title, sourceURL: url) != nil {
+            return true
+        }
+        if let extractedText, !extractedText.isEmpty, RecipeExtractor.extractFromPlaintext(extractedText, fallbackTitle: title, sourceURL: url) != nil {
+            return true
+        }
+        return false
+    }
+
+    /// The structured recipe data attached to this item, if any.
+    var recipe: RecipeData? {
+        metadata?.recipe
+    }
+
     var shortID: String {
         if id.count > 10 {
             return String(id.prefix(10))

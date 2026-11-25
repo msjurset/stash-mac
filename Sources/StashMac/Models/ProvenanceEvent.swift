@@ -27,6 +27,7 @@ struct ProvenanceEvent: Codable, Identifiable, Hashable {
         case "rule":    return "wand.and.stars"
         case "skip":    return "minus.circle"
         case "tag":     return action == "remove" ? "tag.slash" : "tag"
+        case "cook":    return "flame.fill"
         case "error":   return "exclamationmark.triangle"
         default:        return "circle"
         }

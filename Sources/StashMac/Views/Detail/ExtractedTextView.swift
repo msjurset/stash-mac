@@ -109,7 +109,19 @@ struct ExtractedTextView: View {
                 )
                     .padding(10)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(.quaternary)
+                    .background(
+                        Rectangle()
+                            .fill(.quaternary)
+                            .contentShape(Rectangle())
+                            .onTapGesture(count: 2) {
+                                openEditor()
+                            }
+                            .onTapGesture(count: 1) {
+                                if isTruncated {
+                                    withAnimation { isExpanded.toggle() }
+                                }
+                            }
+                    )
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                     .contextMenu {
                         Button("Copy") {
@@ -223,7 +235,8 @@ struct ExtractedTextView: View {
                 font: .systemFont(ofSize: 13),
                 textContainerInset: NSSize(width: 12, height: 12),
                 drawsBackground: false,
-                monospaced: true
+                monospaced: true,
+                initialFocusCursor: (editedText as NSString).length
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }

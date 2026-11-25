@@ -25,9 +25,11 @@ public enum GlobalAction: Sendable {
     case backup
     case reindex
     case cleanOrphans
+    case sendToPhone
 }
 
 public let builtInGlobalCommands: [GlobalCommand] = [
+    GlobalCommand(name: "phone", description: "Send selected item to phone (push & QR)", icon: "iphone.and.arrow.forward", action: .sendToPhone),
     GlobalCommand(name: "stats", description: "Show library statistics", icon: "chart.bar", action: .showStats),
     GlobalCommand(name: "check", description: "Run health check", icon: "checkmark.shield", action: .showCheck),
     GlobalCommand(name: "logs", description: "View capture logs", icon: "doc.text", action: .showLogs),

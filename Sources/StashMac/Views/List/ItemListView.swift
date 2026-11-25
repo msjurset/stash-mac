@@ -6,8 +6,19 @@ import AppKit
 @Observable
 @MainActor
 final class TagSuggestionState {
-    var matches: [StashTag] = []
+    struct Suggestion: Identifiable, Equatable {
+        let id: String
+        let label: String
+        let display: String
+        let subtitle: String?
+        let icon: String
+        let count: Int
+    }
+
+    var matches: [Suggestion] = []
     var activeIndex = 0
+    var cursorLocation = 0
+    var lastSetQuery: String? = nil
     var suggestionTask: Task<Void, Never>?
     /// Returns `true` if the event was consumed.
     var onKey: ((SuggestKey) -> Bool)?
@@ -19,6 +30,8 @@ final class TagSuggestionState {
     var isSearchFocused: Bool = false
 }
 
+private let listSearchFieldTags = ["tag", "!tag", "collection", "type", "is"]
+
 struct ItemListView: View {
     @Environment(StashStore.self) private var store
     @Environment(AIPrefsStore.self) private var aiPrefs
@@ -26,6 +39,8 @@ struct ItemListView: View {
 
     @State private var state = TagSuggestionState()
     @State private var regexGuideShown = false
+    @State private var pendingCursor: Int? = nil
+    @State private var searchFocusTrigger: Int = 0
 
     /// Drives the per-row Tags popover. When non-nil, the popover
     /// is presented anchored to the row whose id matches `id`. The
@@ -76,17 +91,30 @@ struct ItemListView: View {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
                 FilterField(
-                    placeholder: store.regexMode ? "Regex search... /pattern/" : "Search items... (tag: to filter)",
+                    placeholder: store.regexMode ? "Regex search... /pattern/ (! to negate)" : "Search items... (Tab/Enter for tag: collection: type: is:)",
                     text: $store.searchQuery,
+                    focusTrigger: searchFocusTrigger,
+                    pendingCursor: $pendingCursor,
+                    onSelectionChanged: { loc in
+                        state.cursorLocation = loc
+                        recomputeSuggestions()
+                    },
                     onSubmit: { store.refresh() },
-                    onBeginEditing: { state.isSearchFocused = true },
+                    onBeginEditing: {
+                        state.isSearchFocused = true
+                        recomputeSuggestions()
+                    },
                     onEndEditing:   { state.isSearchFocused = false }
                 )
                 // Regex toggle (*) inside the search bar area
                 Button {
                     store.regexMode.toggle()
                     if store.regexMode {
+                        state.matches = []
                         regexGuideShown = true
+                    } else {
+                        regexGuideShown = false
+                        recomputeSuggestions()
                     }
                     store.refresh()
                 } label: {
@@ -97,6 +125,7 @@ struct ItemListView: View {
                         .background(store.regexMode ? Color.accentColor : Color.clear, in: RoundedRectangle(cornerRadius: 4))
                 }
                 .buttonStyle(.plain)
+                .focusable(false)
                 .help(store.regexMode ? "Regex search active — click to disable" : "Search by regex — click to enable")
                 .background(
                     PersistentPopoverHost(
@@ -111,12 +140,14 @@ struct ItemListView: View {
                     Button {
                         store.searchQuery = ""
                         state.matches = []
+                        state.cursorLocation = 0
                         store.refresh()
                     } label: {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundStyle(.tertiary)
                     }
                     .buttonStyle(.plain)
+                    .focusable(false)
                 }
             }
             .padding(.horizontal, 10)
@@ -128,19 +159,19 @@ struct ItemListView: View {
                 if newQuery == "//" && !store.regexMode {
                     store.regexMode = true
                     regexGuideShown = true
-                    store.searchQuery = "//"
-                    
-                    // Position cursor between the slashes: /|/
-                    DispatchQueue.main.async {
-                        for window in NSApplication.shared.windows where window.isVisible {
-                            if let field = findSearchField(in: window.contentView),
-                               let editor = field.currentEditor() {
-                                editor.selectedRange = NSRange(location: 1, length: 0)
-                                return
-                            }
-                        }
-                    }
+                    state.matches = []
+                    pendingCursor = 1
+                    state.cursorLocation = 1
+                    store.debouncedRefresh()
+                    return
                 }
+                if let last = state.lastSetQuery, last == newQuery {
+                    state.lastSetQuery = nil
+                    store.debouncedRefresh()
+                    return
+                }
+                state.lastSetQuery = nil
+                recomputeSuggestions()
                 store.debouncedRefresh()
             }
 
@@ -156,23 +187,30 @@ struct ItemListView: View {
 
             Divider()
 
-            // Tag suggestions
+            // Chip suggestions
             if state.isSearchFocused && !state.matches.isEmpty {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 0) {
-                            ForEach(Array(state.matches.enumerated()), id: \.element.id) { idx, tag in
+                            ForEach(Array(state.matches.enumerated()), id: \.element.id) { idx, suggestion in
                                 Button {
-                                    commitTag(tag.name)
+                                    completeSuggestion(suggestion.label)
                                 } label: {
-                                    HStack {
-                                        Image(systemName: "tag")
-                                            .foregroundStyle(.secondary)
+                                    HStack(spacing: 8) {
+                                        Image(systemName: suggestion.icon)
+                                            .foregroundStyle(idx == state.activeIndex ? Color.accentColor : .secondary)
                                             .frame(width: 16)
-                                        Text("tag:\(tag.name)")
+                                        Text(suggestion.display)
+                                            .font(.callout.weight(idx == state.activeIndex ? .semibold : .regular))
+                                        if let sub = suggestion.subtitle {
+                                            Text(sub)
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                                .lineLimit(1)
+                                        }
                                         Spacer()
-                                        if let count = tag.count {
-                                            Text("\(count)")
+                                        if suggestion.count > 0 {
+                                            Text("\(suggestion.count)")
                                                 .foregroundStyle(.tertiary)
                                                 .font(.caption)
                                         }
@@ -183,6 +221,8 @@ struct ItemListView: View {
                                     .contentShape(Rectangle())
                                 }
                                 .buttonStyle(.plain)
+                                .focusable(false)
+                                .pointingHandCursor()
                                 .id(idx)
                             }
                         }
@@ -225,7 +265,12 @@ struct ItemListView: View {
             }
         }
         .onKeyPress(.space) {
-            // Ignore spacebar for QuickLook if a text field is focused (typing).
+            // Ignore spacebar for QuickLook if a modal sheet (such as CookingWizardView or FetchURLSheet)
+            // is active or if a text field is focused (typing).
+            if let keyWin = NSApp.keyWindow,
+               (keyWin.isSheet || keyWin.attachedSheet != nil) {
+                return .ignored
+            }
             if let firstResponder = NSApp.keyWindow?.firstResponder,
                (firstResponder is NSTextView || firstResponder is NSTextField) {
                 return .ignored
@@ -246,12 +291,6 @@ struct ItemListView: View {
             if ids.isEmpty { return .ignored }
             for id in ids { store.openItem(id: id) }
             return .handled
-        }
-        .onChange(of: store.searchQuery) { _, _ in
-            recomputeSuggestions()
-            if state.matches.isEmpty {
-                store.debouncedRefresh()
-            }
         }
         .onChange(of: store.navigation) { _, new in
             // Hard-switch to grid (= masonry, since `gridView` reads
@@ -559,8 +598,48 @@ struct ItemListView: View {
     /// two lines when the pane is narrow — pills stay full-width and
     /// scroll instead.
     private var typeFilterBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
+        let knownSet = Set(["tag", "t", "collection", "col", "c", "type", "is"])
+        let activeTokens = store.regexMode
+            ? []
+            : SearchTokenHelper.extractStructuredTokens(from: store.searchQuery, knownKeys: knownSet)
+
+        return ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
+                ForEach(activeTokens, id: \.self) { tok in
+                    let keyPart = tok.split(separator: ":").first.map(String.init) ?? tok
+                    let displayLabel = tok.replacingOccurrences(of: "\"", with: "")
+                    Button {
+                        let updated = SearchTokenHelper.removeChip(tok, from: store.searchQuery)
+                        let finalQuery = updated.isEmpty ? "" : (updated.hasSuffix(" ") ? updated : updated + " ")
+                        state.lastSetQuery = finalQuery
+                        store.searchQuery = finalQuery
+                        state.matches = []
+                        pendingCursor = finalQuery.count
+                        state.cursorLocation = finalQuery.count
+                        store.debouncedRefresh()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: iconForListTag("\(keyPart):"))
+                                .font(.system(size: 10, weight: .semibold))
+                            Text(displayLabel)
+                                .font(.caption.weight(.semibold))
+                                .lineLimit(1)
+                            Image(systemName: "xmark")
+                                .font(.system(size: 8, weight: .bold))
+                                .padding(.leading, 1)
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Capsule().fill(Color.accentColor.opacity(0.2)))
+                        .overlay(Capsule().strokeBorder(Color.accentColor.opacity(0.55), lineWidth: 1))
+                        .foregroundStyle(Color.accentColor)
+                    }
+                    .buttonStyle(.plain)
+                    .focusable(false)
+                    .pointingHandCursor()
+                    .help("Click to remove filter \(displayLabel)")
+                }
+
                 TypeChipView(
                     label: "All",
                     icon: "tray.full",
@@ -592,147 +671,347 @@ struct ItemListView: View {
 
     // MARK: - Suggestion logic
 
-    /// Recompute tag matches based on the current query. Sets `activeIndex = 0`
-    /// when matches exist (first item is always pre-highlighted, per the rule).
-    /// The tag token currently being edited (the last `tag:...` at the end of
-    /// the query) does NOT count as "used" — it should still suggest itself.
+    private func tokenRanges(in text: String) -> [Range<String.Index>] {
+        var ranges: [Range<String.Index>] = []
+        var i = text.startIndex
+        while i < text.endIndex {
+            while i < text.endIndex && text[i].isWhitespace {
+                i = text.index(after: i)
+            }
+            if i >= text.endIndex { break }
+            let start = i
+            var inQuotes = false
+            while i < text.endIndex {
+                let c = text[i]
+                if c == "\"" { inQuotes.toggle() }
+                else if c.isWhitespace && !inQuotes { break }
+                i = text.index(after: i)
+            }
+            ranges.append(start..<i)
+        }
+        return ranges
+    }
+
+    private func canonicalListTagName(_ raw: String) -> String {
+        switch raw {
+        case "t", "tags": return "tag"
+        case "-tag", "^tag", "!t": return "!tag"
+        case "col", "c", "collections", "folder": return "collection"
+        default: return raw
+        }
+    }
+
+    private func parseToken(at location: Int, in text: String) -> (tag: String?, partial: String, range: Range<String.Index>)? {
+        let clampedOffset = max(0, min(location, text.count))
+        let cursorIndex = text.index(text.startIndex, offsetBy: clampedOffset)
+        let ranges = tokenRanges(in: text)
+
+        var activeRange: Range<String.Index>? = nil
+        for r in ranges {
+            if r.lowerBound <= cursorIndex && cursorIndex <= r.upperBound {
+                activeRange = r
+                break
+            }
+        }
+
+        let tokenRange = activeRange ?? (cursorIndex..<cursorIndex)
+        let token = String(text[tokenRange])
+
+        if let colonIdx = token.firstIndex(of: ":") {
+            let rawTag = String(token[token.startIndex..<colonIdx]).lowercased()
+            let canonicalTag = canonicalListTagName(rawTag)
+            var partial = String(token[token.index(after: colonIdx)...]).lowercased()
+            if partial.hasPrefix("\"") { partial.removeFirst() }
+            if partial.hasSuffix("\"") { partial.removeLast() }
+            if listSearchFieldTags.contains(canonicalTag) {
+                return (canonicalTag, partial, tokenRange)
+            }
+        }
+
+        var unquoted = token.lowercased()
+        if unquoted.hasPrefix("\"") { unquoted.removeFirst() }
+        if unquoted.hasSuffix("\"") { unquoted.removeLast() }
+        return (nil, unquoted, tokenRange)
+    }
+
+    private func usedSingleValueKeys(in text: String) -> Set<String> {
+        var used = Set<String>()
+        let multiAllowed: Set<String> = ["tag", "!tag", "is"]
+        for r in tokenRanges(in: text) {
+            let token = text[r]
+            if let colon = token.firstIndex(of: ":") {
+                let rawKey = String(token[token.startIndex..<colon]).lowercased()
+                let key = canonicalListTagName(rawKey)
+                if listSearchFieldTags.contains(key) && !multiAllowed.contains(key) {
+                    used.insert(key)
+                }
+            }
+        }
+        return used
+    }
+
+    private func showAllUnusedKeys(in text: String, partial: String = "") {
+        let used = usedSingleValueKeys(in: text)
+        let matchingKeys = listSearchFieldTags.filter {
+            !used.contains($0) && (partial.isEmpty || ($0.hasPrefix(partial) && $0 != partial))
+        }
+        state.matches = matchingKeys.map { key in
+            TagSuggestionState.Suggestion(
+                id: "key:\(key)",
+                label: "\(key):",
+                display: "\(key):",
+                subtitle: listTagDescription(key),
+                icon: iconForListTag("\(key):"),
+                count: 0
+            )
+        }
+        state.activeIndex = 0
+    }
+
+    private func listTagDescription(_ key: String) -> String {
+        switch key {
+        case "tag": return "Filter items by tag"
+        case "!tag": return "Exclude items with tag"
+        case "collection": return "Filter items by collection"
+        case "type": return "Filter by item type (url, snippet, image, file, audio, email)"
+        case "is": return "Filter by status (recipe, unread, starred, located, annotated, archived)"
+        default: return ""
+        }
+    }
+
+    private func iconForListTag(_ label: String) -> String {
+        let rawKey = label.split(separator: ":").first.map(String.init)?.lowercased() ?? label.lowercased()
+        let key = canonicalListTagName(rawKey)
+        switch key {
+        case "tag": return "tag"
+        case "!tag": return "tag.slash"
+        case "collection": return "folder"
+        case "type": return "square.grid.2x2"
+        case "is": return "sparkles"
+        default: return "tag"
+        }
+    }
+
     private func recomputeSuggestions() {
         state.suggestionTask?.cancel()
-
-        let query = store.searchQuery
-        // Cheap synchronous check: if not potentially in a tag context, clear immediately
-        if !query.contains("tag:") {
+        if store.regexMode {
             state.matches = []
             state.activeIndex = 0
             return
         }
 
-        state.suggestionTask = Task {
-            // Short debounce
-            try? await Task.sleep(for: .milliseconds(50))
-            guard !Task.isCancelled else { return }
-
-            guard let match = query.range(of: #"(?:^|\s)[!^-]?tag:[^\s]*$"#, options: .regularExpression) else {
-                await MainActor.run {
-                    state.matches = []
-                    state.activeIndex = 0
-                }
-                return
-            }
-            let token = query[match].trimmingCharacters(in: .whitespaces)
-            guard let colonIdx = token.firstIndex(of: ":") else {
-                await MainActor.run {
-                    state.matches = []
-                    state.activeIndex = 0
-                }
-                return
-            }
-            let partial = String(token[token.index(after: colonIdx)...]).lowercased()
-
-            // Already-committed tag tokens
-            let existing = Set(
-                query.matches(of: /[!^-]?tag:(\S+)/).map { String($0.output.1).lowercased() }
-            )
-            
-            let matches = store.tags
-                .filter { tag in
-                    let lower = tag.name.lowercased()
-                    let matches = partial.isEmpty || lower.contains(partial)
-                    return matches && !existing.contains(lower)
-                }
-            
-            await MainActor.run {
-                state.matches = matches
-                state.activeIndex = 0
-            }
-        }
-    }
-
-    /// Tab-opens-dropdown per the rule.
-    ///
-    /// If the cursor is inside a `tag:<partial>` token, `recomputeSuggestions`
-    /// has already populated matches — no-op here (the dropdown opens on its
-    /// own via the typing flow).
-    ///
-    /// Otherwise the cursor is inside a bare word (or empty). We treat it as a
-    /// *key* completion context: if the word is a prefix of the one known key
-    /// (`tag:`), replace the word with `tag:` — no trailing space — and let
-    /// the subsequent `onChange` recompute open the value dropdown.
-    private func openDropdownIfPossible() {
         let query = store.searchQuery
-
-        // Already in value context? recompute handles it; avoid rewriting.
-        if query.range(of: #"(?:^|\s)[!^-]?tag:[^\s]*$"#, options: .regularExpression) != nil {
+        let effectiveCursor = max(0, min(state.cursorLocation, query.count))
+        guard let parsed = parseToken(at: effectiveCursor, in: query) else {
+            state.matches = []
+            state.activeIndex = 0
             return
         }
 
-        // Figure out the current bare-word partial (the run of non-whitespace
-        // at the end of the query). Empty when the query is empty or ends in
-        // whitespace.
-        let partial: String
-        if let wsIdx = query.lastIndex(where: { $0.isWhitespace }) {
-            partial = String(query[query.index(after: wsIdx)...])
-        } else {
-            partial = query
+        if let tag = parsed.tag {
+            populateListTagValues(tag, partial: parsed.partial, in: query)
+            return
         }
 
-        // Key completion: commit if partial matches any tag-key prefix.
-        let keys = ["tag:", "!tag:", "-tag:", "^tag:"]
-        guard let key = keys.first(where: { $0.hasPrefix(partial.lowercased()) }) else { return }
+        if !parsed.partial.isEmpty {
+            showAllUnusedKeys(in: query, partial: parsed.partial)
+            return
+        }
 
-        // Replace the partial with the key (no trailing space — chain into
-        // value completion).
-        let end = query.endIndex
-        let start = query.index(end, offsetBy: -partial.count)
-        var updated = query
-        updated.replaceSubrange(start..<end, with: key)
-        store.searchQuery = updated
-    }
-
-    /// Commit an accepted tag: replace `tag:<partial>` with `tag:<name> ` and
-    /// dismiss the dropdown. The trailing space lets the user keep typing.
-    private func commitTag(_ tagName: String) {
-        guard let range = store.searchQuery.range(of: #"(?:^|\s)[!^-]?tag:[^\s]*$"#, options: .regularExpression) else { return }
-        let query = store.searchQuery
-        let token = query[range]
-        let before = query[query.startIndex..<range.lowerBound]
-
-        let leadingSpace = token.hasPrefix(" ") ? " " : ""
-        let trimmedToken = token.trimmingCharacters(in: .whitespaces)
-        let tagPrefix = trimmedToken.replacing(/:\S*$/, with: ":")
-
-        store.searchQuery = "\(before)\(leadingSpace)\(tagPrefix)\(tagName) "
         state.matches = []
         state.activeIndex = 0
-        store.debouncedRefresh()
     }
 
-    /// Tab-with-single-item: insert the sole match into the field WITHOUT a
-    /// trailing space, and keep the dropdown open. Recompute so the dropdown
-    /// reflects the new cursor position (it will narrow to match itself).
-    private func tabInsertSingle(_ tagName: String) {
-        guard let range = store.searchQuery.range(of: #"(?:^|\s)[!^-]?tag:[^\s]*$"#, options: .regularExpression) else { return }
+    @discardableResult
+    private func requestListSuggestions() -> Bool {
+        if store.regexMode { return false }
         let query = store.searchQuery
-        let token = query[range]
-        let before = query[query.startIndex..<range.lowerBound]
+        let effectiveCursor = max(0, min(state.cursorLocation, query.count))
+        guard let parsed = parseToken(at: effectiveCursor, in: query) else {
+            showAllUnusedKeys(in: query)
+            return !state.matches.isEmpty
+        }
 
-        let leadingSpace = token.hasPrefix(" ") ? " " : ""
-        let trimmedToken = token.trimmingCharacters(in: .whitespaces)
-        let tagPrefix = trimmedToken.replacing(/:\S*$/, with: ":")
+        if let tag = parsed.tag {
+            populateListTagValues(tag, partial: parsed.partial, in: query)
+            return !state.matches.isEmpty
+        } else {
+            showAllUnusedKeys(in: query, partial: parsed.partial)
+            return !state.matches.isEmpty
+        }
+    }
 
-        store.searchQuery = "\(before)\(leadingSpace)\(tagPrefix)\(tagName)"
-        // recomputeSuggestions runs via onChange; activeIndex resets to 0.
+    private func populateListTagValues(_ tag: String, partial: String, in query: String) {
+        struct Candidate {
+            let key: String
+            let display: String
+            let subtitle: String?
+            let icon: String
+            let count: Int
+        }
+        var candidates: [Candidate] = []
+
+        switch tag {
+        case "tag", "!tag":
+            let existing = Set(
+                tokenRanges(in: query).compactMap { r -> String? in
+                    let tok = String(query[r])
+                    guard let colon = tok.firstIndex(of: ":") else { return nil }
+                    let k = canonicalListTagName(String(tok[..<colon]).lowercased())
+                    guard k == "tag" || k == "!tag" else { return nil }
+                    let v = String(tok[tok.index(after: colon)...]).replacingOccurrences(of: "\"", with: "").lowercased()
+                    return v == partial ? nil : v
+                }
+            )
+            candidates = store.tags
+                .filter { !existing.contains($0.name.lowercased()) }
+                .map { t in
+                    Candidate(
+                        key: t.name,
+                        display: t.name,
+                        subtitle: nil,
+                        icon: tag == "!tag" ? "tag.slash" : "tag",
+                        count: t.count ?? 0
+                    )
+                }
+
+        case "collection":
+            candidates = store.collections.map { col in
+                Candidate(
+                    key: col.name,
+                    display: col.name,
+                    subtitle: col.description ?? "Collection",
+                    icon: "folder",
+                    count: 0
+                )
+            }
+
+        case "type":
+            candidates = ItemType.allCases.map { itemType in
+                let keyName = itemType == .url ? "url" : itemType.rawValue
+                let count = store.items.filter { $0.type == itemType }.count
+                return Candidate(
+                    key: keyName,
+                    display: keyName,
+                    subtitle: itemType.tooltip,
+                    icon: itemType.icon,
+                    count: count
+                )
+            }
+
+        case "is":
+            let seenIDs = store.seenItemIDs
+            candidates = [
+                Candidate(key: "recipe", display: "recipe", subtitle: "Items with recipe cards or #recipe", icon: "fork.knife", count: store.items.filter(\.isRecipe).count),
+                Candidate(key: "unread", display: "unread", subtitle: "Unseen items", icon: "circle.fill", count: store.items.filter { !seenIDs.contains($0.id) }.count),
+                Candidate(key: "starred", display: "starred", subtitle: "Starred items (#fav)", icon: "star.fill", count: store.items.filter { $0.tags?.contains(where: { $0.name.lowercased() == "fav" }) ?? false }.count),
+                Candidate(key: "located", display: "located", subtitle: "Geotagged items", icon: "mappin.and.ellipse", count: store.items.filter { $0.location != nil }.count),
+                Candidate(key: "annotated", display: "annotated", subtitle: "Items with notes", icon: "note.text", count: store.items.filter { !($0.notes?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) }.count),
+                Candidate(key: "archived", display: "archived", subtitle: "Archived items", icon: "archivebox", count: 0)
+            ]
+
+        default:
+            state.matches = []
+            state.activeIndex = 0
+            return
+        }
+
+        let filtered = candidates
+            .filter { c in
+                partial.isEmpty || c.key.lowercased().contains(partial) || c.display.lowercased().contains(partial)
+            }
+            .sorted { a, b in
+                if !partial.isEmpty {
+                    let aPre = a.display.lowercased().hasPrefix(partial)
+                    let bPre = b.display.lowercased().hasPrefix(partial)
+                    if aPre != bPre { return aPre }
+                }
+                if a.count != b.count { return a.count > b.count }
+                return a.display.localizedCaseInsensitiveCompare(b.display) == .orderedAscending
+            }
+            .prefix(25)
+
+        state.matches = filtered.map { c in
+            let safeKey = (c.key.contains(" ") || c.key.contains(",")) ? "\"\(c.key)\"" : c.key
+            return TagSuggestionState.Suggestion(
+                id: "val:\(tag):\(c.key.lowercased())",
+                label: "\(tag):\(safeKey)",
+                display: "\(tag):\(c.display)",
+                subtitle: c.subtitle,
+                icon: c.icon,
+                count: c.count
+            )
+        }
+        state.activeIndex = 0
+    }
+
+    private func completeSuggestion(_ label: String) {
+        let query = store.searchQuery
+        let effectiveCursor = max(0, min(state.cursorLocation, query.count))
+        guard let parsed = parseToken(at: effectiveCursor, in: query) else { return }
+
+        let trailingSpace = label.hasSuffix(":") ? "" : " "
+        var newQuery = query
+        newQuery.replaceSubrange(parsed.range, with: label + trailingSpace)
+
+        state.lastSetQuery = newQuery
+        store.searchQuery = newQuery
+
+        let prefix = query[query.startIndex..<parsed.range.lowerBound]
+        let newCursor = prefix.count + label.count + trailingSpace.count
+        pendingCursor = newCursor
+        state.cursorLocation = newCursor
+
+        state.matches = []
+        state.activeIndex = 0
+
+        if label.hasSuffix(":") {
+            let tag = canonicalListTagName(String(label.dropLast()))
+            populateListTagValues(tag, partial: "", in: newQuery)
+        } else {
+            store.debouncedRefresh()
+        }
+    }
+
+    private func tabInsertSingle(_ label: String) {
+        let query = store.searchQuery
+        let effectiveCursor = max(0, min(state.cursorLocation, query.count))
+        guard let parsed = parseToken(at: effectiveCursor, in: query) else { return }
+
+        var newQuery = query
+        newQuery.replaceSubrange(parsed.range, with: label)
+
+        state.lastSetQuery = newQuery
+        store.searchQuery = newQuery
+
+        let prefix = query[query.startIndex..<parsed.range.lowerBound]
+        let newCursor = prefix.count + label.count
+        pendingCursor = newCursor
+        state.cursorLocation = newCursor
+
+        if let newParsed = parseToken(at: newCursor, in: newQuery) {
+            if let tag = newParsed.tag {
+                populateListTagValues(tag, partial: newParsed.partial, in: newQuery)
+            } else {
+                showAllUnusedKeys(in: newQuery, partial: newParsed.partial)
+            }
+        } else {
+            state.matches = []
+        }
     }
 
     private func handleKey(_ key: SuggestKey) -> Bool {
         switch key {
         case .tab, .shiftTab:
             if state.matches.isEmpty {
-                openDropdownIfPossible()
+                let opened = requestListSuggestions()
+                if opened && key == .shiftTab {
+                    state.activeIndex = max(0, state.matches.count - 1)
+                }
                 return true
             }
-            if state.matches.count == 1 {
-                tabInsertSingle(state.matches[0].name)
+            if state.matches.count == 1 && key == .tab {
+                tabInsertSingle(state.matches[0].label)
                 return true
             }
             advance(key == .tab ? .down : .up)
@@ -749,11 +1028,11 @@ struct ItemListView: View {
             if !state.matches.isEmpty {
                 let idx = max(state.activeIndex, 0)
                 if idx < state.matches.count {
-                    commitTag(state.matches[idx].name)
+                    completeSuggestion(state.matches[idx].label)
                 }
                 return true
             }
-            return false  // fall through to TextField.onSubmit
+            return false  // fall through to FilterField.onSubmit
         case .escape:
             if !state.matches.isEmpty {
                 state.matches = []
@@ -762,6 +1041,7 @@ struct ItemListView: View {
             }
             if !store.searchQuery.isEmpty {
                 store.searchQuery = ""
+                state.cursorLocation = 0
                 store.refresh()
                 return true
             }
@@ -774,8 +1054,8 @@ struct ItemListView: View {
     private func advance(_ direction: Direction) {
         guard !state.matches.isEmpty else { return }
         switch direction {
-        case .down: state.activeIndex = min(state.activeIndex + 1, state.matches.count - 1)
-        case .up:   state.activeIndex = max(state.activeIndex - 1, 0)
+        case .down: state.activeIndex = (state.activeIndex + 1) % state.matches.count
+        case .up:   state.activeIndex = (state.activeIndex - 1 + state.matches.count) % state.matches.count
         }
     }
 
@@ -899,6 +1179,14 @@ struct ItemListView: View {
                         object: nil,
                         userInfo: ["url": url]
                     )
+                }
+            }
+            if let item = store.items.first(where: { $0.id == rightClickedID }),
+               (item.type == .url || item.type == .snippet || item.isRecipe) {
+                Button(item.recipe != nil ? "Re-extract Recipe Card" : "Extract Recipe Card") {
+                    Task {
+                        _ = await store.extractRecipeForItem(item, prefs: aiPrefs)
+                    }
                 }
             }
             // Per-item thumbnail action — branch on type so the

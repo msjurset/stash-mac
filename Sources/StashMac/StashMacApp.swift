@@ -280,6 +280,12 @@ struct StashMacApp: App {
                     )
                 }
                 .keyboardShortcut("u", modifiers: [.command, .shift])
+                Divider()
+                Button("Global Search…") {
+                    GlobalSearchController.shared.configure(store: store, aiPrefs: aiPrefs, helpModel: helpModel)
+                    GlobalSearchController.shared.toggle()
+                }
+                .keyboardShortcut("k", modifiers: [.command])
             }
         }
 
@@ -326,4 +332,10 @@ extension Notification.Name {
     /// Posted by the File ▸ Fetch from URL… menu item; ContentView
     /// listens and presents the fetch-URL picker sheet.
     static let stashOpenFetchURL = Notification.Name("stash.openFetchURL")
+    /// Posted by Global Search quick actions to open the Add Item sheet.
+    static let stashOpenAddItem = Notification.Name("stash.openAddItem")
+    /// Posted by Global Search quick actions to open the New Collection sheet.
+    static let stashOpenAddCollection = Notification.Name("stash.openAddCollection")
+    /// Posted by Global Search quick actions to open the Edit Item sheet.
+    static let stashOpenEditItem = Notification.Name("stash.openEditItem")
 }

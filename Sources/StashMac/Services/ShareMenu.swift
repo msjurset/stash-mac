@@ -23,6 +23,12 @@ enum ShareMenu {
     static func menu(for item: StashItem) -> NSMenu {
         let menu = NSMenu()
 
+        // If this stash is a recipe, lead with Recipe Card PDF & Recipe sharing options.
+        if let recipe = RecipePDFGenerator.resolveRecipe(for: item) {
+            addRecipeActions(to: menu, item: item, recipe: recipe)
+            menu.addItem(.separator())
+        }
+
         // Per-type actions. Each AddIfApplicable closure adds the
         // item only when there's actually something to copy (no
         // empty notes row, no link row on a snippet, etc.).
@@ -57,6 +63,30 @@ enum ShareMenu {
     }
 
     // MARK: - Per-type rows
+
+    private static func addRecipeActions(to menu: NSMenu, item: StashItem, recipe: RecipeData) {
+        let copyPDF = action(title: "Copy Recipe PDF", item: item, kind: .recipePDFCopy)
+        copyPDF.image = NSImage(systemSymbolName: "doc.richtext", accessibilityDescription: nil)
+        menu.addItem(copyPDF)
+
+        let savePDF = action(title: "Save Recipe PDF…", item: item, kind: .recipePDFSave)
+        savePDF.image = NSImage(systemSymbolName: "arrow.down.doc", accessibilityDescription: nil)
+        menu.addItem(savePDF)
+
+        let sharePDF = action(title: "Share Recipe PDF…", item: item, kind: .recipePDFShare)
+        sharePDF.image = NSImage(systemSymbolName: "square.and.arrow.up", accessibilityDescription: nil)
+        menu.addItem(sharePDF)
+
+        let copyMarkdown = action(title: "Recipe (Markdown)", item: item, kind: .recipeMarkdown)
+        copyMarkdown.image = NSImage(systemSymbolName: "doc.on.doc", accessibilityDescription: nil)
+        menu.addItem(copyMarkdown)
+
+        if !recipe.ingredients.isEmpty {
+            let copyIngredients = action(title: "Ingredients list", item: item, kind: .recipeIngredients)
+            copyIngredients.image = NSImage(systemSymbolName: "list.bullet.clipboard", accessibilityDescription: nil)
+            menu.addItem(copyIngredients)
+        }
+    }
 
     private static func addImageActions(to menu: NSMenu, item: StashItem) {
         let hasMultiple = (item.files?.count ?? 0) > 0
@@ -143,6 +173,11 @@ enum ShareMenu {
     // MARK: - Internal types
 
     enum ActionKind {
+        case recipePDFCopy
+        case recipePDFSave
+        case recipePDFShare
+        case recipeMarkdown
+        case recipeIngredients
         case imageWithCaption
         case collageWithCaption
         case imageOnly
@@ -178,6 +213,7 @@ enum ShareMenu {
 @MainActor
 final class MenuTarget: NSObject {
     static let shared = MenuTarget()
+    private var activePicker: NSSharingServicePicker?
 
     @objc func runAction(_ sender: NSMenuItem) {
         guard let payload = sender.representedObject as? ShareMenu.ActionPayload else { return }
@@ -189,7 +225,19 @@ final class MenuTarget: NSObject {
         // stays responsive and the user sees progress.
         let label = humanLabel(for: payload.kind)
         switch payload.kind {
-        case .imageWithCaption, .collageWithCaption, .imageOnly:
+        case .recipePDFSave:
+            guard let recipe = RecipePDFGenerator.resolveRecipe(for: payload.item) else {
+                ToastCenter.shared.show("Couldn't resolve recipe", kind: .error)
+                return
+            }
+            RecipePDFGenerator.savePDFWithPanel(for: recipe, item: payload.item)
+        case .recipePDFShare:
+            guard let recipe = RecipePDFGenerator.resolveRecipe(for: payload.item) else {
+                ToastCenter.shared.show("Couldn't resolve recipe", kind: .error)
+                return
+            }
+            RecipePDFGenerator.presentShareSheet(for: recipe, item: payload.item)
+        case .imageWithCaption, .collageWithCaption, .imageOnly, .recipePDFCopy:
             // AppKit drawing must happen on the main thread, so
             // we can't truly offload compositing to a background
             // queue. What we CAN do is yield once so the toast
@@ -206,7 +254,7 @@ final class MenuTarget: NSObject {
                     ToastCenter.shared.show("Copy failed: \(label)", kind: .error)
                 }
             }
-        case .captionOnly, .linkOnly, .linkWithTitle, .textBody, .textWithTitle:
+        case .captionOnly, .linkOnly, .linkWithTitle, .textBody, .textWithTitle, .recipeMarkdown, .recipeIngredients:
             let ok = runComposerAction(payload)
             if ok {
                 ToastCenter.shared.show("Copied: \(label)", kind: .success)
@@ -222,6 +270,11 @@ final class MenuTarget: NSObject {
     /// missing blob, etc.).
     private func runComposerAction(_ payload: ShareMenu.ActionPayload) -> Bool {
         switch payload.kind {
+        case .recipePDFCopy:      return ClipboardComposer.copyRecipePDF(item: payload.item)
+        case .recipePDFSave:      return false
+        case .recipePDFShare:     return false
+        case .recipeMarkdown:     return ClipboardComposer.copyRecipeMarkdown(item: payload.item)
+        case .recipeIngredients:  return ClipboardComposer.copyRecipeIngredients(item: payload.item)
         case .imageWithCaption:   return ClipboardComposer.copyImageWithCaption(item: payload.item)
         case .collageWithCaption: return ClipboardComposer.copyCollageWithCaption(item: payload.item)
         case .imageOnly:          return ClipboardComposer.copyImageOnly(item: payload.item)
@@ -238,6 +291,11 @@ final class MenuTarget: NSObject {
     /// what the user just clicked.
     private func humanLabel(for kind: ShareMenu.ActionKind) -> String {
         switch kind {
+        case .recipePDFCopy:      return "Recipe PDF"
+        case .recipePDFSave:      return "Recipe PDF"
+        case .recipePDFShare:     return "Recipe PDF"
+        case .recipeMarkdown:     return "Recipe (Markdown)"
+        case .recipeIngredients:  return "Ingredients list"
         case .imageWithCaption:   return "Image with caption"
         case .collageWithCaption: return "Collage with caption"
         case .imageOnly:          return "Image"
@@ -252,8 +310,10 @@ final class MenuTarget: NSObject {
     @objc func openNativePicker(_ sender: NSMenuItem) {
         guard let payload = sender.representedObject as? ShareMenu.NativePickerPayload else { return }
         let picker = NSSharingServicePicker(items: payload.items)
+        activePicker = picker
         if let window = NSApp.keyWindow, let view = window.contentView {
-            picker.show(relativeTo: .zero, of: view, preferredEdge: .minY)
+            let anchor = NSRect(x: view.bounds.midX, y: view.bounds.midY, width: 1, height: 1)
+            picker.show(relativeTo: anchor, of: view, preferredEdge: .minY)
         }
     }
 }

@@ -229,7 +229,7 @@ struct ItemRow: View {
 
 /// Extracted to ensure image decoding and markdown parsing only happen
 /// when the popover is actually being rendered.
-private struct ItemRowPopover: View {
+struct ItemRowPopover: View {
     let item: StashItem
     
     var body: some View {
